@@ -4,6 +4,11 @@
 
 #include "mozilla/dom/TestFunctions.h"
 
+#include <cstring>
+
+#include "js/CallAndConstruct.h"     // JS::IsCallable
+#include "js/PropertyAndElement.h"   // JS_GetProperty
+#include "js/experimental/WebIDL.h"  // JS::GetWebIDLOperationTypes
 #include "mozITestInterfaceJS.h"
 #include "mozilla/StringBuffer.h"
 #include "mozilla/dom/BindingUtils.h"
@@ -295,6 +300,179 @@ bool TestFunctions::ObjectFromAboutBlank(JSContext* aCx, JSObject* aObj) {
   }
 
   return doc->GetDocumentURI()->GetSpecOrDefault().EqualsLiteral("about:blank");
+}
+
+int32_t TestFunctions::ComponentAdd(int32_t aA, int32_t aB) { return aA + aB; }
+
+int32_t TestFunctions::ComponentAdd(int32_t aA, int32_t aB, int32_t aC) {
+  return aA + aB + aC;
+}
+
+int32_t TestFunctions::ComponentAddDefaulted(int32_t aA, int32_t aB) {
+  return aA + aB;
+}
+
+bool TestFunctions::ComponentAcceptsSelf(TestFunctions* aOther) {
+  return !!aOther;
+}
+
+/* static */
+int32_t TestFunctions::ComponentStaticAdd(GlobalObject& aGlobal, int32_t aA,
+                                          int32_t aB) {
+  return aA + aB;
+}
+
+/* static */
+int32_t TestFunctions::ComponentStaticAdd(GlobalObject& aGlobal, int32_t aA,
+                                          int32_t aB, int32_t aC) {
+  return aA + aB + aC;
+}
+
+// Verifies that JS::GetWebIDLOperationTypes recovers the expected shapes
+// for the componentAdd/componentAddDefaulted/componentAcceptsSelf/
+// componentStaticAdd fixtures above: overload resolution, an optional
+// param's default, and a Gecko interface's identity.
+bool TestFunctions::CheckWebIDLComponentCall(JSContext* aCx,
+                                             JS::Handle<JSObject*> aSelfObj,
+                                             ErrorResult& aRv) {
+  auto getMethod = [&](const char* aName,
+                       JS::MutableHandle<JSObject*> aOutFn) -> bool {
+    JS::Rooted<JS::Value> val(aCx);
+    if (!JS_GetProperty(aCx, aSelfObj, aName, &val) || !val.isObject() ||
+        !JS::IsCallable(&val.toObject())) {
+      aRv.ThrowTypeError("CheckWebIDLComponentCall: missing method");
+      return false;
+    }
+    aOutFn.set(&val.toObject());
+    return true;
+  };
+
+  JS::Rooted<JSObject*> componentAdd(aCx);
+  if (!getMethod("componentAdd", &componentAdd)) {
+    return false;
+  }
+  JS::WebIDLOperationTypeVector addOverloads;
+  if (!JS::GetWebIDLOperationTypes(aCx, componentAdd, addOverloads)) {
+    return false;
+  }
+  if (addOverloads.length() != 2) {
+    aRv.ThrowTypeError("componentAdd: expected 2 overloads");
+    return false;
+  }
+  for (size_t i = 0; i < addOverloads.length(); i++) {
+    const JS::WebIDLOperationType& op = addOverloads[i];
+    if (op.params.length() != i + 2) {
+      aRv.ThrowTypeError("componentAdd: wrong param count");
+      return false;
+    }
+    for (const JS::WebIDLParam& param : op.params) {
+      if (param.type.kind() != JS::WebIDLTypeKind::Long || param.optional ||
+          param.variadic) {
+        aRv.ThrowTypeError("componentAdd: wrong param shape");
+        return false;
+      }
+    }
+    if (!op.returnType || op.returnType->kind() != JS::WebIDLTypeKind::Long) {
+      aRv.ThrowTypeError("componentAdd: wrong return type");
+      return false;
+    }
+  }
+
+  JS::Rooted<JSObject*> addDefaulted(aCx);
+  if (!getMethod("componentAddDefaulted", &addDefaulted)) {
+    return false;
+  }
+  JS::WebIDLOperationTypeVector defaultedOverloads;
+  if (!JS::GetWebIDLOperationTypes(aCx, addDefaulted, defaultedOverloads)) {
+    return false;
+  }
+  if (defaultedOverloads.length() != 1 ||
+      defaultedOverloads[0].params.length() != 2) {
+    aRv.ThrowTypeError("componentAddDefaulted: wrong shape");
+    return false;
+  }
+  const JS::WebIDLParam& p0 = defaultedOverloads[0].params[0];
+  const JS::WebIDLParam& p1 = defaultedOverloads[0].params[1];
+  if (p0.optional || p1.type.kind() != JS::WebIDLTypeKind::Long ||
+      !p1.optional || p1.variadic || !p1.defaultValue ||
+      p1.defaultValue->asSigned() != 100) {
+    aRv.ThrowTypeError("componentAddDefaulted: wrong param shape");
+    return false;
+  }
+
+  JS::Rooted<JSObject*> acceptsSelf(aCx);
+  if (!getMethod("componentAcceptsSelf", &acceptsSelf)) {
+    return false;
+  }
+  JS::WebIDLOperationTypeVector acceptsOverloads;
+  if (!JS::GetWebIDLOperationTypes(aCx, acceptsSelf, acceptsOverloads)) {
+    return false;
+  }
+  if (acceptsOverloads.length() != 1 ||
+      acceptsOverloads[0].params.length() != 1) {
+    aRv.ThrowTypeError("componentAcceptsSelf: wrong shape");
+    return false;
+  }
+  const JS::WebIDLType& paramType = acceptsOverloads[0].params[0].type;
+  if (paramType.kind() != JS::WebIDLTypeKind::Nullable) {
+    aRv.ThrowTypeError("componentAcceptsSelf: expected nullable param");
+    return false;
+  }
+  const JS::WebIDLType& innerType = paramType.innerType();
+  if (innerType.kind() != JS::WebIDLTypeKind::Interface ||
+      !innerType.interface() ||
+      strcmp(innerType.interface()->name(), "TestFunctions") != 0) {
+    aRv.ThrowTypeError("componentAcceptsSelf: wrong interface identity");
+    return false;
+  }
+  if (!innerType.interface()->isOrDerivedFrom(innerType.interface())) {
+    aRv.ThrowTypeError("componentAcceptsSelf: isOrDerivedFrom(self) failed");
+    return false;
+  }
+
+  // componentStaticAdd is defined on the constructor, not the instance.
+  JS::Rooted<JS::Value> ctorVal(aCx);
+  if (!JS_GetProperty(aCx, aSelfObj, "constructor", &ctorVal) ||
+      !ctorVal.isObject()) {
+    aRv.ThrowTypeError("componentStaticAdd: no constructor");
+    return false;
+  }
+  JS::Rooted<JSObject*> ctorObj(aCx, &ctorVal.toObject());
+  JS::Rooted<JS::Value> staticAddVal(aCx);
+  if (!JS_GetProperty(aCx, ctorObj, "componentStaticAdd", &staticAddVal) ||
+      !staticAddVal.isObject() || !JS::IsCallable(&staticAddVal.toObject())) {
+    aRv.ThrowTypeError("componentStaticAdd: missing method");
+    return false;
+  }
+  JS::Rooted<JSObject*> staticAdd(aCx, &staticAddVal.toObject());
+  JS::WebIDLOperationTypeVector staticAddOverloads;
+  if (!JS::GetWebIDLOperationTypes(aCx, staticAdd, staticAddOverloads)) {
+    return false;
+  }
+  if (staticAddOverloads.length() != 2) {
+    aRv.ThrowTypeError("componentStaticAdd: expected 2 overloads");
+    return false;
+  }
+  for (size_t i = 0; i < staticAddOverloads.length(); i++) {
+    const JS::WebIDLOperationType& op = staticAddOverloads[i];
+    if (op.params.length() != i + 2) {
+      aRv.ThrowTypeError("componentStaticAdd: wrong param count");
+      return false;
+    }
+    for (const JS::WebIDLParam& param : op.params) {
+      if (param.type.kind() != JS::WebIDLTypeKind::Long || param.optional ||
+          param.variadic) {
+        aRv.ThrowTypeError("componentStaticAdd: wrong param shape");
+        return false;
+      }
+    }
+    if (!op.returnType || op.returnType->kind() != JS::WebIDLTypeKind::Long) {
+      aRv.ThrowTypeError("componentStaticAdd: wrong return type");
+      return false;
+    }
+  }
+
+  return true;
 }
 
 WrapperCachedNonISupportsTestInterface*

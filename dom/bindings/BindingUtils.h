@@ -17,6 +17,7 @@
 #include "js/Zone.h"
 #include "js/experimental/BindingAllocs.h"
 #include "js/experimental/JitInfo.h"  // JSJitGetterOp, JSJitInfo
+#include "js/experimental/WebIDL.h"   // JS::WebIDLInterface
 #include "js/friend/WindowProxy.h"  // js::IsWindow, js::IsWindowProxy, js::ToWindowProxyIfWindow
 #include "jsfriendapi.h"
 #include "mozilla/Array.h"
@@ -710,6 +711,13 @@ struct DOMInterfaceInfo {
   uint8_t mConstructorArgs;
 
   const char* mConstructorName;
+
+  // The JS::WebIDLInterface identifying this interface to the WebAssembly
+  // component model (see WebIDLInterfaceFromConstructorValue), or nullptr if
+  // this interface isn't reachable that way (there is none for e.g. a
+  // namespace, which has no DOMInterfaceInfo at all). The returned pointer is
+  // non-owning: it's interned forever by GetOrCreateWebIDLInterface's cache.
+  JS::WebIDLInterface* (*mGetWebIDLInterface)();
 };
 
 struct LegacyFactoryFunction {
@@ -3524,6 +3532,82 @@ void ClearXrayExpandoSlots(JS::RootingContext* aCx, JSObject* aObject,
                            size_t aSlotIndex);
 
 }  // namespace binding_detail
+
+JS::UniqueChars DuplicateCStringForWebIDL(const char* aStr);
+
+// Returns the interned JS::WebIDLInterface for the Gecko interface `aName`,
+// with `aParent` as its declared parent interface, or null.
+already_AddRefed<JS::WebIDLInterface> GetOrCreateWebIDLInterface(
+    const char* aName, JS::WebIDLInterface* aParent);
+
+// JS::WebIDLInterface native ops for a wrapper-cached Gecko interface `T`
+// (see JS::WebIDLInterface::setNativeOps), instantiated per interface by the
+// WebIDL bindings generator (see CGInterfaceObjectInfo in Codegen.py).
+// Template instantiations are folded across translation units by the
+// linker, so these are safe to reference from any file that has `T`'s
+// definition in scope.
+template <class T>
+void AddRefNativeInterface(void* aNative) {
+  static_cast<T*>(aNative)->AddRef();
+}
+
+template <class T>
+void ReleaseNativeInterface(void* aNative) {
+  static_cast<T*>(aNative)->Release();
+}
+
+template <class T>
+JSObject* ReflectNativeInterface(JSContext* aCx, void* aNative) {
+  JS::Rooted<JS::Value> v(aCx);
+  if (!GetOrCreateDOMReflector(aCx, static_cast<T*>(aNative), &v)) {
+    return nullptr;
+  }
+  return &v.toObject();
+}
+
+// A borrowed (non-owning, non-refcounted) peek at `aObj`'s native `T*`, per
+// JS::WebIDLInterface::unwrapNative's contract; `aObj` may still be wrapped
+// (e.g. by a WindowProxy), matching AdoptJSObject's use of the pre-unwrap
+// object.
+template <class T, prototypes::ID PrototypeID>
+void* UnwrapNativeInterface(JSObject* aObj) {
+  T* result = nullptr;
+  nsresult rv = binding_detail::UnwrapObjectInternal<T, true>(
+      aObj, result, PrototypeID, PrototypeTraits<PrototypeID>::Depth, nullptr);
+  return NS_SUCCEEDED(rv) ? static_cast<void*>(result) : nullptr;
+}
+
+// Recognizes `aValue` as a Gecko WebIDL interface object (e.g. `Element`) and
+// returns its JS::WebIDLInterface, or nullptr if it isn't one. Registered
+// with js::wasm::AddResourceInterfaceFromValueHook so component instantiation
+// can resolve an imported resource type's WebIDL binding from it (see
+// ComponentInstance::init).
+JS::WebIDLInterface* WebIDLInterfaceFromConstructorValue(
+    JSContext* aCx, JS::HandleValue aValue);
+
+#ifdef ENABLE_WASM_COMPONENTS
+
+// Decodes a String-kind WebIDLCoerceStep's raw UTF-8 byte range in linear
+// memory into `out`, overwriting it.
+bool ReadWebIDLNativeString(JS::WebIDLContext& aCtx,
+                            const JS::WasmScalarVal* aCoreParams,
+                            const JS::WebIDLCoerceStep& aStep,
+                            uint32_t aMemBase, nsAString& out);
+bool ReadWebIDLNativeString(JS::WebIDLContext& aCtx,
+                            const JS::WasmScalarVal* aCoreParams,
+                            const JS::WebIDLCoerceStep& aStep,
+                            uint32_t aMemBase, nsACString& out);
+
+bool WriteWebIDLNativeString(JS::WebIDLContext& aCtx,
+                             const JS::WebIDLCoerceStep& aStep,
+                             uint32_t aMemBase, const nsAString& value,
+                             JS::WasmScalarVal* aResult);
+bool WriteWebIDLNativeString(JS::WebIDLContext& aCtx,
+                             const JS::WebIDLCoerceStep& aStep,
+                             uint32_t aMemBase, const nsACString& value,
+                             JS::WasmScalarVal* aResult);
+
+#endif  // ENABLE_WASM_COMPONENTS
 
 }  // namespace dom
 

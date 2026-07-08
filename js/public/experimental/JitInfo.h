@@ -205,6 +205,12 @@ class JSJitInfo {
 
   bool isTypedMethodJitInfo() const { return isTypedMethod; }
 
+  bool isWebIDLTypedJitInfo() const { return isWebIDLTyped; }
+
+  bool hasNativeOverloadEntriesJitInfo() const {
+    return hasNativeOverloadEntries;
+  }
+
   OpType type() const { return OpType(type_); }
 
   AliasSet aliasSet() const { return AliasSet(aliasSet_); }
@@ -243,7 +249,7 @@ class JSJitInfo {
   static constexpr size_t OpTypeBits = 4;
   static constexpr size_t AliasSetBits = 4;
   static constexpr size_t ReturnTypeBits = 8;
-  static constexpr size_t SlotIndexBits = 10;
+  static constexpr size_t SlotIndexBits = 7;
 
   /** The OpType that says what sort of function we are. */
   uint32_t type_ : OpTypeBits;
@@ -306,6 +312,19 @@ class JSJitInfo {
    * Otherwise 0.
    */
   uint32_t slotIndex : SlotIndexBits;
+
+  /**
+   * True if this is an instance of JSWebIDLMethodJitInfo (js/experimental/
+   * WebIDL.h). Deliberately the last bitfield: existing positional
+   * initializers rely on trailing fields defaulting to zero.
+   */
+  uint32_t isWebIDLTyped : 1;
+
+  /**
+   * True if this is an instance of JSWebIDLNativeMethodJitInfo
+   * (js/experimental/WebIDL.h). Only meaningful when isWebIDLTyped is set.
+   */
+  uint32_t hasNativeOverloadEntries : 1;
 
   static constexpr size_t maxSlotIndex = (1 << SlotIndexBits) - 1;
 };

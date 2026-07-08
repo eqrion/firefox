@@ -102,9 +102,10 @@ assertErrorMessage(() => {
   assertEq(test456(), 456);
 }
 
-// Canon definitions that generate core functions validate but crash for now
+// Canon definitions that generate core functions validate but crash for now,
+// except canon lower (see greeter.js/canon-lower-*.js for its real behavior).
 // TODO(wasm-cm): Update / remove these tests when adding instantiation support
-// for: canon lower, canon resource.new/drop/rep
+// for: canon resource.new/drop/rep
 {
   const i = new WebAssembly.ComponentInstance(
     new WebAssembly.Component(wasmTextToBinary(`
@@ -158,7 +159,8 @@ assertErrorMessage(() => {
   assertErrorMessage(() => R_new(1), WebAssembly.RuntimeError, /unreachable/);
   assertErrorMessage(() => R_rep(1), WebAssembly.RuntimeError, /unreachable/);
   assertErrorMessage(() => R_drop(1), WebAssembly.RuntimeError, /unreachable/);
-  assertErrorMessage(() => cool(), WebAssembly.RuntimeError, /unreachable/);
+  // cool is now a real canon lower/lift round trip.
+  assertEq(cool(), undefined);
   assertEq(uncool(), 123);
 }
 

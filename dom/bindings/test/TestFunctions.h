@@ -123,6 +123,18 @@ class TestFunctions : public NonRefcountedDOMObject {
 
   static bool ObjectFromAboutBlank(JSContext* aCx, JSObject* aObj);
 
+  // Fixtures for the wasm component model's "wasm calls WebIDL" prototype.
+  int32_t ComponentAdd(int32_t aA, int32_t aB);
+  int32_t ComponentAdd(int32_t aA, int32_t aB, int32_t aC);
+  int32_t ComponentAddDefaulted(int32_t aA, int32_t aB);
+  bool ComponentAcceptsSelf(TestFunctions* aOther);
+  static int32_t ComponentStaticAdd(GlobalObject& aGlobal, int32_t aA,
+                                    int32_t aB);
+  static int32_t ComponentStaticAdd(GlobalObject& aGlobal, int32_t aA,
+                                    int32_t aB, int32_t aC);
+  bool CheckWebIDLComponentCall(JSContext* aCx, JS::Handle<JSObject*> aSelfObj,
+                                ErrorResult& aRv);
+
   WrapperCachedNonISupportsTestInterface* WrapperCachedNonISupportsObject();
 
   bool WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto,

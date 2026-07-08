@@ -147,6 +147,18 @@ interface TestFunctions {
 
   [ChromeOnly, NewObject]
   static TestChromeOnlyInterface createTestChromeOnlyInterface();
+
+  // Fixtures for the wasm component model's "wasm calls WebIDL" prototype.
+  long componentAdd(long a, long b);
+  long componentAdd(long a, long b, long c);
+  long componentAddDefaulted(long a, optional long b = 100);
+  boolean componentAcceptsSelf(TestFunctions? other);
+
+  static long componentStaticAdd(long a, long b);
+  static long componentStaticAdd(long a, long b, long c);
+
+  [Throws]
+  boolean checkWebIDLComponentCall(object selfObj);
 };
 
 [Pref="dom.expose_test_interfaces",

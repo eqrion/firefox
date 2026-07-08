@@ -147,6 +147,10 @@
 #include "wasm/WasmBCFrame.h"
 #include "wasm/WasmBCRegDefs.h"
 #include "wasm/WasmBCStk.h"
+#include "wasm/WasmFrameIter.h"
+#ifdef ENABLE_WASM_COMPONENTS
+#  include "wasm/WasmComponent.h"
+#endif
 #include "wasm/WasmValType.h"
 
 #include "jit/MacroAssembler-inl.h"
@@ -10505,6 +10509,227 @@ bool BaseCompiler::emitCallBuiltinModuleFunc() {
   return emitInstanceCall(*builtinModuleFunc->sig());
 }
 
+#ifdef ENABLE_WASM_COMPONENTS
+// A minimal argTypes list for StackArgAreaSizeUnaligned's generic overload
+// (it only needs .length()/operator[]) describing the fixed 5-arg system-ABI
+// shape of JS::WebIDLNativeCall below.
+namespace {
+class NativeCallArgTypes {
+  static constexpr jit::MIRType kTypes[] = {
+      jit::MIRType::Pointer,  // adapter
+      jit::MIRType::Pointer,  // ctx
+      jit::MIRType::Pointer,  // params
+      jit::MIRType::Int32,    // resultMemBase
+      jit::MIRType::Pointer,  // results
+  };
+
+ public:
+  size_t length() const { return sizeof(kTypes) / sizeof(kTypes[0]); }
+  jit::MIRType operator[](size_t i) const { return kTypes[i]; }
+};
+}  // namespace
+
+// Calls straight into the JS::WebIDLNativeCall selected ahead of time for
+// this `canon lower` core func (see wasm::GenerateCanonLowerNative), instead
+// of going through the wasm import call machinery at all: pop this
+// function's own params into the closure's paramsScratch buffer, make a
+// system-ABI call to the closure's own entry point, then push the results it
+// wrote into resultsScratch. This is the whole point of compiling this
+// function separately per closure instead of sharing one generic stub: every
+// pointer/count baked in below is a compile-time constant read straight off
+// the closure, which by now (this stub only ever compiles after
+// ComponentInstance::init has fully populated it) is fully built.
+bool BaseCompiler::emitCallCanonLowerNative() {
+  uint64_t closurePtrBits;
+  BaseNothingVector unused_params{};
+  if (!iter_.readCallCanonLowerNative(func_.index, &closurePtrBits,
+                                      &unused_params)) {
+    return false;
+  }
+
+  if (deadCode_) {
+    return true;
+  }
+
+  auto* closure =
+      reinterpret_cast<wasm::LoweredNativeClosure*>(uintptr_t(closurePtrBits));
+  const FuncType& funcType = codeMeta_.getFuncType(func_.index);
+
+  // The last wasm param is the linear-memory offset for a spilled result,
+  // when this overload's result doesn't fit flat; otherwise resultMemBase is
+  // always 0. Popped first: LocalGets pushed params in order, so it's on top.
+  RegI32 resultMemBase;
+  if (closure->resultOutParamIndex >= 0) {
+    resultMemBase = popI32();
+  } else {
+    resultMemBase = needI32();
+    moveImm32(0, resultMemBase);
+  }
+
+  RegPtr paramsBase = needPtr();
+  masm.movePtr(ImmPtr(closure->paramsScratch.begin(), ImmPtr::NoCheckToken()),
+               paramsBase);
+  for (int32_t i = int32_t(closure->numParams) - 1; i >= 0; i--) {
+    size_t off = size_t(i) * sizeof(JS::WasmScalarVal);
+    Address payloadAddr(paramsBase, off + JS::WasmScalarVal::offsetOfPayload());
+    switch (funcType.args()[i].kind()) {
+      case ValType::I32: {
+        RegI32 v = popI32();
+        masm.store32(v, payloadAddr);
+        freeI32(v);
+        break;
+      }
+      case ValType::I64: {
+        RegI64 v = popI64();
+        masm.store64(v, payloadAddr);
+        freeI64(v);
+        break;
+      }
+      case ValType::F32: {
+        RegF32 v = popF32();
+        masm.storeFloat32(v, payloadAddr);
+        freeF32(v);
+        break;
+      }
+      case ValType::F64: {
+        RegF64 v = popF64();
+        masm.storeDouble(v, payloadAddr);
+        freeF64(v);
+        break;
+      }
+      default:
+        MOZ_CRASH("non-scalar param crossing the native call boundary");
+    }
+  }
+
+  // Materialize and push each arg immediately, one at a time - rather than
+  // holding several live registers at once - so peak register pressure here
+  // is the same low, well-exercised shape every other call site's argument
+  // list already relies on (the allocator only has to guarantee it can
+  // spill Stk-resident values, not a pile of simultaneously-held raw ones).
+  ValType wordType = ValType::fromMIRType(TargetWordMIRType());
+
+  RegPtr adapterPtr = needPtr();
+  masm.movePtr(ImmPtr(&closure->adapter, ImmPtr::NoCheckToken()), adapterPtr);
+  pushPtr(adapterPtr);
+
+  RegPtr ctxPtr = needPtr();
+  masm.movePtr(ImmPtr(&closure->ctx, ImmPtr::NoCheckToken()), ctxPtr);
+  pushPtr(ctxPtr);
+
+  pushPtr(paramsBase);
+
+  pushI32(resultMemBase);
+
+  RegPtr resultsBase = needPtr();
+  masm.movePtr(ImmPtr(closure->resultsScratch.begin(), ImmPtr::NoCheckToken()),
+               resultsBase);
+  pushPtr(resultsBase);
+
+  // Must run after every push above (sync() flushes whatever is currently
+  // on the value stack to memory, which is what createStackMap requires of
+  // it - anything still in Register-kind form at that point is an error).
+  sync();
+
+  {
+    RegPtr scratch1 = needPtr();
+    RegPtr scratch2 = needPtr();
+    wasm::LoadActivation(masm, InstanceReg, scratch1);
+    wasm::SetExitFP(masm, ExitReason::Fixed::ImportInterp, scratch1, scratch2);
+    freePtr(scratch2);
+    freePtr(scratch1);
+  }
+
+  static constexpr uint32_t NumArgs = 5;
+  NativeCallArgTypes argTypes;
+  FunctionCall baselineCall(ABIKind::System, RestoreState::None);
+  beginCall(baselineCall);
+  startCallArgs(StackArgAreaSizeUnaligned(argTypes, baselineCall.abiKind),
+                &baselineCall);
+  passArg(wordType, peek(4), &baselineCall);      // adapter
+  passArg(wordType, peek(3), &baselineCall);      // ctx
+  passArg(wordType, peek(2), &baselineCall);      // params
+  passArg(ValType::I32, peek(1), &baselineCall);  // resultMemBase
+  passArg(wordType, peek(0), &baselineCall);      // results
+
+  // Not a plain needPtr(): by this point the 5 ABI argument registers are
+  // already loaded (passArg writes directly into whatever hardware
+  // register/stack slot the ABI dictates for each argument position,
+  // bypassing the general register allocator's bookkeeping entirely), so an
+  // allocator-issued register could alias one of them and the move below
+  // would clobber an argument that was just placed. ABINonArgReg0 is this
+  // codebase's existing answer for "a scratch register guaranteed to not be
+  // an argument-passing register" - wasmCallRef uses the same one for
+  // exactly this reason.
+  masm.movePtr(ImmPtr(JS_FUNC_TO_DATA_PTR(void*, closure->entry),
+                      ImmPtr::NoCheckToken()),
+               ABINonArgReg0);
+
+  CodeOffset callOffset = masm.call(
+      CallSiteDesc(bytecodeOffset(), CallSiteKind::Symbolic), ABINonArgReg0);
+  if (!createStackMap("emitCallCanonLowerNative-call", callOffset)) {
+    return false;
+  }
+  CodeOffset trapOffset = masm.wasmTrapOnFailedInstanceCall(
+      ReturnReg, wasm::FailureMode::FailOnFalseI32, wasm::Trap::ThrowReported,
+      trapSiteDesc());
+  if (trapOffset.bound() &&
+      !createStackMap("emitCallCanonLowerNative-trap", trapOffset)) {
+    return false;
+  }
+
+  endCall(baselineCall, stackConsumed(NumArgs));
+  popValueStackBy(NumArgs);
+
+  {
+    RegPtr scratch1 = needPtr();
+    wasm::LoadActivation(masm, InstanceReg, scratch1);
+    wasm::ClearExitFP(masm, scratch1);
+    freePtr(scratch1);
+  }
+
+  RegPtr resultsBase2 = needPtr();
+  masm.movePtr(ImmPtr(closure->resultsScratch.begin(), ImmPtr::NoCheckToken()),
+               resultsBase2);
+  for (uint32_t j = 0; j < closure->numResultSlots; j++) {
+    size_t off = size_t(j) * sizeof(JS::WasmScalarVal);
+    Address payloadAddr(resultsBase2,
+                        off + JS::WasmScalarVal::offsetOfPayload());
+    switch (funcType.results()[j].kind()) {
+      case ValType::I32: {
+        RegI32 v = needI32();
+        masm.load32(payloadAddr, v);
+        pushI32(v);
+        break;
+      }
+      case ValType::I64: {
+        RegI64 v = needI64();
+        masm.load64(payloadAddr, v);
+        pushI64(v);
+        break;
+      }
+      case ValType::F32: {
+        RegF32 v = needF32();
+        masm.loadFloat32(payloadAddr, v);
+        pushF32(v);
+        break;
+      }
+      case ValType::F64: {
+        RegF64 v = needF64();
+        masm.loadDouble(payloadAddr, v);
+        pushF64(v);
+        break;
+      }
+      default:
+        MOZ_CRASH("non-scalar result crossing the native call boundary");
+    }
+  }
+  freePtr(resultsBase2);
+
+  return true;
+}
+#endif  // ENABLE_WASM_COMPONENTS
+
 //////////////////////////////////////////////////////////////////////////////
 //
 // Function bodies - main opcode dispatch loop.
@@ -12326,12 +12551,20 @@ bool BaseCompiler::emitBody() {
 
       // Other private operations
       case uint16_t(Op::MozPrefix): {
-        if (op.b1 != uint32_t(MozOp::CallBuiltinModuleFunc) ||
-            !codeMeta_.isBuiltinModule()) {
+        if (!codeMeta_.isBuiltinModule()) {
           return iter_.unrecognizedOpcode(&op);
         }
-        // Call a private builtin module func
-        CHECK_NEXT(emitCallBuiltinModuleFunc());
+        switch (MozOp(op.b1)) {
+          case MozOp::CallBuiltinModuleFunc:
+            CHECK_NEXT(emitCallBuiltinModuleFunc());
+#ifdef ENABLE_WASM_COMPONENTS
+          case MozOp::CallCanonLowerNative:
+            CHECK_NEXT(emitCallCanonLowerNative());
+#endif
+          default:
+            return iter_.unrecognizedOpcode(&op);
+        }
+        break;
       }
 
       default:

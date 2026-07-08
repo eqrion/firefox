@@ -11,12 +11,20 @@
 
 #  include "js/WasmComponent.h"
 
+#  include "mozilla/Attributes.h"
 #  include "mozilla/HashTable.h"
 #  include "mozilla/Maybe.h"
 #  include "mozilla/RefPtr.h"
 #  include "mozilla/Span.h"
+#  include "mozilla/UniquePtr.h"
 #  include "mozilla/Variant.h"
 #  include "mozilla/Vector.h"
+
+#  include "gc/Barrier.h"
+#  include "js/CallArgs.h"
+#  include "js/experimental/WebIDL.h"
+#  include "js/TracingAPI.h"
+#  include "js/Wrapper.h"
 #  include "wasm/WasmModule.h"
 
 namespace js {
@@ -74,50 +82,8 @@ inline DefinitionKind CoreSortFromComponentSort(ComponentSort sort) {
   return DefinitionKind(uint8_t(sort) & ~0xc0);
 }
 
-// Every kind of type that can be defined in the component model. Not all types
-// are valid in all contexts.
-enum class ComponentTypeKind : uint8_t {
-  Invalid = 0,
-
-  Bool = 0x7f,
-  S8 = 0x7e,
-  U8 = 0x7d,
-  S16 = 0x7c,
-  U16 = 0x7b,
-  S32 = 0x7a,
-  U32 = 0x79,
-  S64 = 0x78,
-  U64 = 0x77,
-  F32 = 0x76,
-  F64 = 0x75,
-  Char = 0x74,
-  String = 0x73,
-
-  Record = 0x72,
-  Variant = 0x71,
-  List = 0x70,
-  Tuple = 0x6f,
-  Flags = 0x6e,
-  Enum = 0x6d,
-  Option = 0x6b,
-  Result = 0x6a,
-  Own = 0x69,
-  Borrow = 0x68,
-
-  Func = 0x40,  // async func types are not a separate kind
-  Component = 0x41,
-  Instance = 0x42,
-  Resource = 0x3f,  // resource types with callbacks are not a separate kind
-
-  // Type bounds
-  Eq = 0x20,
-  SubResource = 0x21,
-
-  // Convenience for ComponentTypeKindIsPrimitive. "First" and "last" refer to
-  // the actual byte value.
-  FirstPrimitive = String,
-  LastPrimitive = Bool,
-};
+// ComponentTypeKind itself lives in the public js/WasmComponent.h; everything
+// else about the component-model type system stays internal.
 
 // Checks if the given kind is for a primitive type (`primvaltype`), i.e. one
 // that doesn't need to be defined and referenced.
@@ -193,8 +159,20 @@ class ComponentType {
   static bool resource(ComponentResourceType&& inner, ComponentType* type);
   static bool subResource(ComponentType* type);
 
+  // Reconstructs a ComponentType from the raw (kind, typeDef) parts stored by
+  // a public JS::WebIDLCoerceStep, which can't hold a ComponentType by value.
+  static ComponentType fromKindAndTypeDef(ComponentTypeKind kind,
+                                          RefPtr<ComponentTypeDef> typeDef) {
+    return ComponentType(kind, std::move(typeDef));
+  }
+
   ComponentTypeKind kind() const { return kind_; }
   RefPtr<ComponentTypeDef> typeDef() const { return typeDef_; }
+
+  // Non-owning: for comparisons where the caller can guarantee typeDef_'s
+  // owning Component outlives the use, without the atomic refcount traffic
+  // of a RefPtr copy (see ComponentResourceTypeId).
+  ComponentTypeDef* rawTypeDef() const { return typeDef_.get(); }
 
   const ComponentRecordFieldVector& asRecord() const;
   const ComponentVariantCaseVector& asVariant() const;
@@ -208,6 +186,11 @@ class ComponentType {
   ComponentType asBorrow() const;
   const ComponentFuncType& asFunc() const;
   const ComponentResourceType& asResource() const;
+
+  // Only valid for an imported resource type (`sub resource`): binds the
+  // WebIDL interface resolved from the import object during instantiation.
+  // A locally-defined resource's interface is fixed at construction instead.
+  void setSubResourceInterface(JS::WebIDLInterface* iface) const;
 
   // Cheaply checks if two canonicalized component types are equal under the
   // rules of the component model. This is fully general and handles resource
@@ -325,12 +308,23 @@ class ComponentResourceType {
 
   mozilla::Maybe<uint32_t> dtorIndex_;
 
+  // The WebIDL interface this resource is declared as, if any. Null means the
+  // resource has no WebIDL constructor and canonicalizes to the generic
+  // `object` type instead.
+  RefPtr<JS::WebIDLInterface> interface_;
+
  public:
   explicit ComponentResourceType(
-      mozilla::Maybe<uint32_t> dtorIndex = mozilla::Nothing())
-      : dtorIndex_(dtorIndex) {}
+      mozilla::Maybe<uint32_t> dtorIndex = mozilla::Nothing(),
+      RefPtr<JS::WebIDLInterface> interface = nullptr)
+      : dtorIndex_(dtorIndex), interface_(std::move(interface)) {}
 
   mozilla::Maybe<uint32_t> dtorIndex() const { return dtorIndex_; }
+  JS::WebIDLInterface* interface() const { return interface_; }
+
+  // Only for an imported resource type (`sub resource`): binds the WebIDL
+  // interface resolved from the import object during instantiation.
+  void setInterface(JS::WebIDLInterface* iface) { interface_ = iface; }
 };
 
 using ComponentTypeSchema = mozilla::Variant<
@@ -346,6 +340,7 @@ class ComponentTypeDef : public AtomicRefCounted<ComponentTypeDef> {
       : schema_(std::move(schema)) {}
 
   const ComponentTypeSchema& schema() const { return schema_; }
+  ComponentTypeSchema& mutableSchema() { return schema_; }
 
   // Checks two typedefs for structural equality. Note that this is NOT the same
   // as comparing two types for equality, because a) not all types even have
@@ -355,6 +350,325 @@ class ComponentTypeDef : public AtomicRefCounted<ComponentTypeDef> {
   static bool structurallyEqual(const ComponentTypeDef& a,
                                 const ComponentTypeDef& b);
 };
+
+// A resource's runtime representation: either a plain WebIDL `Object`
+// (a `JSObject*` reflector/CCW/proxy - `Wrapped`), or a bare native pointer
+// (`Native`) for the fast, same-origin-only case. Move-only: a `Native`
+// value owns one strong ref on its native pointer (taken via its
+// interface's `addRefNative` on construction, released via `releaseNative`
+// on destruction or reassignment), for as long as it lives - typically
+// inside a ComponentHandleTable entry, or a caller's local while extracting
+// it from one (see ReadCoercedInterfaceNative for why a caller reading an
+// `own` handle must take its own ref before that local goes out of scope).
+class ComponentResourceValue {
+ public:
+  enum class Repr : uint8_t { Native, Wrapped };
+
+ private:
+  // Holds a strong ref on `ptr` (taken via `iface->addRefNative` on
+  // construction, released via `iface->releaseNative` on destruction or
+  // reassignment), for as long as it lives.
+  struct NativeRepr {
+    void* ptr = nullptr;
+    JS::WebIDLInterface* iface = nullptr;
+  };
+
+  // A Variant rather than plain fields so that the common `Native` case never
+  // constructs, moves, or destroys the `JS::Heap<JSObject*>` alternative -
+  // avoiding its GC write barriers entirely whenever no wrapped object is
+  // involved (the fast, same-origin-only path this class exists for).
+  mozilla::Variant<NativeRepr, JS::Heap<JSObject*>> repr_;
+
+  void releaseIfNative() {
+    if (repr_.is<NativeRepr>()) {
+      NativeRepr& n = repr_.as<NativeRepr>();
+      if (n.ptr) {
+        n.iface->releaseNative(n.ptr);
+      }
+    }
+  }
+
+ public:
+  explicit ComponentResourceValue(JSObject* object)
+      : repr_(JS::Heap<JSObject*>(object)) {}
+
+  // `iface` must have native ops (WebIDLInterface::hasNativeOps()).
+  ComponentResourceValue(JS::WebIDLInterface* iface, void* native)
+      : repr_(NativeRepr{native, iface}) {
+    MOZ_ASSERT(iface && iface->hasNativeOps());
+    iface->addRefNative(native);
+  }
+
+  ComponentResourceValue(const ComponentResourceValue&) = delete;
+  ComponentResourceValue& operator=(const ComponentResourceValue&) = delete;
+
+  ComponentResourceValue(ComponentResourceValue&& other) noexcept
+      : repr_(std::move(other.repr_)) {
+    if (repr_.is<NativeRepr>()) {
+      other.repr_.as<NativeRepr>().ptr = nullptr;
+    }
+  }
+  ComponentResourceValue& operator=(ComponentResourceValue&& other) noexcept {
+    if (this != &other) {
+      releaseIfNative();
+      repr_ = std::move(other.repr_);
+      if (repr_.is<NativeRepr>()) {
+        other.repr_.as<NativeRepr>().ptr = nullptr;
+      }
+    }
+    return *this;
+  }
+
+  ~ComponentResourceValue() { releaseIfNative(); }
+
+  Repr repr() const {
+    return repr_.is<NativeRepr>() ? Repr::Native : Repr::Wrapped;
+  }
+  bool isNative() const { return repr_.is<NativeRepr>(); }
+
+  JSObject* object() const { return repr_.as<JS::Heap<JSObject*>>(); }
+  void* native() const { return repr_.as<NativeRepr>().ptr; }
+  JS::WebIDLInterface* nativeInterface() const {
+    return repr_.as<NativeRepr>().iface;
+  }
+
+  void* getNativeForCall() const {
+    return repr_.is<NativeRepr>() ? repr_.as<NativeRepr>().ptr : nullptr;
+  }
+
+  // Defined out of line in WasmComponent.cpp: needs JS_WrapObject, and
+  // jsapi.h isn't includable from this header.
+  JSObject* reflectToJS(JSContext* cx) const;
+
+  void trace(JSTracer* trc) {
+    if (repr_.is<JS::Heap<JSObject*>>()) {
+      JS::TraceEdge(trc, &repr_.as<JS::Heap<JSObject*>>(),
+                    "ComponentResourceValue wrapper");
+    }
+  }
+};
+
+// A non-owning (kind, typeDef) identity for a resource type - cheap to copy,
+// store, and compare, unlike ComponentType, since it never touches
+// ComponentTypeDef's atomic refcount. Safe wherever the type's owning
+// Component is already guaranteed to outlive the use: every resource type's
+// ComponentTypeDef (including a `sub resource` import placeholder) is
+// allocated into its declaring Component's own definedTypes_, and a
+// ComponentInstance holds a strong SharedComponent for its entire lifetime -
+// destroyed only after its ComponentHandleTable, per C++'s reverse
+// member-declaration-order destruction - so a resource handle can never
+// outlive the Component that owns its type.
+class ComponentResourceTypeId {
+  ComponentTypeKind kind_ = ComponentTypeKind::Invalid;
+  ComponentTypeDef* typeDef_ = nullptr;
+
+ public:
+  ComponentResourceTypeId() = default;
+  ComponentResourceTypeId(ComponentTypeKind kind, ComponentTypeDef* typeDef)
+      : kind_(kind), typeDef_(typeDef) {}
+  explicit ComponentResourceTypeId(const ComponentType& type)
+      : kind_(type.kind()), typeDef_(type.rawTypeDef()) {}
+
+  bool operator==(const ComponentResourceTypeId& other) const {
+    return kind_ == other.kind_ && typeDef_ == other.typeDef_;
+  }
+  bool operator!=(const ComponentResourceTypeId& other) const {
+    return !(*this == other);
+  }
+};
+
+// A single entry in a ComponentHandleTable: the spec's `ResourceHandle`.
+// `own_` distinguishes an owning handle from a borrowed one; `numLends_`
+// must be zero for an `own` handle to be lifted or dropped.
+class ComponentResourceHandle {
+  ComponentResourceTypeId resourceType_;
+  bool own_;
+  uint32_t numLends_ = 0;
+  ComponentResourceValue value_;
+
+ public:
+  ComponentResourceHandle(ComponentResourceTypeId resourceType, bool own,
+                          ComponentResourceValue value)
+      : resourceType_(resourceType), own_(own), value_(std::move(value)) {}
+
+  const ComponentResourceTypeId& resourceType() const { return resourceType_; }
+  bool isOwn() const { return own_; }
+  uint32_t numLends() const { return numLends_; }
+  const ComponentResourceValue& value() const { return value_; }
+
+  void trace(JSTracer* trc) { value_.trace(trc); }
+};
+
+// A table of resource handles, mirroring the component model spec's generic
+// `Table`. Index 0 is reserved as a sentinel and never allocated.
+class ComponentHandleTable {
+  mozilla::Vector<mozilla::Maybe<ComponentResourceHandle>, 0, SystemAllocPolicy>
+      array_;
+  mozilla::Vector<uint32_t, 0, SystemAllocPolicy> free_;
+
+  static constexpr uint32_t MaxLength = (1u << 28) - 1;
+
+ public:
+  ComponentHandleTable() = default;
+
+  [[nodiscard]] bool add(JSContext* cx, ComponentResourceHandle&& handle,
+                         uint32_t* index);
+  [[nodiscard]] bool reserve(JSContext* cx,
+                             mozilla::Maybe<ComponentResourceHandle>** handle,
+                             uint32_t* index);
+  [[nodiscard]] bool get(JSContext* cx, uint32_t index,
+                         const ComponentResourceHandle** out) const;
+  [[nodiscard]] bool remove(JSContext* cx, uint32_t index,
+                            mozilla::Maybe<ComponentResourceHandle>* out);
+  [[nodiscard]] bool drop(JSContext* cx, uint32_t index, bool requireOwn);
+
+  size_t count() const {
+    size_t n = 0;
+    for (const auto& entry : array_) {
+      if (entry) {
+        n++;
+      }
+    }
+    return n;
+  }
+
+  void trace(JSTracer* trc) {
+    for (auto& entry : array_) {
+      if (entry) {
+        entry->trace(trc);
+      }
+    }
+  }
+};
+
+// Classifies an incoming JS object as `Native` (fast, same-origin only) or
+// `Wrapped` (the fallback for cross-origin values, or when there's no way to
+// unwrap to a bare pointer).
+inline ComponentResourceValue AdoptJSObject(JSObject* obj, bool isSameOrigin,
+                                            JS::WebIDLInterface* iface) {
+  if (isSameOrigin && iface && iface->hasNativeOps() &&
+      iface->canUnwrapNative()) {
+    if (void* native = iface->unwrapNative(obj)) {
+      return ComponentResourceValue(iface, native);
+    }
+  }
+  return ComponentResourceValue(isSameOrigin ? UncheckedUnwrap(obj) : obj);
+}
+
+class ComponentValue;
+class ComponentValueData;
+using ComponentValueVector =
+    mozilla::Vector<ComponentValue, 0, SystemAllocPolicy>;
+
+// A component-model value. Holds no JS GC pointers (strings are native
+// UTF-8, resource handles are integers), so no tracing is needed. Cheaply
+// copyable: scalars by value, composites share a refcounted
+// ComponentValueData.
+class ComponentValue {
+  using Repr = mozilla::Variant<mozilla::Nothing, bool, int64_t, uint64_t,
+                                float, double, RefPtr<ComponentValueData>>;
+
+  ComponentType type_;
+  Repr repr_ = Repr(mozilla::Nothing());
+
+  ComponentValue(const ComponentType& type, Repr&& repr)
+      : type_(type), repr_(std::move(repr)) {}
+
+ public:
+  ComponentValue() = default;
+
+  const ComponentType& type() const { return type_; }
+  ComponentTypeKind kind() const { return type_.kind(); }
+  bool isValid() const { return type_.isValid(); }
+
+  static ComponentValue makeBool(const ComponentType& type, bool b);
+  static ComponentValue makeSigned(const ComponentType& type, int64_t v);
+  static ComponentValue makeUnsigned(const ComponentType& type, uint64_t v);
+  static ComponentValue makeF32(const ComponentType& type, float v);
+  static ComponentValue makeF64(const ComponentType& type, double v);
+  static ComponentValue makeComposite(const ComponentType& type,
+                                      RefPtr<ComponentValueData> data);
+
+  bool asBool() const { return repr_.as<bool>(); }
+  int64_t asSigned() const { return repr_.as<int64_t>(); }
+  uint64_t asUnsigned() const { return repr_.as<uint64_t>(); }
+  float asF32() const { return repr_.as<float>(); }
+  double asF64() const { return repr_.as<double>(); }
+  ComponentValueData* data() const {
+    return repr_.as<RefPtr<ComponentValueData>>();
+  }
+};
+
+static_assert(std::is_copy_constructible_v<ComponentValue>);
+
+// The payload backing a composite ComponentValue.
+class ComponentValueData : public AtomicRefCounted<ComponentValueData> {
+ public:
+  struct StringData {
+    mozilla::Vector<char, 0, SystemAllocPolicy> utf8;
+  };
+  // list / record (aligned to fields) / tuple.
+  struct ElementsData {
+    ComponentValueVector elements;
+  };
+  struct FlagsData {
+    mozilla::Vector<bool, 0, SystemAllocPolicy> bits;  // aligned to labels
+  };
+  // option: `payload` empty means `none`.
+  struct OptionData {
+    mozilla::Maybe<ComponentValue> payload;
+  };
+  struct ResultData {
+    bool isOk;
+    mozilla::Maybe<ComponentValue> payload;
+  };
+  struct VariantData {
+    uint32_t caseIndex;
+    mozilla::Maybe<ComponentValue> payload;
+  };
+
+ private:
+  mozilla::Variant<StringData, ElementsData, FlagsData, OptionData, ResultData,
+                   VariantData>
+      data_;
+
+ public:
+  template <typename T>
+  explicit ComponentValueData(T&& d) : data_(std::move(d)) {}
+
+  const StringData& asString() const { return data_.as<StringData>(); }
+  const ElementsData& asElements() const { return data_.as<ElementsData>(); }
+  const FlagsData& asFlags() const { return data_.as<FlagsData>(); }
+  const OptionData& asOption() const { return data_.as<OptionData>(); }
+  const ResultData& asResult() const { return data_.as<ResultData>(); }
+  const VariantData& asVariant() const { return data_.as<VariantData>(); }
+
+  ElementsData& mutableElements() { return data_.as<ElementsData>(); }
+};
+
+// The canonical WebIDL type representing a component value type. Returns an
+// invalid WebIDLType on OOM.
+[[nodiscard]] bool CanonicalWebIDLType(JSContext* cx,
+                                       const ComponentType& componentType,
+                                       JS::WebIDLType* out);
+
+// Converts a component value to its canonical WebIDL value. `handles` is
+// required if `value`'s type transitively contains an `own`/`borrow` handle.
+[[nodiscard]] bool ToCanonicalWebIDLValue(
+    JSContext* cx, const ComponentValue& value,
+    JS::MutableHandleWebIDLValue out, ComponentHandleTable* handles = nullptr);
+
+// The inverse of ToCanonicalWebIDLValue.
+[[nodiscard]] bool FromCanonicalWebIDLValue(
+    JSContext* cx, JS::HandleWebIDLValue value, const ComponentType& targetType,
+    ComponentValue* out, ComponentHandleTable* handles = nullptr);
+
+// The canonical WebIDL operation signature for a component function type: its
+// param types and (optional) return type, each mapped through
+// CanonicalWebIDLType.
+[[nodiscard]] bool CanonicalWebIDLOperationType(
+    JSContext* cx, const ComponentFuncType& funcType,
+    JS::WebIDLOperationType* out);
 
 class Component;
 
@@ -375,6 +689,89 @@ enum class CanonMode : uint8_t {
 mozilla::Maybe<FuncType> FlattenFuncType(const ComponentFuncType& funcType,
                                          CanonMode mode, bool* memoryRequired,
                                          bool* reallocRequired, bool* tooDeep);
+
+// Convenience wrappers for callers that just need the flattened shape of an
+// already-validated type, where the string/list tracking and depth limit
+// checked by validation don't apply.
+[[nodiscard]] bool FlattenTypes(const ComponentTypeVector& types,
+                                ValTypeVector* result);
+[[nodiscard]] bool FlattenType(const ComponentType& type,
+                               ValTypeVector* result);
+
+// A func whose flattened parameter/result count exceeds these limits instead
+// passes a single pointer to a tuple written into linear memory.
+constexpr uint32_t MaxFlatParams = 16;
+constexpr uint32_t MaxFlatResults = 1;
+
+// Aliases dropping the verbose `JS::WebIDL` prefix for this file's internal
+// use.
+using CoerceOp = JS::WebIDLCoerceOp;
+using StepKind = JS::WebIDLStepKind;
+using AccessLoc = JS::WebIDLAccessLoc;
+using DictMemberStep = JS::WebIDLDictMemberStep;
+using DictMemberStepVector = JS::WebIDLDictMemberStepVector;
+using VariantCaseStep = JS::WebIDLVariantCaseStep;
+using VariantCaseStepVector = JS::WebIDLVariantCaseStepVector;
+using CoerceStep = JS::WebIDLCoerceStep;
+using ParamStep = JS::WebIDLParamStep;
+using ParamStepVector = JS::WebIDLParamStepVector;
+using CallAdapter = JS::WebIDLCallAdapter;
+using JS::WebIDLStringKind;
+
+// Given the overload set for a WebIDL operation and the component function's
+// fixed arity, picks the overload whose declared parameter class matches the
+// component's canonical class. `*outIndex` is Nothing if no candidate
+// matches; returns false only on OOM.
+[[nodiscard]] bool SelectWebIDLOverload(
+    JSContext* cx, const ComponentFuncType& componentFuncType,
+    const JS::WebIDLOperationTypeVector& overloads,
+    mozilla::Maybe<size_t>* outIndex);
+
+// Compiles `(componentFuncType, webIDLOpType)` into a `CallAdapter`. Always
+// succeeds - a statically-doomed binding comes back with `isTrap = true`
+// rather than an error. `out` is value-initialized (fresh) on entry.
+[[nodiscard]] bool BuildCallAdapter(
+    JSContext* cx, const ComponentFuncType& componentFuncType,
+    const JS::WebIDLOperationType& webIDLOpType,
+    ComponentStringEncoding instanceStringEncoding, CallAdapter* out);
+
+// The reverse direction: coerces a WebIDL return value of type
+// `webIDLReturnType` into a component value of `componentResultType`.
+[[nodiscard]] bool BuildResultStep(JSContext* cx,
+                                   const JS::WebIDLType& webIDLReturnType,
+                                   const ComponentType& componentResultType,
+                                   CoerceStep* out);
+
+// Implements `canon lift`: calls `coreCallee` (a core wasm export, exposed as
+// a JS-callable function) with `args`, converting JS values <-> WebIDL
+// values <-> component values <-> core wasm values along the way.
+// `postReturn`, if not undefined, is called with the raw core result
+// value(s) once every byte needed from them has been copied out. Any
+// own/borrow handle is resolved through `abiCtx.handles()`. A top-level
+// result<T,E> return type's error(e) case throws the raw payload value
+// directly (result<T,E> throwing isn't otherwise wired up yet).
+[[nodiscard]] bool LiftedCall(JSContext* cx, JS::HandleObject coreCallee,
+                              const ComponentFuncType& funcType,
+                              JS::WebIDLContext& abiCtx,
+                              JS::HandleValue postReturn,
+                              const JS::CallArgs& args);
+
+// Implements `canon lower`: wraps `callee` (an arbitrary JS function,
+// possibly WebIDL-typed) as a function taking/returning raw core wasm values
+// (`args`), the mirror image of LiftedCall. `opType` describes `callee`'s own
+// declared signature; use DefaultWebIDLOperationType when `callee` carries
+// no WebIDL type of its own. Any own/borrow handle is resolved through
+// `abiCtx.handles()`. If `bindThisReceiver` is set and `callee` isn't
+// WebIDL-typed (so falls back off the native fast path below), the first
+// flat param (a `[method]` import's `borrow<self>`) is bound as `callee`'s
+// `this` instead of being passed positionally; a WebIDL-typed callee instead
+// declares `self` as an ordinary leading interface param on its own
+// advertised overload.
+[[nodiscard]] bool LoweredCall(JSContext* cx, JS::HandleObject callee,
+                               const ComponentFuncType& funcType,
+                               const JS::WebIDLOperationType& opType,
+                               JS::WebIDLContext& abiCtx,
+                               const JS::CallArgs& args, bool bindThisReceiver);
 
 // A hash policy for StronglyUniqueNameSet that hashes items based on their
 // trimmed, lowercased versions, but matches based on the full strongly-unique
@@ -406,13 +803,6 @@ class StronglyUniqueNameSet {
   [[nodiscard]] bool add(mozilla::Span<const char> name, bool* duplicate);
 };
 
-// These values must match the binary encoding exactly.
-enum class ComponentStringEncoding : uint8_t {
-  UTF8 = 0x00,
-  UTF16 = 0x01,
-  Latin1PlusUTF16 = 0x02,
-};
-
 struct ComponentCanonOpts {
   ComponentStringEncoding stringEncoding;
   mozilla::Maybe<uint32_t> memoryIndex;
@@ -421,12 +811,19 @@ struct ComponentCanonOpts {
 };
 
 class ComponentLiftedFuncDesc {
+  uint32_t coreFuncIndex_;
   uint32_t typeIndex_;
   ComponentCanonOpts canonOpts_;
 
  public:
-  ComponentLiftedFuncDesc(uint32_t typeIndex, ComponentCanonOpts canonOpts)
-      : typeIndex_(typeIndex), canonOpts_(canonOpts) {}
+  ComponentLiftedFuncDesc(uint32_t coreFuncIndex, uint32_t typeIndex,
+                          ComponentCanonOpts canonOpts)
+      : coreFuncIndex_(coreFuncIndex),
+        typeIndex_(typeIndex),
+        canonOpts_(canonOpts) {}
+
+  // The `coreFuncs()` index of the core function this `canon lift` wraps.
+  uint32_t coreFuncIndex() const { return coreFuncIndex_; }
 
   // This returns the raw type index. To get the ComponentFuncType, call
   // Component::typeForFunc instead.
@@ -451,7 +848,12 @@ class ComponentResourceBuiltin {
  public:
   ComponentResourceBuiltin(Kind kind, ComponentType resourceType)
       : kind_(kind), resourceType_(resourceType) {
-    MOZ_ASSERT(resourceType.kind() == ComponentTypeKind::Resource);
+    // resource.new/rep only apply to a resource this component itself
+    // defines; resource.drop applies to any resource type, including one
+    // this component only imports (SubResource).
+    MOZ_ASSERT(resourceType.kind() == ComponentTypeKind::Resource ||
+               (kind == Kind::ResourceDrop &&
+                resourceType.kind() == ComponentTypeKind::SubResource));
   }
 
   Kind kind() const { return kind_; }
@@ -467,17 +869,27 @@ class ComponentCoreFuncDesc {
  private:
   SharedTypeDef coreFuncType_;
   Payload payload_;
+  // Only meaningful for the `lowered` (uint32_t payload) variant - a resource
+  // builtin has no canon opts of its own.
+  ComponentCanonOpts canonOpts_;
 
-  ComponentCoreFuncDesc(uint32_t funcIndex, SharedTypeDef&& flattenedType)
-      : coreFuncType_(std::move(flattenedType)), payload_(funcIndex) {}
+  ComponentCoreFuncDesc(uint32_t funcIndex, SharedTypeDef&& flattenedType,
+                        ComponentCanonOpts&& canonOpts)
+      : coreFuncType_(std::move(flattenedType)),
+        payload_(funcIndex),
+        canonOpts_(std::move(canonOpts)) {}
   ComponentCoreFuncDesc(ComponentResourceBuiltin&& builtinDesc,
                         SharedTypeDef&& coreFuncType)
-      : coreFuncType_(std::move(coreFuncType)), payload_(builtinDesc) {}
+      : coreFuncType_(std::move(coreFuncType)),
+        payload_(builtinDesc),
+        canonOpts_{} {}
 
  public:
   static ComponentCoreFuncDesc lowered(uint32_t funcIndex,
-                                       SharedTypeDef&& flattenedType) {
-    return ComponentCoreFuncDesc(funcIndex, std::move(flattenedType));
+                                       SharedTypeDef&& flattenedType,
+                                       ComponentCanonOpts&& canonOpts) {
+    return ComponentCoreFuncDesc(funcIndex, std::move(flattenedType),
+                                 std::move(canonOpts));
   }
   static ComponentCoreFuncDesc builtin(ComponentResourceBuiltin&& builtinDesc,
                                        SharedTypeDef&& coreFuncType) {
@@ -487,6 +899,8 @@ class ComponentCoreFuncDesc {
 
   const Payload& payload() const { return payload_; }
   const SharedTypeDef& coreFuncType() const { return coreFuncType_; }
+  // Only valid to call when `payload().is<uint32_t>()`.
+  const ComponentCanonOpts& canonOpts() const { return canonOpts_; }
 };
 
 // A sort/index pair referring to an item within a component or core module,
@@ -847,13 +1261,18 @@ class ComponentImport {
 class ComponentExport {
   CacheableName name_;
   ComponentExternDesc externDesc_;
+  // The sortidx being re-exported, e.g. for a Func-sort export, the funcs()
+  // index of the func this export names.
+  ComponentSortIndex exported_;
 
  public:
-  explicit ComponentExport(CacheableName&& name, ComponentExternDesc externDesc)
-      : name_(std::move(name)), externDesc_(externDesc) {}
+  explicit ComponentExport(CacheableName&& name, ComponentExternDesc externDesc,
+                           ComponentSortIndex exported)
+      : name_(std::move(name)), externDesc_(externDesc), exported_(exported) {}
 
   const CacheableName& name() const { return name_; }
   const ComponentExternDesc& externDesc() const { return externDesc_; }
+  ComponentSortIndex exported() const { return exported_; }
 };
 
 // TODO(wasm-cm): This type is enormous, but a lot of the storage is due to
@@ -912,6 +1331,20 @@ class Component : public JS::WasmComponent {
   // an item, we can look it up here instead of going to the thing by index.
   AliasNameMap aliasNames_;
 
+  // Tracks which imported resource types (by `types()` index) have already
+  // had a WebIDL interface bound via tryMarkResourceInterfaceBound. A
+  // Component is immutable and shared across every ComponentInstance built
+  // from it (SharedComponent = RefPtr<const Component>), but binding an
+  // interface mutates the resource type's shared ComponentTypeDef in place
+  // rather than cloning it per instance (see setSubResourceInterface) - so a
+  // second binding would retroactively change every other instantiation's
+  // behavior. `mutable` because this bookkeeping happens during
+  // instantiation, which is otherwise const. Not thread-safe; instantiating
+  // the same Component concurrently on multiple threads is unsupported.
+  mutable mozilla::HashSet<uint32_t, mozilla::DefaultHasher<uint32_t>,
+                           SystemAllocPolicy>
+      resourceInterfaceBoundTypeIndices_;
+
   template <typename T>
   bool addDefinedItem(
       ComponentSort sort, T&& item,
@@ -922,6 +1355,27 @@ class Component : public JS::WasmComponent {
       return false;
     }
     return indexSpaceVector.append(ComponentItem::defined(sort, index));
+  }
+
+  // Appends `item` to the index space matching `sort`, for the sorts an
+  // import or export may name (the `externdesc` sorts, minus the core-only
+  // ones addDefinedItem already handles). Shared by addImport/addExport.
+  [[nodiscard]] bool appendToExternIndexSpace(ComponentSort sort,
+                                              ComponentItem item) {
+    switch (sort) {
+      case ComponentSort::Func:
+        return funcs_.append(item);
+      case ComponentSort::Type:
+        return types_.append(item);
+      case ComponentSort::Component:
+        return components_.append(item);
+      case ComponentSort::Instance:
+        return instances_.append(item);
+      case ComponentSort::CoreModule:
+        return coreModules_.append(item);
+      default:
+        MOZ_CRASH();
+    }
   }
 
  public:
@@ -1033,6 +1487,14 @@ class Component : public JS::WasmComponent {
   // Gets the type of a core func (not a component func).
   const TypeDef& getTypeForCoreFunc(uint32_t coreFuncIndex) const;
 
+  // Gets the `canon lift` descriptor for a `funcs()` index. Only valid to
+  // call when that index is a `Defined` item.
+  const ComponentLiftedFuncDesc& getLiftedFunc(uint32_t funcIndex) const;
+
+  // Gets the `canon lower`/builtin descriptor for a `coreFuncs()` index. Only
+  // valid to call when that index is a `Defined` item.
+  const ComponentCoreFuncDesc& getLoweredCoreFunc(uint32_t coreFuncIndex) const;
+
   size_t gcMallocBytesExcludingCode() const {
     // TODO(wasm-cm): Right now, this only sums up the sizes of the inner
     // modules, but this is not an accurate picture of a component's memory
@@ -1058,8 +1520,16 @@ class Component : public JS::WasmComponent {
   // Instantiation
 
   [[nodiscard]] bool instantiate(
-      JSContext* cx, HandleObject instanceProto,
+      JSContext* cx, HandleObject instanceProto, HandleObject importObj,
       MutableHandle<WasmComponentInstanceObject*> instance) const;
+
+  // Records that a WebIDL interface is being bound to the imported resource
+  // type at `typeIndex`. Returns false only on OOM; `*alreadyBound` reports
+  // whether an earlier instantiation already bound one (see
+  // resourceInterfaceBoundTypeIndices_) - the caller should treat that as a
+  // real error, not proceed to call setSubResourceInterface again.
+  [[nodiscard]] bool tryMarkResourceInterfaceBound(uint32_t typeIndex,
+                                                   bool* alreadyBound) const;
 
  private:
   // JS API and JS::WasmComponent implementation:
@@ -1068,6 +1538,38 @@ class Component : public JS::WasmComponent {
 
 using MutableComponent = RefPtr<Component>;
 using SharedComponent = RefPtr<const Component>;
+
+// All the state a `canon lower` core func needs to call straight into a
+// selected `JS::WebIDLNativeCall` overload, built once at instantiation
+// time (see ComponentInstance::init) instead of per call. Owned by
+// ComponentInstance via a UniquePtr, so its address is stable even if the
+// owning vector is ever reallocated - a JIT-generated stub
+// (GenerateCanonLowerNative) bakes a raw pointer to it directly into
+// compiled code.
+struct LoweredNativeClosure {
+  JS::WebIDLNativeCall entry = nullptr;
+  CallAdapter adapter;
+  JS::WebIDLContext ctx;
+
+  // Scratch storage reused across every call through this closure: sized
+  // exactly to this overload's flat param/result budget and filled in
+  // immediately before, and drained immediately after, each native call, so
+  // reuse (including across a same-thread reentrant call) is safe. Contains
+  // no GC pointers, so needs no tracing. Resized once, up front; a
+  // JIT-generated stub bakes a raw pointer to its storage directly into
+  // compiled code, so it must never be resized again afterward.
+  mozilla::Vector<JS::WasmScalarVal, 0, SystemAllocPolicy> paramsScratch;
+  mozilla::Vector<JS::WasmScalarVal, 0, SystemAllocPolicy> resultsScratch;
+  uint32_t numParams = 0;
+  uint32_t numResultSlots = 0;
+
+  // Which wasm param (if any) carries the linear-memory offset a spilled
+  // result must be written at, per the canonical ABI's caller-allocated
+  // out-param convention. -1 if this overload's result fits flat.
+  int32_t resultOutParamIndex = -1;
+
+  void trace(JSTracer* trc) { ctx.trace(trc); }
+};
 
 class ComponentInstance {
   // The containing JS::Realm.
@@ -1079,17 +1581,49 @@ class ComponentInstance {
   // The wasm::Component for this instance.
   const SharedComponent component_;
 
+  // The JS object that owns this ComponentInstance - a back-pointer only, so
+  // weak. Lift/lower closures hold their own strong reference to it.
+  WeakHeapPtr<WasmComponentInstanceObject*> object_;
+
   using CoreInstanceVector =
-      GCVector<WasmInstanceObject*, 0, SystemAllocPolicy>;
+      GCVector<HeapPtr<WasmInstanceObject*>, 0, CellAllocPolicy>;
   // An array of all the core instances owned by this component instance. NOTE!
   // This array is sparse; its indices will always correspond 1:1 with
   // Component::coreInstances(), but not all such instances will get a
   // WasmInstanceObject.
   CoreInstanceVector coreInstances_;
 
+  using ComponentFuncVector = GCVector<HeapPtr<JSObject*>, 0, CellAllocPolicy>;
+  // The component function index space (1:1 with Component::funcs()): an
+  // imported func resolves to whatever JS callable was passed in for it; a
+  // `canon lift`ed func resolves to its lift closure. Populated in full
+  // during `init`, before any core module is instantiated.
+  ComponentFuncVector componentFuncs_;
+
+  // 1:1 with componentFuncs_: whether the func was imported as a
+  // `[method]` (its first flat param is a `borrow<self>` that `canon lower`
+  // should bind as the callee's `this`, rather than pass positionally).
+  mozilla::Vector<bool, 0, SystemAllocPolicy> componentFuncBindsThis_;
+
+  using LoweredNativeClosureVector =
+      mozilla::Vector<mozilla::UniquePtr<LoweredNativeClosure>, 0,
+                      SystemAllocPolicy>;
+  // Sparse, 1:1 with Component::coreFuncs(): non-null only for a `canon
+  // lower` core func resolved to a native-call stub (rather than
+  // WasmComponentLoweredJS) at instantiation time. Resized once, up front,
+  // in `init`.
+  LoweredNativeClosureVector loweredNativeClosures_;
+
+  // The resource handle table for this instance, shared by every `canon
+  // lift`/`canon lower` closure it owns.
+  ComponentHandleTable handles_;
+
   // Only WasmComponentInstanceObject can call the private trace function.
   friend class js::WasmComponentInstanceObject;
   void tracePrivate(JSTracer* trc);
+
+  [[nodiscard]] bool resolveCoreExport(ComponentSort sort, uint32_t index,
+                                       JS::MutableHandleValue out) const;
 
  public:
   ComponentInstance(JSContext* cx, Handle<WasmComponentInstanceObject*> object,
@@ -1101,7 +1635,11 @@ class ComponentInstance {
                                    const SharedComponent component);
   static void destroy(ComponentInstance* instance);
 
-  [[nodiscard]] bool init(JSContext* cx);
+  [[nodiscard]] bool init(JSContext* cx, HandleObject importObj);
+
+  JSContext* cx() const { return cx_; }
+  const SharedComponent& component() const { return component_; }
+  WasmComponentInstanceObject* object() const { return object_; }
 
   // Gets a core instance object for a given index in the component, if one
   // exists. (It may not; inline-export instances do not get actual objects.)
@@ -1112,6 +1650,45 @@ class ComponentInstance {
     }
     return coreInstances_[index];
   }
+
+  [[nodiscard]] bool resizeComponentFuncs(uint32_t length) {
+    return componentFuncs_.resize(length) &&
+           componentFuncBindsThis_.resize(length);
+  }
+  void setComponentFunc(uint32_t funcIndex, JSObject* value) {
+    componentFuncs_[funcIndex] = value;
+  }
+  JSObject* componentFunc(uint32_t funcIndex) const {
+    return componentFuncs_[funcIndex];
+  }
+  void setComponentFuncBindsThis(uint32_t funcIndex, bool bindsThis) {
+    componentFuncBindsThis_[funcIndex] = bindsThis;
+  }
+  bool componentFuncBindsThis(uint32_t funcIndex) const {
+    return componentFuncBindsThis_[funcIndex];
+  }
+
+  [[nodiscard]] bool resizeLoweredNativeClosures(uint32_t length) {
+    return loweredNativeClosures_.resize(length);
+  }
+  void setLoweredNativeClosure(
+      uint32_t coreFuncIndex,
+      mozilla::UniquePtr<LoweredNativeClosure> closure) {
+    loweredNativeClosures_[coreFuncIndex] = std::move(closure);
+  }
+  LoweredNativeClosure* loweredNativeClosure(uint32_t coreFuncIndex) const {
+    return loweredNativeClosures_[coreFuncIndex].get();
+  }
+
+  ComponentHandleTable& handles() { return handles_; }
+
+  // Resolves a `coreMemories()`/`coreFuncs()` index (as referenced by a
+  // ComponentCanonOpts memory/realloc/postReturn index) to the runtime JS
+  // value of the already-instantiated core instance export it aliases.
+  [[nodiscard]] bool resolveCoreMemory(
+      uint32_t memIndex, JS::MutableHandle<WasmMemoryObject*> out) const;
+  [[nodiscard]] bool resolveCoreFunc(uint32_t coreFuncIndex,
+                                     JS::MutableHandleObject out) const;
 };
 
 UniqueChars ToString(ComponentItem item);

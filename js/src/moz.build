@@ -230,6 +230,8 @@ EXPORTS.js.experimental += [
     "../public/experimental/PCCountProfiling.h",
     "../public/experimental/SourceHook.h",
     "../public/experimental/TypedData.h",
+    "../public/experimental/WasmScalarVal.h",
+    "../public/experimental/WebIDL.h",
 ]
 
 # Friend APIs are APIs that either basically SpiderMonkey-internal, or their
@@ -308,6 +310,7 @@ DIRS += [
     "util",
     "vm",
     "wasm",
+    "webidl",
     "xsum",
     "builtin/normalizer_glue",
 ]

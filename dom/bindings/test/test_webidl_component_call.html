@@ -1,0 +1,64 @@
+<!DOCTYPE HTML>
+<html>
+<!--
+Wasm_WebIDL_ABI_Plan.md: JS::GetWebIDLOperationTypes should recover the real
+WebIDL operation type(s) of TestFunctions.componentAdd/componentAddDefaulted/
+componentAcceptsSelf/componentStaticAdd (Codegen.py-generated jitinfo),
+including overload resolution shapes, an optional param's default, and a
+real Gecko interface's identity - and componentStaticAdd's overloads (the
+fused native-call fast path's fixture) should still behave correctly as
+ordinary JS calls (the native JS::WebIDLNativeCall entries are only
+reachable via js::wasm::TryCallWebIDLNative, verified separately in
+js/src/jsapi-tests and jit-test coverage - there is no component instance
+type in the tree yet to drive one from Gecko).
+-->
+<head>
+  <meta charset="utf-8">
+  <title>Test for the WebIDL component ABI prototype's Gecko codegen (stage 8)</title>
+  <script src="/tests/SimpleTest/SimpleTest.js"></script>
+  <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
+  <script type="application/javascript">
+
+  SimpleTest.waitForExplicitFinish();
+
+  function go() {
+    // Need a new global that will pick up our pref.
+    var ifr = document.createElement("iframe");
+    document.body.appendChild(ifr);
+
+    var t = new ifr.contentWindow.TestFunctions();
+
+    is(t.componentAdd(3, 4), 7, "componentAdd(2 args) should add");
+    is(t.componentAdd(3, 4, 5), 12, "componentAdd(3 args) should add");
+    is(t.componentAddDefaulted(3), 103, "componentAddDefaulted should use its default");
+    is(t.componentAddDefaulted(3, 10), 13, "componentAddDefaulted should honor an explicit arg");
+    ok(t.componentAcceptsSelf(t), "componentAcceptsSelf(self) should accept");
+    ok(!t.componentAcceptsSelf(null), "componentAcceptsSelf(null) should reject");
+
+    var TestFunctions = ifr.contentWindow.TestFunctions;
+    is(TestFunctions.componentStaticAdd(3, 4), 7,
+       "componentStaticAdd(2 args) should add");
+    is(TestFunctions.componentStaticAdd(3, 4, 5), 12,
+       "componentStaticAdd(3 args) should add");
+
+    ok(t.checkWebIDLComponentCall(t),
+       "Codegen-generated WebIDL operation type info should match the IDL");
+
+    SimpleTest.finish();
+  }
+
+  addLoadEvent(function() {
+    SpecialPowers.pushPrefEnv({set: [["dom.expose_test_interfaces", true]]},
+                              go);
+  });
+  </script>
+</head>
+<body>
+<p id="display"></p>
+<div id="content" style="display: none">
+
+</div>
+<pre id="test">
+</pre>
+</body>
+</html>

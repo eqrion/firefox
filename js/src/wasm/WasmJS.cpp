@@ -2608,7 +2608,28 @@ const ClassSpec WasmComponentInstanceObject::classSpec_ = {
     ClassSpec::DontDefineConstructor,
 };
 
+static bool IsComponentInstance(HandleValue v) {
+  return v.isObject() && v.toObject().is<WasmComponentInstanceObject>();
+}
+
+/* static */
+bool WasmComponentInstanceObject::exportsGetterImpl(JSContext* cx,
+                                                    const CallArgs& args) {
+  args.rval().setObject(
+      args.thisv().toObject().as<WasmComponentInstanceObject>().exportsObj());
+  return true;
+}
+
+/* static */
+bool WasmComponentInstanceObject::exportsGetter(JSContext* cx, unsigned argc,
+                                                Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  return CallNonGenericMethod<IsComponentInstance, exportsGetterImpl>(cx, args);
+}
+
 const JSPropertySpec WasmComponentInstanceObject::properties[] = {
+    JS_PSG("exports", WasmComponentInstanceObject::exportsGetter,
+           JSPROP_ENUMERATE),
     JS_STRING_SYM_PS(toStringTag, "WebAssembly.ComponentInstance",
                      JSPROP_READONLY),
     JS_PS_END,
@@ -2649,7 +2670,8 @@ void WasmComponentInstanceObject::trace(JSTracer* trc, JSObject* obj) {
 
 /* static */
 WasmComponentInstanceObject* WasmComponentInstanceObject::create(
-    JSContext* cx, HandleObject proto, const SharedComponent component) {
+    JSContext* cx, HandleObject proto, const SharedComponent component,
+    HandleObject importObj) {
   ComponentInstance* instance = nullptr;
   Rooted<WasmComponentInstanceObject*> obj(cx);
 
@@ -2679,7 +2701,7 @@ WasmComponentInstanceObject* WasmComponentInstanceObject::create(
     MOZ_ASSERT(!obj->isNewborn());
   }
 
-  if (!instance->init(cx)) {
+  if (!instance->init(cx, importObj)) {
     return nullptr;
   }
 
@@ -2715,7 +2737,10 @@ bool WasmComponentInstanceObject::construct(JSContext* cx, unsigned argc,
     return false;
   }
 
-  // TODO(wasm-cm): Introduce imports
+  RootedObject importObj(cx);
+  if (!GetImportArg(cx, args.get(1), &importObj)) {
+    return false;
+  }
 
   RootedObject proto(
       cx, GetWasmConstructorPrototype(cx, args, JSProto_WasmComponentInstance));
@@ -2725,7 +2750,8 @@ bool WasmComponentInstanceObject::construct(JSContext* cx, unsigned argc,
   }
 
   Rooted<WasmComponentInstanceObject*> instanceObj(cx);
-  if (!componentObj->component().instantiate(cx, proto, &instanceObj)) {
+  if (!componentObj->component().instantiate(cx, proto, importObj,
+                                             &instanceObj)) {
     return false;
   }
 
@@ -2738,6 +2764,15 @@ bool WasmComponentInstanceObject::construct(JSContext* cx, unsigned argc,
 ComponentInstance& WasmComponentInstanceObject::instance() const {
   MOZ_ASSERT(!isNewborn());
   return *(ComponentInstance*)getReservedSlot(INSTANCE_SLOT).toPrivate();
+}
+
+void WasmComponentInstanceObject::initExportsObj(JSObject& exportsObj) {
+  MOZ_ASSERT(getReservedSlot(EXPORTS_OBJ_SLOT).isUndefined());
+  setReservedSlot(EXPORTS_OBJ_SLOT, ObjectValue(exportsObj));
+}
+
+JSObject& WasmComponentInstanceObject::exportsObj() const {
+  return getReservedSlot(EXPORTS_OBJ_SLOT).toObject();
 }
 #endif
 

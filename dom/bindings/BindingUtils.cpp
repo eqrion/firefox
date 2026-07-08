@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 
 #include "AccessCheck.h"
 #include "WorkerPrivate.h"
@@ -25,6 +26,7 @@
 #include "js/StableStringChars.h"
 #include "js/String.h"  // JS::GetStringLength, JS::MaxStringLength, JS::StringHasLatin1Chars
 #include "js/Symbol.h"
+#include "js/Utility.h"  // js::DuplicateString
 #include "js/experimental/JitInfo.h"  // JSJit{Getter,Setter,Method}CallArgs, JSJit{Getter,Setter}Op, JSJitInfo
 #include "js/friend/StackLimits.h"  // js::AutoCheckRecursionLimit
 #include "jsfriendapi.h"
@@ -76,6 +78,7 @@
 #include "nsPIDOMWindowInlines.h"
 #include "nsPrintfCString.h"
 #include "nsReadableUtils.h"
+#include "nsTHashMap.h"
 #include "nsUTF8Utils.h"
 #include "nsWrapperCacheInlines.h"
 #include "nsXULElement.h"
@@ -4174,6 +4177,121 @@ void ClearXrayExpandoSlots(JS::RootingContext* aCx, JSObject* aObject,
 
 static_assert(UnderlyingValue(DOM_EXPANDO_RESERVED_SLOTS) ==
               UnderlyingValue(xpc::JSSLOT_EXPANDO_COUNT));
+
+JS::UniqueChars DuplicateCStringForWebIDL(const char* aStr) {
+  size_t len = strlen(aStr);
+  auto* copy = static_cast<char*>(js_malloc(len + 1));
+  if (!copy) {
+    return nullptr;
+  }
+  memcpy(copy, aStr, len + 1);
+  return JS::UniqueChars(copy);
+}
+
+already_AddRefed<JS::WebIDLInterface> GetOrCreateWebIDLInterface(
+    const char* aName, JS::WebIDLInterface* aParent) {
+  // Keyed non-owning by content; relies on `aName` being a string literal
+  // that outlives the cache.
+  static nsTHashMap<nsDepCharHashKey, RefPtr<JS::WebIDLInterface>> sInterfaces;
+  if (auto entry = sInterfaces.Lookup(aName)) {
+    return do_AddRef(entry.Data());
+  }
+  JS::UniqueChars nameCopy = DuplicateCStringForWebIDL(aName);
+  RefPtr<JS::WebIDLInterface> iface =
+      js_new<JS::WebIDLInterface>(std::move(nameCopy), aParent);
+  sInterfaces.InsertOrUpdate(aName, iface);
+  return iface.forget();
+}
+
+JS::WebIDLInterface* WebIDLInterfaceFromConstructorValue(
+    JSContext* aCx, JS::HandleValue aValue) {
+  if (!aValue.isObject()) {
+    return nullptr;
+  }
+  JSObject* obj = js::CheckedUnwrapDynamic(&aValue.toObject(), aCx,
+                                           /* stopAtWindowProxy = */ false);
+  if (!obj || !IsInterfaceObject(obj)) {
+    return nullptr;
+  }
+  const DOMInterfaceInfo* info = InterfaceInfoFromObject(obj);
+  return info->mGetWebIDLInterface ? info->mGetWebIDLInterface() : nullptr;
+}
+
+#ifdef ENABLE_WASM_COMPONENTS
+
+static bool ReadWebIDLNativeStringRange(JS::WebIDLContext& aCtx,
+                                        const JS::WasmScalarVal* aCoreParams,
+                                        const JS::WebIDLCoerceStep& aStep,
+                                        uint32_t aMemBase, const char** aBytes,
+                                        uint32_t* aLen) {
+  uint32_t ptr, len;
+  if (!JS::ReadCoercedStringRange(aCtx, aCoreParams, aStep, aMemBase, &ptr,
+                                  &len)) {
+    return false;
+  }
+  uint8_t* base;
+  size_t memLen;
+  if (!aCtx.memoryBytes(&base, &memLen)) {
+    return false;
+  }
+  if (uint64_t(ptr) + uint64_t(len) > uint64_t(memLen)) {
+    JS_ReportErrorASCII(aCtx.cx(), "WebIDL string out of bounds");
+    return false;
+  }
+  *aBytes = reinterpret_cast<const char*>(base + ptr);
+  *aLen = len;
+  return true;
+}
+
+bool ReadWebIDLNativeString(JS::WebIDLContext& aCtx,
+                            const JS::WasmScalarVal* aCoreParams,
+                            const JS::WebIDLCoerceStep& aStep,
+                            uint32_t aMemBase, nsAString& out) {
+  const char* bytes;
+  uint32_t len;
+  if (!ReadWebIDLNativeStringRange(aCtx, aCoreParams, aStep, aMemBase, &bytes,
+                                   &len)) {
+    return false;
+  }
+  if (!CopyUTF8toUTF16(mozilla::Span(bytes, len), out, mozilla::fallible)) {
+    JS_ReportOutOfMemory(aCtx.cx());
+    return false;
+  }
+  return true;
+}
+
+bool ReadWebIDLNativeString(JS::WebIDLContext& aCtx,
+                            const JS::WasmScalarVal* aCoreParams,
+                            const JS::WebIDLCoerceStep& aStep,
+                            uint32_t aMemBase, nsACString& out) {
+  const char* bytes;
+  uint32_t len;
+  if (!ReadWebIDLNativeStringRange(aCtx, aCoreParams, aStep, aMemBase, &bytes,
+                                   &len)) {
+    return false;
+  }
+  out.Assign(bytes, len);
+  return true;
+}
+
+bool WriteWebIDLNativeString(JS::WebIDLContext& aCtx,
+                             const JS::WebIDLCoerceStep& aStep,
+                             uint32_t aMemBase, const nsAString& value,
+                             JS::WasmScalarVal* aResult) {
+  return JS::WriteCoercedStringUTF16(
+      aCtx, aStep, aMemBase,
+      mozilla::Span(value.BeginReading(), value.Length()), aResult);
+}
+
+bool WriteWebIDLNativeString(JS::WebIDLContext& aCtx,
+                             const JS::WebIDLCoerceStep& aStep,
+                             uint32_t aMemBase, const nsACString& value,
+                             JS::WasmScalarVal* aResult) {
+  return JS::WriteCoercedString(aCtx, aStep, aMemBase, value.BeginReading(),
+                                value.Length(), aResult);
+}
+
+#endif  // ENABLE_WASM_COMPONENTS
 
 }  // namespace dom
 }  // namespace mozilla

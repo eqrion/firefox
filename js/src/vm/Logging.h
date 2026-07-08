@@ -89,17 +89,18 @@ class LogModule {
 };
 
 // Each entry is `_(name, "one-line help text")`. Help may be empty.
-#define FOR_EACH_JS_LOG_MODULE(_)                          \
-  _(debug, "A predefined log module for casual debugging") \
-  _(wasmPerf, "Wasm performance statistics")               \
-  _(wasmApi, "Wasm JS-API tracing")                        \
-  _(fuseInvalidation, "Invalidation triggered by a fuse")  \
-  _(thenable, "Thenable on standard proto")                \
-  _(startup, "Engine startup logging")                     \
-  _(teleporting, "Shape Teleporting")                      \
-  _(selfHosted, "Self-hosted script logging")              \
-  _(gc, "The garbage collector")                           \
-  _(mtq, "MicroTask queue")                                \
+#define FOR_EACH_JS_LOG_MODULE(_)                                         \
+  _(debug, "A predefined log module for casual debugging")                \
+  _(wasmPerf, "Wasm performance statistics")                              \
+  _(wasmApi, "Wasm JS-API tracing")                                       \
+  _(wasmComponents, "Wasm component-model <-> WebIDL bridge diagnostics") \
+  _(fuseInvalidation, "Invalidation triggered by a fuse")                 \
+  _(thenable, "Thenable on standard proto")                               \
+  _(startup, "Engine startup logging")                                    \
+  _(teleporting, "Shape Teleporting")                                     \
+  _(selfHosted, "Self-hosted script logging")                             \
+  _(gc, "The garbage collector")                                          \
+  _(mtq, "MicroTask queue")                                               \
   JITSPEW_CHANNEL_LIST(_) /* A module for each JitSpew channel. */
 
 // Declare Log modules

@@ -6099,10 +6099,10 @@ enum class AliasKindRaw : uint8_t {
 }
 
 enum class CanonOptKindRaw : uint8_t {
-  StringEncodingUTF8 = uint8_t(ComponentStringEncoding::UTF8),
-  StringEncodingUTF16 = uint8_t(ComponentStringEncoding::UTF16),
+  StringEncodingUTF8 = uint8_t(ComponentStringEncoding::Utf8),
+  StringEncodingUTF16 = uint8_t(ComponentStringEncoding::Utf16),
   StringEncodingLatin1PlusUTF16 =
-      uint8_t(ComponentStringEncoding::Latin1PlusUTF16),
+      uint8_t(ComponentStringEncoding::Latin1OrUtf16),
   Memory = 0x03,
   Realloc = 0x04,
   PostReturn = 0x05,
@@ -6311,7 +6311,8 @@ enum class CanonDefKindRaw : uint8_t {
         }
       }
 
-      if (!c->addFunc(ComponentLiftedFuncDesc(typeIndex, std::move(opts)))) {
+      if (!c->addFunc(ComponentLiftedFuncDesc(coreFuncIndex, typeIndex,
+                                              std::move(opts)))) {
         return false;
       }
     } break;
@@ -6365,7 +6366,7 @@ enum class CanonDefKindRaw : uint8_t {
       }
 
       if (!c->addDefinedCoreFunc(ComponentCoreFuncDesc::lowered(
-              funcIndex, std::move(flattenedCanonical)))) {
+              funcIndex, std::move(flattenedCanonical), std::move(opts)))) {
         return false;
       }
     } break;
@@ -6384,8 +6385,21 @@ enum class CanonDefKindRaw : uint8_t {
         return d.failf("invalid type index %d", resourceTypeIndex);
       }
       ComponentType resourceType = c->getType(resourceTypeIndex);
-      if (resourceType.kind() != ComponentTypeKind::Resource) {
-        return d.fail("expected a resource type");
+      switch (resourceType.kind()) {
+        case ComponentTypeKind::Resource:
+          break;
+        case ComponentTypeKind::SubResource:
+          // resource.drop applies to any resource type, including one this
+          // component only imports; resource.new/rep only apply to a
+          // resource this component itself defines.
+          if (kind != uint8_t(CanonDefKindRaw::ResourceDrop)) {
+            return d.fail(
+                "resource.new/resource.rep require a resource type defined "
+                "by this component");
+          }
+          break;
+        default:
+          return d.fail("expected a resource type");
       }
 
       // The values for the Kind enum are chosen to align with the binary
@@ -6599,7 +6613,8 @@ enum class ComponentExportFlagsRaw : uint8_t {
                    ComponentName_Printf(exportName));
   }
 
-  return c->addExport(ComponentExport(std::move(exportName), externDesc));
+  return c->addExport(
+      ComponentExport(std::move(exportName), externDesc, exported));
 }
 
 [[nodiscard]] static bool DecodeComponentCoreModuleSection(

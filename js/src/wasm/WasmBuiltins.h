@@ -169,6 +169,10 @@ enum class FailureMode : uint8_t {
   FailOnMaxI32,
   FailOnNullPtr,
   FailOnInvalidRef,
+  // The callee returns a C++ `bool`; only the low byte is a meaningful
+  // 0/1, so this checks that byte rather than the sign bit like
+  // FailOnNegI32 does.
+  FailOnFalseI32,
 };
 
 // SymbolicAddressSignature carries type information for a function referred

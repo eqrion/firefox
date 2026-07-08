@@ -308,6 +308,10 @@ skip-if = [
 
 ["test_throwing_method_noDCE.html"]
 
+["test_webidl_component_call.html"]
+
+["test_webidl_component_call_e2e.html"]
+
 ["test_toJSON.html"]
 skip-if = [
   "asan",

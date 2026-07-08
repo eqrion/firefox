@@ -165,6 +165,9 @@
   ret: General
   args: [General, General, Int64, Int64]
 
+- ret: Int32
+  args: [General, Int64, Int32]
+
 # int32_t f(...) variants
 - ret: General
   args: [General, Int32]

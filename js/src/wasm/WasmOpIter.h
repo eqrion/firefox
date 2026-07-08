@@ -230,6 +230,7 @@ enum class OpKind {
   Try,
   TryTable,
   CallBuiltinModuleFunc,
+  CallCanonLowerNative,
 #  ifdef ENABLE_WASM_JSPI
   ContNew,
   ContBind,
@@ -853,6 +854,14 @@ class MOZ_STACK_CLASS OpIter : private Policy {
 
   [[nodiscard]] bool readCallBuiltinModuleFunc(
       const BuiltinModuleFunc** builtinModuleFunc, ValueVector* params);
+
+  // `currentFuncIndex` is the function currently being decoded (this
+  // operator is only ever the sole statement of a function generated to
+  // have exactly the referenced closure's own flat param/result shape, so
+  // that function's own type describes the operator's stack effect).
+  [[nodiscard]] bool readCallCanonLowerNative(uint32_t currentFuncIndex,
+                                              uint64_t* closurePtr,
+                                              ValueVector* params);
 
 #ifdef ENABLE_WASM_JSPI
   [[nodiscard]] bool readContNew(uint32_t* contTypeIndex, Value* func);
@@ -4611,6 +4620,25 @@ inline bool OpIter<Policy>::readCallBuiltinModuleFunc(
 
   *builtinModuleFunc = &BuiltinModuleFuncs::getFromId(BuiltinModuleFuncId(id));
   const FuncType& funcType = *(*builtinModuleFunc)->funcType();
+  if (!popCallArgs(funcType.args(), params)) {
+    return false;
+  }
+
+  return push(ResultType::Vector(funcType.results()));
+}
+
+template <typename Policy>
+inline bool OpIter<Policy>::readCallCanonLowerNative(uint32_t currentFuncIndex,
+                                                     uint64_t* closurePtr,
+                                                     ValueVector* params) {
+  MOZ_ASSERT(Classify(op_) == OpKind::CallCanonLowerNative);
+  MOZ_ASSERT(codeMeta_.isBuiltinModule());
+
+  if (!d_.readVarU64(closurePtr)) {
+    return fail("unable to read closure pointer");
+  }
+
+  const FuncType& funcType = codeMeta_.getFuncType(currentFuncIndex);
   if (!popCallArgs(funcType.args(), params)) {
     return false;
   }

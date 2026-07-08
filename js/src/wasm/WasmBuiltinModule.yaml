@@ -21,6 +21,23 @@
   fail_trap: OutOfBounds
   uses_memory: true
 
+# component_resource_drop(componentInstance: i64, index: i32)
+#  Drops the component resource handle at 'index' in the ComponentInstance
+#  pointed to by 'componentInstance'. Used by the JITted resource.drop stub
+#  for imported resource types (see GenerateResourceDropFunc).
+- op: ComponentResourceDrop
+  symbolic_address:
+    name: ComponentResourceDrop
+    type: Args_Int32_GeneralInt64Int32
+    needs_thunk: true
+  entry: Instance::componentResourceDrop
+  export: resource_drop
+  params:
+    - 'i64'
+    - 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
 #if defined(ENABLE_WASM_MOZ_INTGEMM)
 
 # Intrinsics for integer matrix multiplication followed by addition of bias.

@@ -74,6 +74,7 @@
 #include "TouchManager.h"
 #include "WebAudioUtils.h"
 #include "gfxUserFontSet.h"
+#include "js/experimental/WebIDL.h"
 #include "mozilla/ClearSiteData.h"
 #include "mozilla/EditorController.h"
 #include "mozilla/EventDispatcher.h"
@@ -86,6 +87,7 @@
 #include "mozilla/StaticPresData.h"
 #include "mozilla/css/ImageLoader.h"
 #include "mozilla/dom/AbstractRange.h"
+#include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/BlobURLProtocolHandler.h"
 #include "mozilla/dom/BrowserParent.h"
 #include "mozilla/dom/ContentParent.h"
@@ -133,6 +135,18 @@ nsresult nsLayoutStatics::Initialize() {
   nsresult rv;
 
   mozilla::intl::AppCollator::Initialize();
+
+#ifdef ENABLE_WASM_COMPONENTS
+  // Lets a WebAssembly component's imported resource types resolve to a real
+  // WebIDL interface (see JS::AddResourceInterfaceFromValueHook). Guarded so
+  // repeated Initialize()/Shutdown() cycles within one process don't
+  // re-register the hook.
+  static bool sRegisteredWebIDLInterfaceHook = false;
+  if (!sRegisteredWebIDLInterfaceHook) {
+    sRegisteredWebIDLInterfaceHook = true;
+    JS::AddResourceInterfaceFromValueHook(WebIDLInterfaceFromConstructorValue);
+  }
+#endif
 
   ContentParent::StartUp();
 

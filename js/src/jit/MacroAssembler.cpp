@@ -6604,6 +6604,9 @@ CodeOffset MacroAssembler::wasmTrapOnFailedInstanceCall(
                 ImmWord(uintptr_t(wasm::AnyRef::invalid().forCompiledCode())),
                 &noTrap);
       break;
+    case wasm::FailureMode::FailOnFalseI32:
+      branchTest32(Assembler::NonZero, resultRegister, Imm32(0xff), &noTrap);
+      break;
   }
   wasmTrap(failureTrap, trapSiteDesc);
   bind(&noTrap);

@@ -80,6 +80,7 @@
 #include "js/experimental/JSStencil.h"  // JS::Stencil, JS::EncodeStencil, JS::DecodeStencil, JS::InstantiateGlobalStencil
 #include "js/experimental/PCCountProfiling.h"  // JS::{Start,Stop}PCCountProfiling, JS::PurgePCCounts, JS::GetPCCountScript{Count,Summary,Contents}
 #include "js/experimental/TypedData.h"         // JS_GetObjectAsUint8Array
+#include "js/experimental/WebIDL.h"   // JS::WebIDLType, JS::WebIDLValue
 #include "js/friend/DumpFunctions.h"  // js::Dump{Backtrace,Heap,Object}, JS::FormatStackDump, js::IgnoreNurseryObjects
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/friend/WindowProxy.h"    // js::ToWindowProxyIfWindow
@@ -133,6 +134,9 @@
 #include "vm/WrapperObject.h"
 #include "wasm/WasmBaselineCompile.h"
 #include "wasm/WasmBuiltinModule.h"
+#ifdef ENABLE_WASM_COMPONENTS
+#  include "wasm/WasmComponent.h"  // js::wasm::ComponentType, js::wasm::ComponentValue
+#endif
 #include "wasm/WasmDump.h"
 #include "wasm/WasmFeatures.h"
 #include "wasm/WasmGcObject.h"
@@ -11744,6 +11748,3815 @@ static const JSFunctionSpecWithHelp FdLibMTestingFunctions[] = {
 };
 // clang-format on
 
+static void WebIDLType_finalize(JS::GCContext* gcx, JSObject* obj) {
+  JS::Value slot = JS::GetReservedSlot(obj, 0);
+  if (!slot.isUndefined()) {
+    js_delete(static_cast<JS::WebIDLType*>(slot.toPrivate()));
+  }
+}
+
+static const JSClassOps WebIDLTypeClassOps = {
+    .finalize = WebIDLType_finalize,
+};
+static const JSClass WebIDLTypeClass = {
+    "WebIDLType", JSCLASS_HAS_RESERVED_SLOTS(1) | JSCLASS_BACKGROUND_FINALIZE,
+    &WebIDLTypeClassOps};
+
+static void WebIDLValue_finalize(JS::GCContext* gcx, JSObject* obj) {
+  JS::Value slot = JS::GetReservedSlot(obj, 0);
+  if (!slot.isUndefined()) {
+    js_delete(static_cast<JS::WebIDLValue*>(slot.toPrivate()));
+  }
+}
+static void WebIDLValue_trace(JSTracer* trc, JSObject* obj) {
+  JS::Value slot = JS::GetReservedSlot(obj, 0);
+  if (!slot.isUndefined()) {
+    static_cast<JS::WebIDLValue*>(slot.toPrivate())->trace(trc);
+  }
+}
+static const JSClassOps WebIDLValueClassOps = {
+    .finalize = WebIDLValue_finalize,
+    .trace = WebIDLValue_trace,
+};
+static const JSClass WebIDLValueClass = {
+    "WebIDLValue", JSCLASS_HAS_RESERVED_SLOTS(1) | JSCLASS_BACKGROUND_FINALIZE,
+    &WebIDLValueClassOps};
+
+static JS::WebIDLType* ShellWebIDLType(JSObject* obj) {
+  return static_cast<JS::WebIDLType*>(JS::GetReservedSlot(obj, 0).toPrivate());
+}
+static JS::WebIDLValue* ShellWebIDLValue(JSObject* obj) {
+  return static_cast<JS::WebIDLValue*>(JS::GetReservedSlot(obj, 0).toPrivate());
+}
+
+static bool IsShellWebIDLType(HandleValue v) {
+  return v.isObject() && JS::GetClass(&v.toObject()) == &WebIDLTypeClass;
+}
+
+static bool ReadWebIDLFlags(JSContext* cx, HandleValue optsVal,
+                            uint8_t* flags) {
+  *flags = JS::WebIDLTypeFlag_None;
+  if (optsVal.isNullOrUndefined()) {
+    return true;
+  }
+  if (!optsVal.isObject()) {
+    JS_ReportErrorASCII(cx, "WebIDLType options must be an object");
+    return false;
+  }
+  RootedObject opts(cx, &optsVal.toObject());
+  static const struct {
+    const char* name;
+    uint8_t flag;
+  } table[] = {
+      {"clamp", JS::WebIDLTypeFlag_Clamp},
+      {"enforceRange", JS::WebIDLTypeFlag_EnforceRange},
+      {"legacyNullToEmptyString", JS::WebIDLTypeFlag_LegacyNullToEmptyString},
+      {"allowShared", JS::WebIDLTypeFlag_AllowShared},
+      {"allowResizable", JS::WebIDLTypeFlag_AllowResizable},
+  };
+  RootedValue v(cx);
+  for (const auto& e : table) {
+    if (!JS_GetProperty(cx, opts, e.name, &v)) {
+      return false;
+    }
+    if (JS::ToBoolean(v)) {
+      *flags |= e.flag;
+    }
+  }
+  return true;
+}
+
+static bool WebIDLPrimitiveKindFromName(const char* s,
+                                        JS::WebIDLTypeKind* kind) {
+  using K = JS::WebIDLTypeKind;
+  static const struct {
+    const char* n;
+    K k;
+  } table[] = {
+      {"any", K::Any},
+      {"undefined", K::Undefined},
+      {"boolean", K::Boolean},
+      {"byte", K::Byte},
+      {"octet", K::Octet},
+      {"short", K::Short},
+      {"unsigned short", K::UnsignedShort},
+      {"long", K::Long},
+      {"unsigned long", K::UnsignedLong},
+      {"long long", K::LongLong},
+      {"unsigned long long", K::UnsignedLongLong},
+      {"float", K::Float},
+      {"unrestricted float", K::UnrestrictedFloat},
+      {"double", K::Double},
+      {"unrestricted double", K::UnrestrictedDouble},
+      {"bigint", K::BigInt},
+      {"DOMString", K::DOMString},
+      {"USVString", K::USVString},
+      {"ByteString", K::ByteString},
+      {"object", K::Object},
+      {"symbol", K::Symbol},
+  };
+  for (const auto& e : table) {
+    if (strcmp(s, e.n) == 0) {
+      *kind = e.k;
+      return true;
+    }
+  }
+  return false;
+}
+
+static const char* WebIDLKindName(JS::WebIDLTypeKind kind) {
+  using K = JS::WebIDLTypeKind;
+  switch (kind) {
+    case K::Any:
+      return "any";
+    case K::Undefined:
+      return "undefined";
+    case K::Boolean:
+      return "boolean";
+    case K::Byte:
+      return "byte";
+    case K::Octet:
+      return "octet";
+    case K::Short:
+      return "short";
+    case K::UnsignedShort:
+      return "unsigned short";
+    case K::Long:
+      return "long";
+    case K::UnsignedLong:
+      return "unsigned long";
+    case K::LongLong:
+      return "long long";
+    case K::UnsignedLongLong:
+      return "unsigned long long";
+    case K::Float:
+      return "float";
+    case K::UnrestrictedFloat:
+      return "unrestricted float";
+    case K::Double:
+      return "double";
+    case K::UnrestrictedDouble:
+      return "unrestricted double";
+    case K::BigInt:
+      return "bigint";
+    case K::DOMString:
+      return "DOMString";
+    case K::USVString:
+      return "USVString";
+    case K::ByteString:
+      return "ByteString";
+    case K::Object:
+      return "object";
+    case K::Symbol:
+      return "symbol";
+    case K::Interface:
+      return "interface";
+    case K::Callback:
+      return "callback";
+    case K::Dictionary:
+      return "dictionary";
+    case K::Enumeration:
+      return "enumeration";
+    case K::Sequence:
+      return "sequence";
+    case K::Record:
+      return "record";
+    case K::Nullable:
+      return "nullable";
+    case K::Union:
+      return "union";
+    case K::BufferSource:
+      return "BufferSource";
+    case K::FrozenArray:
+      return "FrozenArray";
+    case K::ObservableArray:
+      return "ObservableArray";
+    case K::Promise:
+      return "promise";
+    case K::ReadableStream:
+      return "ReadableStream";
+    default:
+      return "invalid";
+  }
+}
+
+static bool WebIDLType_getKind(JSContext* cx, unsigned argc, JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.thisv().isObject() ||
+      JS::GetClass(&args.thisv().toObject()) != &WebIDLTypeClass) {
+    JS_ReportErrorASCII(cx, "not a WebIDLType");
+    return false;
+  }
+  JS::WebIDLType* type = ShellWebIDLType(&args.thisv().toObject());
+  JSString* str = JS_NewStringCopyZ(cx, WebIDLKindName(type->kind()));
+  if (!str) {
+    return false;
+  }
+  args.rval().setString(str);
+  return true;
+}
+
+static bool WebIDLType_getInterface(JSContext* cx, unsigned argc,
+                                    JS::Value* vp);
+
+static const JSPropertySpec WebIDLType_properties[] = {
+    JS_PSG("kind", WebIDLType_getKind, 0),
+    JS_PSG("interface", WebIDLType_getInterface, 0),
+    JS_PS_END,
+};
+
+// Fake refcounted native standing in for a Gecko DOM object, wired onto a
+// WebIDLInterface's addRefNative/releaseNative/reflect/unwrapNative ops.
+struct ShellNativeResource {
+  int32_t refcount = 1;
+  int32_t tag;
+  explicit ShellNativeResource(int32_t tag) : tag(tag) {}
+};
+
+static void ShellNativeResource_addRef(void* p) {
+  static_cast<ShellNativeResource*>(p)->refcount++;
+}
+static void ShellNativeResource_release(void* p) {
+  auto* n = static_cast<ShellNativeResource*>(p);
+  if (--n->refcount == 0) {
+    js_delete(n);
+  }
+}
+static JSObject* ShellNativeResource_reflect(JSContext* cx, void* p) {
+  auto* n = static_cast<ShellNativeResource*>(p);
+  JS::Rooted<JSObject*> obj(cx, JS_NewPlainObject(cx));
+  if (!obj) {
+    return nullptr;
+  }
+  if (!JS_DefineProperty(cx, obj, "tag", n->tag, JSPROP_ENUMERATE)) {
+    return nullptr;
+  }
+  return obj;
+}
+
+static void WebIDLNativeResource_finalize(JS::GCContext* gcx, JSObject* obj) {
+  JS::Value slot = JS::GetReservedSlot(obj, 0);
+  if (!slot.isUndefined()) {
+    ShellNativeResource_release(slot.toPrivate());
+  }
+}
+static const JSClassOps WebIDLNativeResourceClassOps = {
+    .finalize = WebIDLNativeResource_finalize,
+};
+static const JSClass WebIDLNativeResourceClass = {
+    "WebIDLNativeResource",
+    JSCLASS_HAS_RESERVED_SLOTS(1) | JSCLASS_BACKGROUND_FINALIZE,
+    &WebIDLNativeResourceClassOps};
+
+static void* ShellNativeResource_unwrap(JSObject* obj) {
+  if (JS::GetClass(obj) != &WebIDLNativeResourceClass) {
+    return nullptr;
+  }
+  return JS::GetReservedSlot(obj, 0).toPrivate();
+}
+
+static bool WebIDLNativeResource_construct(JSContext* cx, unsigned argc,
+                                           JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.isConstructing()) {
+    JS_ReportErrorASCII(cx, "WebIDLNativeResource must be called with new");
+    return false;
+  }
+  int32_t tag = 0;
+  if (args.length() >= 1 && !JS::ToInt32(cx, args[0], &tag)) {
+    return false;
+  }
+  RootedObject obj(
+      cx, JS_NewObjectForConstructor(cx, &WebIDLNativeResourceClass, args));
+  if (!obj) {
+    return false;
+  }
+  ShellNativeResource* native = js_new<ShellNativeResource>(tag);
+  if (!native) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  JS::SetReservedSlot(obj, 0, JS::PrivateValue(native));
+  args.rval().setObject(*obj);
+  return true;
+}
+
+// Wraps a `JS::WebIDLInterface`; unlike WebIDLType/WebIDLValue it is
+// refcounted, so the reserved slot holds one AddRef'd reference released on
+// finalize.
+static void WebIDLInterface_finalize(JS::GCContext* gcx, JSObject* obj) {
+  JS::Value slot = JS::GetReservedSlot(obj, 0);
+  if (!slot.isUndefined()) {
+    static_cast<JS::WebIDLInterface*>(slot.toPrivate())->Release();
+  }
+}
+static const JSClassOps WebIDLInterfaceClassOps = {
+    .finalize = WebIDLInterface_finalize,
+};
+static const JSClass WebIDLInterfaceClass = {
+    "WebIDLInterface",
+    JSCLASS_HAS_RESERVED_SLOTS(1) | JSCLASS_BACKGROUND_FINALIZE,
+    &WebIDLInterfaceClassOps};
+
+static JS::WebIDLInterface* ShellWebIDLInterface(JSObject* obj) {
+  return static_cast<JS::WebIDLInterface*>(
+      JS::GetReservedSlot(obj, 0).toPrivate());
+}
+static bool IsShellWebIDLInterface(HandleValue v) {
+  return v.isObject() && JS::GetClass(&v.toObject()) == &WebIDLInterfaceClass;
+}
+static JS::WebIDLInterface* ArgWebIDLInterface(JSContext* cx, HandleValue v) {
+  if (!IsShellWebIDLInterface(v)) {
+    JS_ReportErrorASCII(cx, "expected a WebIDLInterface");
+    return nullptr;
+  }
+  return ShellWebIDLInterface(&v.toObject());
+}
+
+#ifdef ENABLE_WASM_COMPONENTS
+// Registered with JS::AddResourceInterfaceFromValueHook so real component
+// instantiation can recognize a shell WebIDLInterface value passed for an
+// imported resource type.
+static JS::WebIDLInterface* ResourceInterfaceFromTestingValue(JSContext* cx,
+                                                              HandleValue v) {
+  if (!IsShellWebIDLInterface(v)) {
+    return nullptr;
+  }
+  return ShellWebIDLInterface(&v.toObject());
+}
+#endif  // ENABLE_WASM_COMPONENTS
+
+static bool WebIDLInterface_construct(JSContext* cx, unsigned argc,
+                                      JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.isConstructing()) {
+    JS_ReportErrorASCII(cx, "WebIDLInterface must be called with new");
+    return false;
+  }
+  if (args.length() < 1) {
+    JS_ReportErrorASCII(cx, "WebIDLInterface(name, [parent])");
+    return false;
+  }
+  RootedString nameStr(cx, JS::ToString(cx, args[0]));
+  if (!nameStr) {
+    return false;
+  }
+  JS::UniqueChars name = JS_EncodeStringToUTF8(cx, nameStr);
+  if (!name) {
+    return false;
+  }
+
+  JS::WebIDLInterface* parent = nullptr;
+  if (args.length() >= 2 && !args[1].isNullOrUndefined()) {
+    parent = ArgWebIDLInterface(cx, args[1]);
+    if (!parent) {
+      return false;
+    }
+  }
+  bool withNativeOps = args.length() >= 3 && JS::ToBoolean(args[2]);
+
+  RootedObject obj(cx,
+                   JS_NewObjectForConstructor(cx, &WebIDLInterfaceClass, args));
+  if (!obj) {
+    return false;
+  }
+  JS::WebIDLInterface* iface =
+      withNativeOps
+          ? js_new<JS::WebIDLInterface>(
+                std::move(name), parent, ShellNativeResource_addRef,
+                ShellNativeResource_release, ShellNativeResource_reflect,
+                ShellNativeResource_unwrap)
+          : js_new<JS::WebIDLInterface>(std::move(name), parent);
+  if (!iface) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  iface->AddRef();
+  JS::SetReservedSlot(obj, 0, JS::PrivateValue(iface));
+  args.rval().setObject(*obj);
+  return true;
+}
+
+static bool WebIDLInterface_getName(JSContext* cx, unsigned argc,
+                                    JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!IsShellWebIDLInterface(args.thisv())) {
+    JS_ReportErrorASCII(cx, "not a WebIDLInterface");
+    return false;
+  }
+  JS::WebIDLInterface* iface = ShellWebIDLInterface(&args.thisv().toObject());
+  JSString* str = JS_NewStringCopyZ(cx, iface->name());
+  if (!str) {
+    return false;
+  }
+  args.rval().setString(str);
+  return true;
+}
+
+static bool WebIDLInterface_isOrDerivedFrom(JSContext* cx, unsigned argc,
+                                            JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!IsShellWebIDLInterface(args.thisv())) {
+    JS_ReportErrorASCII(cx, "not a WebIDLInterface");
+    return false;
+  }
+  if (args.length() < 1) {
+    JS_ReportErrorASCII(cx, "isOrDerivedFrom(other)");
+    return false;
+  }
+  JS::WebIDLInterface* other = ArgWebIDLInterface(cx, args[0]);
+  if (!other) {
+    return false;
+  }
+  JS::WebIDLInterface* self = ShellWebIDLInterface(&args.thisv().toObject());
+  args.rval().setBoolean(self->isOrDerivedFrom(other));
+  return true;
+}
+
+static const JSPropertySpec WebIDLInterface_properties[] = {
+    JS_PSG("name", WebIDLInterface_getName, 0),
+    JS_PS_END,
+};
+static const JSFunctionSpec WebIDLInterface_methods[] = {
+    JS_FN("isOrDerivedFrom", WebIDLInterface_isOrDerivedFrom, 1, 0),
+    JS_FS_END,
+};
+
+// Read the WebIDLType wrapped by a WebIDLType shell object argument.
+static JS::WebIDLType* ArgWebIDLType(JSContext* cx, HandleValue v) {
+  if (!IsShellWebIDLType(v)) {
+    JS_ReportErrorASCII(cx, "expected a WebIDLType");
+    return nullptr;
+  }
+  return ShellWebIDLType(&v.toObject());
+}
+
+static bool BuildWebIDLTypeFromArgs(JSContext* cx, const char* kind,
+                                    HandleValue arg, uint8_t flags,
+                                    JS::WebIDLType* out) {
+  JS::WebIDLTypeKind primKind;
+  if (WebIDLPrimitiveKindFromName(kind, &primKind)) {
+    *out = JS::WebIDLType::primitive(primKind, flags);
+    return true;
+  }
+
+  auto oom = [&]() {
+    ReportOutOfMemory(cx);
+    return false;
+  };
+
+  if (strcmp(kind, "sequence") == 0 || strcmp(kind, "FrozenArray") == 0 ||
+      strcmp(kind, "ObservableArray") == 0 || strcmp(kind, "nullable") == 0 ||
+      strcmp(kind, "promise") == 0) {
+    JS::WebIDLType* inner = ArgWebIDLType(cx, arg);
+    if (!inner) {
+      return false;
+    }
+    bool ok;
+    if (strcmp(kind, "sequence") == 0) {
+      ok = JS::WebIDLType::sequence(*inner, out);
+    } else if (strcmp(kind, "FrozenArray") == 0) {
+      ok = JS::WebIDLType::frozenArray(*inner, out);
+    } else if (strcmp(kind, "ObservableArray") == 0) {
+      ok = JS::WebIDLType::observableArray(*inner, out);
+    } else if (strcmp(kind, "nullable") == 0) {
+      ok = JS::WebIDLType::nullable(*inner, out);
+    } else {
+      ok = JS::WebIDLType::promise(*inner, out);
+    }
+    return ok ? true : oom();
+  }
+
+  if (strcmp(kind, "enumeration") == 0) {
+    if (!arg.isObject()) {
+      JS_ReportErrorASCII(cx, "enumeration expects an array of labels");
+      return false;
+    }
+    RootedObject arr(cx, &arg.toObject());
+    uint32_t len;
+    if (!JS::GetArrayLength(cx, arr, &len)) {
+      return false;
+    }
+    mozilla::Vector<JS::UniqueChars, 0, js::SystemAllocPolicy> labels;
+    RootedValue elem(cx);
+    for (uint32_t i = 0; i < len; i++) {
+      if (!JS_GetElement(cx, arr, i, &elem)) {
+        return false;
+      }
+      RootedString s(cx, JS::ToString(cx, elem));
+      if (!s) {
+        return false;
+      }
+      JS::UniqueChars label = JS_EncodeStringToUTF8(cx, s);
+      if (!label || !labels.append(std::move(label))) {
+        return oom();
+      }
+    }
+    return JS::WebIDLType::enumeration(std::move(labels), out) ? true : oom();
+  }
+
+  if (strcmp(kind, "union") == 0) {
+    if (!arg.isObject()) {
+      JS_ReportErrorASCII(cx, "union expects an array of WebIDLType");
+      return false;
+    }
+    RootedObject arr(cx, &arg.toObject());
+    uint32_t len;
+    if (!JS::GetArrayLength(cx, arr, &len)) {
+      return false;
+    }
+    JS::WebIDLTypeVector members;
+    RootedValue elem(cx);
+    for (uint32_t i = 0; i < len; i++) {
+      if (!JS_GetElement(cx, arr, i, &elem)) {
+        return false;
+      }
+      JS::WebIDLType* member = ArgWebIDLType(cx, elem);
+      if (!member) {
+        return false;
+      }
+      if (!members.append(*member)) {
+        return oom();
+      }
+    }
+    return JS::WebIDLType::union_(std::move(members), out) ? true : oom();
+  }
+
+  if (strcmp(kind, "dictionary") == 0) {
+    // arg is an array of [name, WebIDLType, requiredBool].
+    if (!arg.isObject()) {
+      JS_ReportErrorASCII(cx, "dictionary expects an array of members");
+      return false;
+    }
+    if (!JS::WebIDLType::dictionary(out)) {
+      return oom();
+    }
+    RootedObject arr(cx, &arg.toObject());
+    uint32_t len;
+    if (!JS::GetArrayLength(cx, arr, &len)) {
+      return false;
+    }
+    RootedValue member(cx), nameVal(cx), typeVal(cx), reqVal(cx);
+    for (uint32_t i = 0; i < len; i++) {
+      if (!JS_GetElement(cx, arr, i, &member) || !member.isObject()) {
+        JS_ReportErrorASCII(cx, "dictionary member must be [name, type, req]");
+        return false;
+      }
+      RootedObject m(cx, &member.toObject());
+      if (!JS_GetElement(cx, m, 0, &nameVal) ||
+          !JS_GetElement(cx, m, 1, &typeVal) ||
+          !JS_GetElement(cx, m, 2, &reqVal)) {
+        return false;
+      }
+      RootedString nameStr(cx, JS::ToString(cx, nameVal));
+      if (!nameStr) {
+        return false;
+      }
+      JS::UniqueChars name = JS_EncodeStringToUTF8(cx, nameStr);
+      if (!name) {
+        return oom();
+      }
+      JS::WebIDLType* memberType = ArgWebIDLType(cx, typeVal);
+      if (!memberType) {
+        return false;
+      }
+      if (!out->addDictionaryMember(std::move(name), *memberType,
+                                    JS::ToBoolean(reqVal))) {
+        return oom();
+      }
+    }
+    return true;
+  }
+
+  if (strcmp(kind, "record") == 0) {
+    // arg is [keyStringKind, valueType].
+    if (!arg.isObject()) {
+      JS_ReportErrorASCII(cx, "record expects [keyKind, valueType]");
+      return false;
+    }
+    RootedObject arr(cx, &arg.toObject());
+    RootedValue keyVal(cx), valTypeVal(cx);
+    if (!JS_GetElement(cx, arr, 0, &keyVal) ||
+        !JS_GetElement(cx, arr, 1, &valTypeVal)) {
+      return false;
+    }
+    RootedString keyStr(cx, JS::ToString(cx, keyVal));
+    if (!keyStr) {
+      return false;
+    }
+    JS::UniqueChars keyKind = JS_EncodeStringToUTF8(cx, keyStr);
+    if (!keyKind) {
+      return oom();
+    }
+    JS::WebIDLTypeKind keyStringKind;
+    if (!WebIDLPrimitiveKindFromName(keyKind.get(), &keyStringKind) ||
+        !JS::WebIDLTypeKindIsString(keyStringKind)) {
+      JS_ReportErrorASCII(cx, "record key must be a string kind");
+      return false;
+    }
+    JS::WebIDLType* valueType = ArgWebIDLType(cx, valTypeVal);
+    if (!valueType) {
+      return false;
+    }
+    return JS::WebIDLType::record(keyStringKind, *valueType, out) ? true
+                                                                  : oom();
+  }
+
+  if (strcmp(kind, "interface") == 0) {
+    JS::WebIDLInterface* iface = ArgWebIDLInterface(cx, arg);
+    if (!iface) {
+      return false;
+    }
+    return JS::WebIDLType::interface_(iface, out) ? true : oom();
+  }
+
+  JS_ReportErrorASCII(cx, "unknown WebIDLType kind: %s", kind);
+  return false;
+}
+
+static JSObject* NewWebIDLTypeObject(JSContext* cx, HandleObject proto,
+                                     const JS::WebIDLType& type) {
+  RootedObject obj(cx, JS_NewObjectWithGivenProto(cx, &WebIDLTypeClass, proto));
+  if (!obj) {
+    return nullptr;
+  }
+  JS::WebIDLType* heap = js_new<JS::WebIDLType>(type);
+  if (!heap) {
+    ReportOutOfMemory(cx);
+    return nullptr;
+  }
+  JS::SetReservedSlot(obj, 0, JS::PrivateValue(heap));
+  return obj;
+}
+
+static bool WebIDLType_construct(JSContext* cx, unsigned argc, JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.isConstructing()) {
+    JS_ReportErrorASCII(cx, "WebIDLType must be called with new");
+    return false;
+  }
+  if (args.length() < 1) {
+    JS_ReportErrorASCII(cx, "WebIDLType(kind, [arg], [opts])");
+    return false;
+  }
+  RootedString kindStr(cx, JS::ToString(cx, args[0]));
+  if (!kindStr) {
+    return false;
+  }
+  JS::UniqueChars kind = JS_EncodeStringToUTF8(cx, kindStr);
+  if (!kind) {
+    return false;
+  }
+  uint8_t flags;
+  if (!ReadWebIDLFlags(cx, args.get(2), &flags)) {
+    return false;
+  }
+  JS::WebIDLType type;
+  if (!BuildWebIDLTypeFromArgs(cx, kind.get(), args.get(1), flags, &type)) {
+    return false;
+  }
+
+  RootedObject obj(cx, JS_NewObjectForConstructor(cx, &WebIDLTypeClass, args));
+  if (!obj) {
+    return false;
+  }
+  JS::WebIDLType* heap = js_new<JS::WebIDLType>(type);
+  if (!heap) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  JS::SetReservedSlot(obj, 0, JS::PrivateValue(heap));
+  args.rval().setObject(*obj);
+  return true;
+}
+
+static JSObject* NewWebIDLValueObject(JSContext* cx, HandleObject proto,
+                                      JS::HandleWebIDLValue value) {
+  RootedObject obj(cx,
+                   JS_NewObjectWithGivenProto(cx, &WebIDLValueClass, proto));
+  if (!obj) {
+    return nullptr;
+  }
+  JS::WebIDLValue* heap = js_new<JS::WebIDLValue>(value.get());
+  if (!heap) {
+    ReportOutOfMemory(cx);
+    return nullptr;
+  }
+  JS::SetReservedSlot(obj, 0, JS::PrivateValue(heap));
+  return obj;
+}
+
+static bool WebIDLValue_construct(JSContext* cx, unsigned argc, JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.isConstructing()) {
+    JS_ReportErrorASCII(cx, "WebIDLValue must be called with new");
+    return false;
+  }
+  if (args.length() < 2) {
+    JS_ReportErrorASCII(cx, "WebIDLValue(webIDLType, jsValue)");
+    return false;
+  }
+  JS::WebIDLType* type = ArgWebIDLType(cx, args[0]);
+  if (!type) {
+    return false;
+  }
+  JS::RootedWebIDLValue value(cx);
+  if (!JS::JSToWebIDLValue(cx, args[1], *type, &value)) {
+    return false;
+  }
+
+  RootedObject obj(cx, JS_NewObjectForConstructor(cx, &WebIDLValueClass, args));
+  if (!obj) {
+    return false;
+  }
+  JS::WebIDLValue* heap = js_new<JS::WebIDLValue>(value.get());
+  if (!heap) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  JS::SetReservedSlot(obj, 0, JS::PrivateValue(heap));
+  args.rval().setObject(*obj);
+  return true;
+}
+
+static bool WebIDLValue_toValue(JSContext* cx, unsigned argc, JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.thisv().isObject() ||
+      JS::GetClass(&args.thisv().toObject()) != &WebIDLValueClass) {
+    JS_ReportErrorASCII(cx, "not a WebIDLValue");
+    return false;
+  }
+  JS::RootedWebIDLValue value(cx, *ShellWebIDLValue(&args.thisv().toObject()));
+  return JS::WebIDLValueToJS(cx, value, args.rval());
+}
+
+static bool WebIDLValue_coerce(JSContext* cx, unsigned argc, JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.thisv().isObject() ||
+      JS::GetClass(&args.thisv().toObject()) != &WebIDLValueClass) {
+    JS_ReportErrorASCII(cx, "not a WebIDLValue");
+    return false;
+  }
+  if (args.length() < 1) {
+    JS_ReportErrorASCII(cx, "coerce(webIDLType)");
+    return false;
+  }
+  JS::WebIDLType* toType = ArgWebIDLType(cx, args[0]);
+  if (!toType) {
+    return false;
+  }
+  RootedObject thisObj(cx, &args.thisv().toObject());
+  JS::RootedWebIDLValue from(cx, *ShellWebIDLValue(thisObj));
+  JS::RootedWebIDLValue result(cx);
+  if (!JS::CoerceWebIDLValue(cx, from, *toType, &result)) {
+    return false;
+  }
+  RootedObject proto(cx);
+  if (!JS_GetPrototype(cx, thisObj, &proto)) {
+    return false;
+  }
+  RootedObject obj(cx, NewWebIDLValueObject(cx, proto, result));
+  if (!obj) {
+    return false;
+  }
+  args.rval().setObject(*obj);
+  return true;
+}
+
+static const JSFunctionSpec WebIDLValue_methods[] = {
+    JS_FN("toValue", WebIDLValue_toValue, 0, 0),
+    JS_FN("coerce", WebIDLValue_coerce, 1, 0),
+    JS_FS_END,
+};
+
+#ifdef ENABLE_WASM_COMPONENTS
+
+static void ComponentType_finalize(JS::GCContext* gcx, JSObject* obj) {
+  JS::Value slot = JS::GetReservedSlot(obj, 0);
+  if (!slot.isUndefined()) {
+    js_delete(static_cast<wasm::ComponentType*>(slot.toPrivate()));
+  }
+}
+static const JSClassOps ComponentTypeClassOps = {
+    .finalize = ComponentType_finalize,
+};
+static const JSClass ComponentTypeClass = {
+    "ComponentType",
+    JSCLASS_HAS_RESERVED_SLOTS(1) | JSCLASS_BACKGROUND_FINALIZE,
+    &ComponentTypeClassOps};
+
+static void ComponentValue_finalize(JS::GCContext* gcx, JSObject* obj) {
+  JS::Value slot = JS::GetReservedSlot(obj, 0);
+  if (!slot.isUndefined()) {
+    js_delete(static_cast<wasm::ComponentValue*>(slot.toPrivate()));
+  }
+}
+static const JSClassOps ComponentValueClassOps = {
+    .finalize = ComponentValue_finalize,
+};
+static const JSClass ComponentValueClass = {
+    "ComponentValue",
+    JSCLASS_HAS_RESERVED_SLOTS(1) | JSCLASS_BACKGROUND_FINALIZE,
+    &ComponentValueClassOps};
+
+static wasm::ComponentType* ShellComponentType(JSObject* obj) {
+  return static_cast<wasm::ComponentType*>(
+      JS::GetReservedSlot(obj, 0).toPrivate());
+}
+static wasm::ComponentValue* ShellComponentValue(JSObject* obj) {
+  return static_cast<wasm::ComponentValue*>(
+      JS::GetReservedSlot(obj, 0).toPrivate());
+}
+
+static bool IsShellComponentType(HandleValue v) {
+  return v.isObject() && JS::GetClass(&v.toObject()) == &ComponentTypeClass;
+}
+static bool IsShellWebIDLValue(HandleValue v) {
+  return v.isObject() && JS::GetClass(&v.toObject()) == &WebIDLValueClass;
+}
+
+static wasm::ComponentType* ArgComponentType(JSContext* cx, HandleValue v) {
+  if (!IsShellComponentType(v)) {
+    JS_ReportErrorASCII(cx, "expected a ComponentType");
+    return nullptr;
+  }
+  return ShellComponentType(&v.toObject());
+}
+
+// The test classes may be installed on an object other than the global
+// (e.g. a testing-functions object in Gecko); this recovers that container
+// from the current global rather than assuming it's the global itself.
+static bool GetWebIDLTestClassContainer(JSContext* cx,
+                                        MutableHandleObject container) {
+  RootedObject glob(cx, JS::CurrentGlobalOrNull(cx));
+  RootedValue containerVal(cx);
+  if (!JS_GetProperty(cx, glob, "@@WebIDLTestClassContainer", &containerVal)) {
+    return false;
+  }
+  if (!containerVal.isObject()) {
+    JS_ReportErrorASCII(cx, "WebIDL test classes not installed on this global");
+    return false;
+  }
+  container.set(&containerVal.toObject());
+  return true;
+}
+
+static JSObject* GetGlobalCtorPrototype(JSContext* cx, const char* name) {
+  RootedObject container(cx);
+  if (!GetWebIDLTestClassContainer(cx, &container)) {
+    return nullptr;
+  }
+  RootedValue ctorVal(cx);
+  if (!JS_GetProperty(cx, container, name, &ctorVal)) {
+    return nullptr;
+  }
+  if (!ctorVal.isObject()) {
+    JS_ReportErrorASCII(cx, "%s constructor not found", name);
+    return nullptr;
+  }
+  RootedObject ctor(cx, &ctorVal.toObject());
+  RootedValue protoVal(cx);
+  if (!JS_GetProperty(cx, ctor, "prototype", &protoVal)) {
+    return nullptr;
+  }
+  if (!protoVal.isObject()) {
+    JS_ReportErrorASCII(cx, "%s.prototype not found", name);
+    return nullptr;
+  }
+  return &protoVal.toObject();
+}
+
+static JSObject* NewWebIDLInterfaceObject(JSContext* cx, HandleObject proto,
+                                          JS::WebIDLInterface* iface) {
+  RootedObject obj(
+      cx, JS_NewObjectWithGivenProto(cx, &WebIDLInterfaceClass, proto));
+  if (!obj) {
+    return nullptr;
+  }
+  iface->AddRef();
+  JS::SetReservedSlot(obj, 0, JS::PrivateValue(iface));
+  return obj;
+}
+
+static bool WebIDLType_getInterface(JSContext* cx, unsigned argc,
+                                    JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.thisv().isObject() ||
+      JS::GetClass(&args.thisv().toObject()) != &WebIDLTypeClass) {
+    JS_ReportErrorASCII(cx, "not a WebIDLType");
+    return false;
+  }
+  JS::WebIDLType* type = ShellWebIDLType(&args.thisv().toObject());
+  if (type->kind() != JS::WebIDLTypeKind::Interface) {
+    args.rval().setNull();
+    return true;
+  }
+  RootedObject proto(cx, GetGlobalCtorPrototype(cx, "WebIDLInterface"));
+  if (!proto) {
+    return false;
+  }
+  RootedObject obj(cx, NewWebIDLInterfaceObject(cx, proto, type->interface()));
+  if (!obj) {
+    return false;
+  }
+  args.rval().setObject(*obj);
+  return true;
+}
+
+static bool ComponentKindPrimitiveFromName(const char* s,
+                                           wasm::ComponentTypeKind* kind) {
+  using K = wasm::ComponentTypeKind;
+  static const struct {
+    const char* n;
+    K k;
+  } table[] = {
+      {"bool", K::Bool},     {"s8", K::S8},   {"u8", K::U8},
+      {"s16", K::S16},       {"u16", K::U16}, {"s32", K::S32},
+      {"u32", K::U32},       {"s64", K::S64}, {"u64", K::U64},
+      {"f32", K::F32},       {"f64", K::F64}, {"char", K::Char},
+      {"string", K::String},
+  };
+  for (const auto& e : table) {
+    if (strcmp(s, e.n) == 0) {
+      *kind = e.k;
+      return true;
+    }
+  }
+  return false;
+}
+
+static const char* ComponentKindName(wasm::ComponentTypeKind kind) {
+  using K = wasm::ComponentTypeKind;
+  switch (kind) {
+    case K::Bool:
+      return "bool";
+    case K::S8:
+      return "s8";
+    case K::U8:
+      return "u8";
+    case K::S16:
+      return "s16";
+    case K::U16:
+      return "u16";
+    case K::S32:
+      return "s32";
+    case K::U32:
+      return "u32";
+    case K::S64:
+      return "s64";
+    case K::U64:
+      return "u64";
+    case K::F32:
+      return "f32";
+    case K::F64:
+      return "f64";
+    case K::Char:
+      return "char";
+    case K::String:
+      return "string";
+    case K::Record:
+      return "record";
+    case K::Variant:
+      return "variant";
+    case K::List:
+      return "list";
+    case K::Tuple:
+      return "tuple";
+    case K::Flags:
+      return "flags";
+    case K::Enum:
+      return "enum";
+    case K::Option:
+      return "option";
+    case K::Result:
+      return "result";
+    case K::Own:
+      return "own";
+    case K::Borrow:
+      return "borrow";
+    case K::Func:
+      return "func";
+    case K::Component:
+      return "component";
+    case K::Instance:
+      return "instance";
+    case K::Resource:
+      return "resource";
+    case K::Eq:
+      return "eq";
+    case K::SubResource:
+      return "subresource";
+    default:
+      return "invalid";
+  }
+}
+
+static bool ReadComponentName(JSContext* cx, HandleValue v,
+                              wasm::CacheableName* out) {
+  RootedString s(cx, JS::ToString(cx, v));
+  if (!s) {
+    return false;
+  }
+  JS::UniqueChars chars = JS_EncodeStringToUTF8(cx, s);
+  if (!chars || !wasm::CacheableName::fromUTF8Chars(chars.get(), out)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  return true;
+}
+
+static bool BuildComponentTypeFromArgs(JSContext* cx, const char* kind,
+                                       HandleValue arg,
+                                       wasm::ComponentType* out) {
+  wasm::ComponentTypeKind primKind;
+  if (ComponentKindPrimitiveFromName(kind, &primKind)) {
+    *out = wasm::ComponentType::primitive(primKind);
+    return true;
+  }
+
+  auto oom = [&]() {
+    ReportOutOfMemory(cx);
+    return false;
+  };
+
+  if (strcmp(kind, "list") == 0 || strcmp(kind, "option") == 0) {
+    wasm::ComponentType* inner = ArgComponentType(cx, arg);
+    if (!inner) {
+      return false;
+    }
+    bool ok =
+        strcmp(kind, "list") == 0
+            ? wasm::ComponentType::list(wasm::ComponentType(*inner), out)
+            : wasm::ComponentType::option(wasm::ComponentType(*inner), out);
+    return ok ? true : oom();
+  }
+
+  if (strcmp(kind, "resource") == 0) {
+    // Each call creates a fresh, nominally-distinct resource type (resource
+    // types skip canonicalization), matching a defined/imported resource's
+    // generative identity. `arg` is an optional declared interface.
+    JS::WebIDLInterface* iface = nullptr;
+    if (!arg.isNullOrUndefined()) {
+      iface = ArgWebIDLInterface(cx, arg);
+      if (!iface) {
+        return false;
+      }
+    }
+    return wasm::ComponentType::resource(
+               wasm::ComponentResourceType(mozilla::Nothing(), iface), out)
+               ? true
+               : oom();
+  }
+
+  if (strcmp(kind, "own") == 0 || strcmp(kind, "borrow") == 0) {
+    wasm::ComponentType* resource = ArgComponentType(cx, arg);
+    if (!resource) {
+      return false;
+    }
+    if (resource->kind() != wasm::ComponentTypeKind::Resource) {
+      JS_ReportErrorASCII(cx, "%s expects a resource ComponentType", kind);
+      return false;
+    }
+    bool ok =
+        strcmp(kind, "own") == 0
+            ? wasm::ComponentType::own(wasm::ComponentType(*resource), out)
+            : wasm::ComponentType::borrow(wasm::ComponentType(*resource), out);
+    return ok ? true : oom();
+  }
+
+  if (strcmp(kind, "tuple") == 0) {
+    if (!arg.isObject()) {
+      JS_ReportErrorASCII(cx, "tuple expects an array of ComponentType");
+      return false;
+    }
+    RootedObject arr(cx, &arg.toObject());
+    uint32_t len;
+    if (!JS::GetArrayLength(cx, arr, &len)) {
+      return false;
+    }
+    wasm::ComponentTypeVector items;
+    RootedValue elem(cx);
+    for (uint32_t i = 0; i < len; i++) {
+      if (!JS_GetElement(cx, arr, i, &elem)) {
+        return false;
+      }
+      wasm::ComponentType* item = ArgComponentType(cx, elem);
+      if (!item) {
+        return false;
+      }
+      if (!items.append(*item)) {
+        return oom();
+      }
+    }
+    return wasm::ComponentType::tuple(std::move(items), out) ? true : oom();
+  }
+
+  if (strcmp(kind, "record") == 0) {
+    // arg is an array of [name, ComponentType].
+    if (!arg.isObject()) {
+      JS_ReportErrorASCII(cx, "record expects an array of [name, type]");
+      return false;
+    }
+    RootedObject arr(cx, &arg.toObject());
+    uint32_t len;
+    if (!JS::GetArrayLength(cx, arr, &len)) {
+      return false;
+    }
+    wasm::ComponentRecordFieldVector fields;
+    RootedValue member(cx), nameVal(cx), typeVal(cx);
+    for (uint32_t i = 0; i < len; i++) {
+      if (!JS_GetElement(cx, arr, i, &member) || !member.isObject()) {
+        JS_ReportErrorASCII(cx, "record member must be [name, type]");
+        return false;
+      }
+      RootedObject m(cx, &member.toObject());
+      if (!JS_GetElement(cx, m, 0, &nameVal) ||
+          !JS_GetElement(cx, m, 1, &typeVal)) {
+        return false;
+      }
+      wasm::CacheableName name;
+      if (!ReadComponentName(cx, nameVal, &name)) {
+        return false;
+      }
+      wasm::ComponentType* fieldType = ArgComponentType(cx, typeVal);
+      if (!fieldType) {
+        return false;
+      }
+      if (!fields.append(
+              wasm::ComponentRecordField(std::move(name), *fieldType))) {
+        return oom();
+      }
+    }
+    return wasm::ComponentType::record(std::move(fields), out) ? true : oom();
+  }
+
+  if (strcmp(kind, "flags") == 0 || strcmp(kind, "enum") == 0) {
+    if (!arg.isObject()) {
+      JS_ReportErrorASCII(cx, "%s expects an array of labels", kind);
+      return false;
+    }
+    RootedObject arr(cx, &arg.toObject());
+    uint32_t len;
+    if (!JS::GetArrayLength(cx, arr, &len)) {
+      return false;
+    }
+    wasm::CacheableNameVector labels;
+    RootedValue elem(cx);
+    for (uint32_t i = 0; i < len; i++) {
+      if (!JS_GetElement(cx, arr, i, &elem)) {
+        return false;
+      }
+      wasm::CacheableName label;
+      if (!ReadComponentName(cx, elem, &label)) {
+        return false;
+      }
+      if (!labels.append(std::move(label))) {
+        return oom();
+      }
+    }
+    bool ok = strcmp(kind, "flags") == 0
+                  ? wasm::ComponentType::flags(std::move(labels), out)
+                  : wasm::ComponentType::enum_(std::move(labels), out);
+    return ok ? true : oom();
+  }
+
+  if (strcmp(kind, "variant") == 0) {
+    // arg is an array of [name, ComponentType|null].
+    if (!arg.isObject()) {
+      JS_ReportErrorASCII(cx, "variant expects an array of [name, type|null]");
+      return false;
+    }
+    RootedObject arr(cx, &arg.toObject());
+    uint32_t len;
+    if (!JS::GetArrayLength(cx, arr, &len)) {
+      return false;
+    }
+    wasm::ComponentVariantCaseVector cases;
+    RootedValue member(cx), nameVal(cx), typeVal(cx);
+    for (uint32_t i = 0; i < len; i++) {
+      if (!JS_GetElement(cx, arr, i, &member) || !member.isObject()) {
+        JS_ReportErrorASCII(cx, "variant case must be [name, type|null]");
+        return false;
+      }
+      RootedObject m(cx, &member.toObject());
+      if (!JS_GetElement(cx, m, 0, &nameVal) ||
+          !JS_GetElement(cx, m, 1, &typeVal)) {
+        return false;
+      }
+      wasm::CacheableName name;
+      if (!ReadComponentName(cx, nameVal, &name)) {
+        return false;
+      }
+      mozilla::Maybe<wasm::ComponentType> maybeType;
+      if (!typeVal.isNullOrUndefined()) {
+        wasm::ComponentType* caseType = ArgComponentType(cx, typeVal);
+        if (!caseType) {
+          return false;
+        }
+        maybeType = mozilla::Some(*caseType);
+      }
+      if (!cases.append(wasm::ComponentVariantCase{std::move(name),
+                                                   std::move(maybeType)})) {
+        return oom();
+      }
+    }
+    return wasm::ComponentType::variant(std::move(cases), out) ? true : oom();
+  }
+
+  if (strcmp(kind, "result") == 0) {
+    // arg is [okType|null, errorType|null].
+    if (!arg.isObject()) {
+      JS_ReportErrorASCII(cx, "result expects [okType|null, errorType|null]");
+      return false;
+    }
+    RootedObject arr(cx, &arg.toObject());
+    RootedValue okVal(cx), errVal(cx);
+    if (!JS_GetElement(cx, arr, 0, &okVal) ||
+        !JS_GetElement(cx, arr, 1, &errVal)) {
+      return false;
+    }
+    wasm::ComponentResultType result;
+    if (!okVal.isNullOrUndefined()) {
+      wasm::ComponentType* okType = ArgComponentType(cx, okVal);
+      if (!okType) {
+        return false;
+      }
+      result.type = mozilla::Some(*okType);
+    }
+    if (!errVal.isNullOrUndefined()) {
+      wasm::ComponentType* errType = ArgComponentType(cx, errVal);
+      if (!errType) {
+        return false;
+      }
+      result.errorType = mozilla::Some(*errType);
+    }
+    return wasm::ComponentType::result(std::move(result), out) ? true : oom();
+  }
+
+  JS_ReportErrorASCII(cx, "unknown ComponentType kind: %s", kind);
+  return false;
+}
+
+static bool ComponentType_construct(JSContext* cx, unsigned argc,
+                                    JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.isConstructing()) {
+    JS_ReportErrorASCII(cx, "ComponentType must be called with new");
+    return false;
+  }
+  if (args.length() < 1) {
+    JS_ReportErrorASCII(cx, "ComponentType(kind, [arg])");
+    return false;
+  }
+  RootedString kindStr(cx, JS::ToString(cx, args[0]));
+  if (!kindStr) {
+    return false;
+  }
+  JS::UniqueChars kind = JS_EncodeStringToUTF8(cx, kindStr);
+  if (!kind) {
+    return false;
+  }
+  wasm::ComponentType type;
+  if (!BuildComponentTypeFromArgs(cx, kind.get(), args.get(1), &type)) {
+    return false;
+  }
+
+  RootedObject obj(cx,
+                   JS_NewObjectForConstructor(cx, &ComponentTypeClass, args));
+  if (!obj) {
+    return false;
+  }
+  wasm::ComponentType* heap = js_new<wasm::ComponentType>(type);
+  if (!heap) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  JS::SetReservedSlot(obj, 0, JS::PrivateValue(heap));
+  args.rval().setObject(*obj);
+  return true;
+}
+
+static bool ComponentType_getKind(JSContext* cx, unsigned argc, JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!IsShellComponentType(args.thisv())) {
+    JS_ReportErrorASCII(cx, "not a ComponentType");
+    return false;
+  }
+  wasm::ComponentType* type = ShellComponentType(&args.thisv().toObject());
+  JSString* str = JS_NewStringCopyZ(cx, ComponentKindName(type->kind()));
+  if (!str) {
+    return false;
+  }
+  args.rval().setString(str);
+  return true;
+}
+
+static bool ComponentType_toWebIDLType(JSContext* cx, unsigned argc,
+                                       JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!IsShellComponentType(args.thisv())) {
+    JS_ReportErrorASCII(cx, "not a ComponentType");
+    return false;
+  }
+  wasm::ComponentType* type = ShellComponentType(&args.thisv().toObject());
+  JS::WebIDLType canonical;
+  if (!wasm::CanonicalWebIDLType(cx, *type, &canonical)) {
+    return false;
+  }
+  RootedObject proto(cx, GetGlobalCtorPrototype(cx, "WebIDLType"));
+  if (!proto) {
+    return false;
+  }
+  RootedObject obj(cx, NewWebIDLTypeObject(cx, proto, canonical));
+  if (!obj) {
+    return false;
+  }
+  args.rval().setObject(*obj);
+  return true;
+}
+
+static const JSPropertySpec ComponentType_properties[] = {
+    JS_PSG("kind", ComponentType_getKind, 0),
+    JS_PS_END,
+};
+static const JSFunctionSpec ComponentType_methods[] = {
+    JS_FN("toWebIDLType", ComponentType_toWebIDLType, 0, 0),
+    JS_FS_END,
+};
+
+static bool ComponentValue_construct(JSContext* cx, unsigned argc,
+                                     JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.isConstructing()) {
+    JS_ReportErrorASCII(cx, "ComponentValue must be called with new");
+    return false;
+  }
+  if (args.length() < 2) {
+    JS_ReportErrorASCII(cx, "ComponentValue(componentType, webIDLValue)");
+    return false;
+  }
+  wasm::ComponentType* type = ArgComponentType(cx, args[0]);
+  if (!type) {
+    return false;
+  }
+  if (!IsShellWebIDLValue(args[1])) {
+    JS_ReportErrorASCII(cx, "expected a WebIDLValue");
+    return false;
+  }
+  JS::RootedWebIDLValue value(cx, *ShellWebIDLValue(&args[1].toObject()));
+
+  JS::WebIDLType canonical;
+  if (!wasm::CanonicalWebIDLType(cx, *type, &canonical)) {
+    return false;
+  }
+  // A present value of a Nullable type is stored typed as the inner
+  // (non-nullable) type; only `null` itself carries the Nullable wrapper type.
+  const JS::WebIDLType& expected =
+      canonical.kind() == JS::WebIDLTypeKind::Nullable && !value.get().isNull()
+          ? canonical.innerType()
+          : canonical;
+  if (!JS::WebIDLType::structurallyEqual(expected, value.get().type())) {
+    JS_ReportErrorNumberASCII(
+        cx, js::GetErrorMessage, nullptr, JSMSG_CANT_CONVERT_TO, "WebIDLValue",
+        "the canonical WebIDL type for this ComponentType");
+    return false;
+  }
+
+  wasm::ComponentValue result;
+  if (!wasm::FromCanonicalWebIDLValue(cx, value, *type, &result)) {
+    return false;
+  }
+
+  RootedObject obj(cx,
+                   JS_NewObjectForConstructor(cx, &ComponentValueClass, args));
+  if (!obj) {
+    return false;
+  }
+  wasm::ComponentValue* heap = js_new<wasm::ComponentValue>(result);
+  if (!heap) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  JS::SetReservedSlot(obj, 0, JS::PrivateValue(heap));
+  args.rval().setObject(*obj);
+  return true;
+}
+
+static bool ComponentValue_toWebIDLValue(JSContext* cx, unsigned argc,
+                                         JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.thisv().isObject() ||
+      JS::GetClass(&args.thisv().toObject()) != &ComponentValueClass) {
+    JS_ReportErrorASCII(cx, "not a ComponentValue");
+    return false;
+  }
+  wasm::ComponentValue* value = ShellComponentValue(&args.thisv().toObject());
+  JS::RootedWebIDLValue result(cx);
+  if (!wasm::ToCanonicalWebIDLValue(cx, *value, &result)) {
+    return false;
+  }
+  RootedObject proto(cx, GetGlobalCtorPrototype(cx, "WebIDLValue"));
+  if (!proto) {
+    return false;
+  }
+  RootedObject obj(cx, NewWebIDLValueObject(cx, proto, result));
+  if (!obj) {
+    return false;
+  }
+  args.rval().setObject(*obj);
+  return true;
+}
+
+static const JSFunctionSpec ComponentValue_methods[] = {
+    JS_FN("toWebIDLValue", ComponentValue_toWebIDLValue, 0, 0),
+    JS_FS_END,
+};
+
+// A bare stand-in for the DOMException-derived exception that a
+// `result<T,E>` function's `error(e)` case is supposed to throw; the shell
+// has no DOMException, so this just exposes the wrapped value via `.value`.
+static const JSClass ComponentExceptionClass = {"ComponentException",
+                                                JSCLASS_HAS_RESERVED_SLOTS(1)};
+
+static bool ComponentException_construct(JSContext* cx, unsigned argc,
+                                         JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.isConstructing()) {
+    JS_ReportErrorASCII(cx, "ComponentException must be called with new");
+    return false;
+  }
+  RootedObject obj(
+      cx, JS_NewObjectForConstructor(cx, &ComponentExceptionClass, args));
+  if (!obj) {
+    return false;
+  }
+  JS::SetReservedSlot(obj, 0, args.get(0));
+  args.rval().setObject(*obj);
+  return true;
+}
+
+static bool ComponentException_getValue(JSContext* cx, unsigned argc,
+                                        JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.thisv().isObject() ||
+      JS::GetClass(&args.thisv().toObject()) != &ComponentExceptionClass) {
+    JS_ReportErrorASCII(cx, "not a ComponentException");
+    return false;
+  }
+  args.rval().set(JS::GetReservedSlot(&args.thisv().toObject(), 0));
+  return true;
+}
+
+static const JSPropertySpec ComponentException_properties[] = {
+    JS_PSG("value", ComponentException_getValue, 0),
+    JS_PS_END,
+};
+
+// Wraps a Func-kind `wasm::ComponentType` (a canonicalized
+// `wasm::ComponentFuncType`).
+static void ComponentFuncType_finalize(JS::GCContext* gcx, JSObject* obj) {
+  JS::Value slot = JS::GetReservedSlot(obj, 0);
+  if (!slot.isUndefined()) {
+    js_delete(static_cast<wasm::ComponentType*>(slot.toPrivate()));
+  }
+}
+static const JSClassOps ComponentFuncTypeClassOps = {
+    .finalize = ComponentFuncType_finalize,
+};
+static const JSClass ComponentFuncTypeClass = {
+    "ComponentFuncType",
+    JSCLASS_HAS_RESERVED_SLOTS(1) | JSCLASS_BACKGROUND_FINALIZE,
+    &ComponentFuncTypeClassOps};
+
+static bool ComponentFuncType_construct(JSContext* cx, unsigned argc,
+                                        JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.isConstructing()) {
+    JS_ReportErrorASCII(cx, "ComponentFuncType must be called with new");
+    return false;
+  }
+  if (args.length() < 1 || !args[0].isObject()) {
+    JS_ReportErrorASCII(cx,
+                        "ComponentFuncType(params, [result]): params must be "
+                        "an array of ComponentType");
+    return false;
+  }
+
+  RootedObject paramsArr(cx, &args[0].toObject());
+  uint32_t len;
+  if (!JS::GetArrayLength(cx, paramsArr, &len)) {
+    return false;
+  }
+
+  wasm::ComponentTypeVector paramTypes;
+  wasm::CacheableNameVector paramNames;
+  RootedValue elem(cx);
+  for (uint32_t i = 0; i < len; i++) {
+    if (!JS_GetElement(cx, paramsArr, i, &elem)) {
+      return false;
+    }
+    wasm::ComponentType* paramType = ArgComponentType(cx, elem);
+    if (!paramType) {
+      return false;
+    }
+    if (!paramTypes.append(*paramType) ||
+        !paramNames.append(wasm::CacheableName())) {
+      ReportOutOfMemory(cx);
+      return false;
+    }
+  }
+
+  mozilla::Maybe<wasm::ComponentType> resultType;
+  if (args.length() >= 2 && !args[1].isNullOrUndefined()) {
+    wasm::ComponentType* result = ArgComponentType(cx, args[1]);
+    if (!result) {
+      return false;
+    }
+    resultType = mozilla::Some(*result);
+  }
+
+  wasm::ComponentType type;
+  if (!wasm::ComponentType::func(
+          wasm::ComponentFuncType{std::move(paramTypes), std::move(paramNames),
+                                  resultType},
+          &type)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  wasm::ComponentType canonical;
+  if (!wasm::CanonicalizeComponentType(type, &canonical)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+
+  RootedObject obj(
+      cx, JS_NewObjectForConstructor(cx, &ComponentFuncTypeClass, args));
+  if (!obj) {
+    return false;
+  }
+  wasm::ComponentType* heap = js_new<wasm::ComponentType>(canonical);
+  if (!heap) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  JS::SetReservedSlot(obj, 0, JS::PrivateValue(heap));
+  args.rval().setObject(*obj);
+  return true;
+}
+
+// Wraps a `JS::WebIDLOperationType`.
+static void WebIDLOperationType_finalize(JS::GCContext* gcx, JSObject* obj) {
+  JS::Value slot = JS::GetReservedSlot(obj, 0);
+  if (!slot.isUndefined()) {
+    js_delete(static_cast<JS::WebIDLOperationType*>(slot.toPrivate()));
+  }
+}
+static void WebIDLOperationType_trace(JSTracer* trc, JSObject* obj) {
+  JS::Value slot = JS::GetReservedSlot(obj, 0);
+  if (!slot.isUndefined()) {
+    JS::WebIDLOperationType* opType =
+        static_cast<JS::WebIDLOperationType*>(slot.toPrivate());
+    for (JS::WebIDLParam& param : opType->params) {
+      if (param.defaultValue) {
+        param.defaultValue->trace(trc);
+      }
+    }
+  }
+}
+static const JSClassOps WebIDLOperationTypeClassOps = {
+    .finalize = WebIDLOperationType_finalize,
+    .trace = WebIDLOperationType_trace,
+};
+static const JSClass WebIDLOperationTypeClass = {
+    "WebIDLOperationType",
+    JSCLASS_HAS_RESERVED_SLOTS(1) | JSCLASS_BACKGROUND_FINALIZE,
+    &WebIDLOperationTypeClassOps};
+
+static JS::WebIDLOperationType* ShellWebIDLOperationType(JSObject* obj) {
+  return static_cast<JS::WebIDLOperationType*>(
+      JS::GetReservedSlot(obj, 0).toPrivate());
+}
+
+static bool IsShellWebIDLOperationType(HandleValue v) {
+  return v.isObject() &&
+         JS::GetClass(&v.toObject()) == &WebIDLOperationTypeClass;
+}
+
+static bool WebIDLOperationType_construct(JSContext* cx, unsigned argc,
+                                          JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.isConstructing()) {
+    JS_ReportErrorASCII(cx, "WebIDLOperationType must be called with new");
+    return false;
+  }
+  if (args.length() < 1 || !args[0].isObject()) {
+    JS_ReportErrorASCII(
+        cx,
+        "WebIDLOperationType(paramTypes, [returnType], [isVariadic]): "
+        "paramTypes must be an array of WebIDLType");
+    return false;
+  }
+
+  RootedObject paramsArr(cx, &args[0].toObject());
+  uint32_t len;
+  if (!JS::GetArrayLength(cx, paramsArr, &len)) {
+    return false;
+  }
+
+  JS::WebIDLTypeVector paramTypes;
+  RootedValue elem(cx);
+  for (uint32_t i = 0; i < len; i++) {
+    if (!JS_GetElement(cx, paramsArr, i, &elem)) {
+      return false;
+    }
+    JS::WebIDLType* paramType = ArgWebIDLType(cx, elem);
+    if (!paramType) {
+      return false;
+    }
+    if (!paramTypes.append(*paramType)) {
+      ReportOutOfMemory(cx);
+      return false;
+    }
+  }
+
+  mozilla::Maybe<JS::WebIDLType> returnType;
+  if (args.length() >= 2 && !args[1].isNullOrUndefined()) {
+    JS::WebIDLType* result = ArgWebIDLType(cx, args[1]);
+    if (!result) {
+      return false;
+    }
+    returnType = mozilla::Some(*result);
+  }
+
+  bool isVariadic = args.length() >= 3 && JS::ToBoolean(args[2]);
+  if (isVariadic && paramTypes.length() == 0) {
+    JS_ReportErrorASCII(
+        cx, "WebIDLOperationType: isVariadic requires at least one paramType");
+    return false;
+  }
+
+  // paramDefaults is parallel to paramTypes: a missing/undefined entry means
+  // that param is required; a defined entry makes it optional with that
+  // default. Never consulted for the variadic element itself.
+  RootedObject defaultsArr(cx);
+  uint32_t defaultsLen = 0;
+  if (args.length() >= 4 && !args[3].isNullOrUndefined()) {
+    if (!args[3].isObject()) {
+      JS_ReportErrorASCII(cx,
+                          "WebIDLOperationType: paramDefaults must be an "
+                          "array");
+      return false;
+    }
+    defaultsArr = &args[3].toObject();
+    if (!JS::GetArrayLength(cx, defaultsArr, &defaultsLen)) {
+      return false;
+    }
+  }
+
+  JS::WebIDLParamVector params;
+  if (!params.reserve(paramTypes.length())) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  RootedValue defaultElem(cx);
+  JS::RootedWebIDLValue def(cx);
+  for (uint32_t i = 0; i < paramTypes.length(); i++) {
+    JS::WebIDLParam param;
+    param.type = paramTypes[i];
+    param.variadic = isVariadic && i == paramTypes.length() - 1;
+    if (defaultsArr && i < defaultsLen) {
+      if (!JS_GetElement(cx, defaultsArr, i, &defaultElem)) {
+        return false;
+      }
+      if (!defaultElem.isUndefined()) {
+        if (!JS::JSToWebIDLValue(cx, defaultElem, param.type, &def)) {
+          return false;
+        }
+        param.optional = true;
+        param.defaultValue = mozilla::Some(def.get());
+      }
+    }
+    params.infallibleAppend(std::move(param));
+  }
+
+  RootedObject obj(
+      cx, JS_NewObjectForConstructor(cx, &WebIDLOperationTypeClass, args));
+  if (!obj) {
+    return false;
+  }
+  JS::WebIDLOperationType* heap = js_new<JS::WebIDLOperationType>(
+      JS::WebIDLOperationType{std::move(params), returnType});
+  if (!heap) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  JS::SetReservedSlot(obj, 0, JS::PrivateValue(heap));
+  args.rval().setObject(*obj);
+  return true;
+}
+
+// Read accessors, for introspecting a WebIDLOperationType recovered via
+// getWebIDLOperationTypes()/getWebIDLConstructorTypes() below.
+
+static bool GetOperationTypeParamIndex(JSContext* cx, const CallArgs& args,
+                                       JS::WebIDLOperationType** outOpType,
+                                       uint32_t* outIndex) {
+  if (!IsShellWebIDLOperationType(args.thisv())) {
+    JS_ReportErrorASCII(cx, "not a WebIDLOperationType");
+    return false;
+  }
+  JS::WebIDLOperationType* opType =
+      ShellWebIDLOperationType(&args.thisv().toObject());
+  uint32_t index;
+  if (!JS::ToUint32(cx, args.get(0), &index)) {
+    return false;
+  }
+  if (index >= opType->params.length()) {
+    JS_ReportErrorASCII(cx, "WebIDLOperationType: param index out of range");
+    return false;
+  }
+  *outOpType = opType;
+  *outIndex = index;
+  return true;
+}
+
+static bool WebIDLOperationType_getParamCount(JSContext* cx, unsigned argc,
+                                              JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!IsShellWebIDLOperationType(args.thisv())) {
+    JS_ReportErrorASCII(cx, "not a WebIDLOperationType");
+    return false;
+  }
+  JS::WebIDLOperationType* opType =
+      ShellWebIDLOperationType(&args.thisv().toObject());
+  args.rval().setInt32(int32_t(opType->params.length()));
+  return true;
+}
+
+static bool WebIDLOperationType_paramType(JSContext* cx, unsigned argc,
+                                          JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  JS::WebIDLOperationType* opType;
+  uint32_t index;
+  if (!GetOperationTypeParamIndex(cx, args, &opType, &index)) {
+    return false;
+  }
+  RootedObject proto(cx, GetGlobalCtorPrototype(cx, "WebIDLType"));
+  if (!proto) {
+    return false;
+  }
+  RootedObject obj(cx,
+                   NewWebIDLTypeObject(cx, proto, opType->params[index].type));
+  if (!obj) {
+    return false;
+  }
+  args.rval().setObject(*obj);
+  return true;
+}
+
+static bool WebIDLOperationType_paramOptional(JSContext* cx, unsigned argc,
+                                              JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  JS::WebIDLOperationType* opType;
+  uint32_t index;
+  if (!GetOperationTypeParamIndex(cx, args, &opType, &index)) {
+    return false;
+  }
+  args.rval().setBoolean(opType->params[index].optional);
+  return true;
+}
+
+static bool WebIDLOperationType_paramVariadic(JSContext* cx, unsigned argc,
+                                              JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  JS::WebIDLOperationType* opType;
+  uint32_t index;
+  if (!GetOperationTypeParamIndex(cx, args, &opType, &index)) {
+    return false;
+  }
+  args.rval().setBoolean(opType->params[index].variadic);
+  return true;
+}
+
+static bool WebIDLOperationType_paramDefault(JSContext* cx, unsigned argc,
+                                             JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  JS::WebIDLOperationType* opType;
+  uint32_t index;
+  if (!GetOperationTypeParamIndex(cx, args, &opType, &index)) {
+    return false;
+  }
+  const JS::WebIDLParam& param = opType->params[index];
+  if (!param.defaultValue) {
+    args.rval().setUndefined();
+    return true;
+  }
+  RootedObject proto(cx, GetGlobalCtorPrototype(cx, "WebIDLValue"));
+  if (!proto) {
+    return false;
+  }
+  JS::RootedWebIDLValue value(cx, *param.defaultValue);
+  RootedObject obj(cx, NewWebIDLValueObject(cx, proto, value));
+  if (!obj) {
+    return false;
+  }
+  args.rval().setObject(*obj);
+  return true;
+}
+
+static bool WebIDLOperationType_getHasReturnType(JSContext* cx, unsigned argc,
+                                                 JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!IsShellWebIDLOperationType(args.thisv())) {
+    JS_ReportErrorASCII(cx, "not a WebIDLOperationType");
+    return false;
+  }
+  JS::WebIDLOperationType* opType =
+      ShellWebIDLOperationType(&args.thisv().toObject());
+  args.rval().setBoolean(opType->returnType.isSome());
+  return true;
+}
+
+static bool WebIDLOperationType_returnType(JSContext* cx, unsigned argc,
+                                           JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!IsShellWebIDLOperationType(args.thisv())) {
+    JS_ReportErrorASCII(cx, "not a WebIDLOperationType");
+    return false;
+  }
+  JS::WebIDLOperationType* opType =
+      ShellWebIDLOperationType(&args.thisv().toObject());
+  if (opType->returnType.isNothing()) {
+    args.rval().setUndefined();
+    return true;
+  }
+  RootedObject proto(cx, GetGlobalCtorPrototype(cx, "WebIDLType"));
+  if (!proto) {
+    return false;
+  }
+  RootedObject obj(cx, NewWebIDLTypeObject(cx, proto, *opType->returnType));
+  if (!obj) {
+    return false;
+  }
+  args.rval().setObject(*obj);
+  return true;
+}
+
+static const JSPropertySpec WebIDLOperationType_properties[] = {
+    JS_PSG("paramCount", WebIDLOperationType_getParamCount, 0),
+    JS_PSG("hasReturnType", WebIDLOperationType_getHasReturnType, 0),
+    JS_PS_END,
+};
+static const JSFunctionSpec WebIDLOperationType_methods[] = {
+    JS_FN("paramType", WebIDLOperationType_paramType, 1, 0),
+    JS_FN("paramOptional", WebIDLOperationType_paramOptional, 1, 0),
+    JS_FN("paramVariadic", WebIDLOperationType_paramVariadic, 1, 0),
+    JS_FN("paramDefault", WebIDLOperationType_paramDefault, 1, 0),
+    JS_FN("returnType", WebIDLOperationType_returnType, 0, 0),
+    JS_FS_END,
+};
+
+// A minimal fake interface plus native functions carrying real
+// JSWebIDLMethodJitInfo, so JS::GetWebIDLOperationTypes/
+// GetWebIDLConstructorTypes have real WebIDL operations to recover. The
+// native bodies are never called; only their type info is used.
+static JS::WebIDLInterface* WebIDLTestInterface() {
+  static RefPtr<JS::WebIDLInterface> iface;
+  if (!iface) {
+    JS::UniqueChars name = js::DuplicateString("WebIDLTestResource");
+    if (name) {
+      iface = js_new<JS::WebIDLInterface>(std::move(name), nullptr);
+    }
+  }
+  return iface.get();
+}
+
+static bool WebIDLTest_stubNative(JSContext* cx, unsigned argc, JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  args.rval().setUndefined();
+  return true;
+}
+
+// `foo(long)` returns its arg unchanged, `foo(long, long)` returns their
+// sum, matching WebIDLTestOverloaded_native0/_native1 below.
+static bool WebIDLTestOverloaded_native(JSContext* cx, unsigned argc,
+                                        JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  double sum = 0;
+  for (unsigned i = 0; i < args.length(); i++) {
+    double d;
+    if (!JS::ToNumber(cx, args[i], &d)) {
+      return false;
+    }
+    sum += d;
+  }
+  args.rval().setNumber(sum);
+  return true;
+}
+
+static bool AppendSimpleOperationType(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out,
+    std::initializer_list<JS::WebIDLType> paramTypes,
+    const mozilla::Maybe<JS::WebIDLType>& returnType) {
+  JS::WebIDLOperationType opType;
+  if (!opType.params.reserve(paramTypes.size())) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  for (const JS::WebIDLType& t : paramTypes) {
+    JS::WebIDLParam param;
+    param.type = t;
+    opType.params.infallibleAppend(std::move(param));
+  }
+  opType.returnType = returnType;
+  if (!out.append(std::move(opType))) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  return true;
+}
+
+// foo(long) -> long
+// foo(long, long) -> long
+static bool WebIDLTestOverloaded_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  return AppendSimpleOperationType(cx, out, {longType},
+                                   mozilla::Some(longType)) &&
+         AppendSimpleOperationType(cx, out, {longType, longType},
+                                   mozilla::Some(longType));
+}
+
+// foo(long value, optional long fallback = 42) -> long
+static bool WebIDLTestOptionalDefault_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  JS::WebIDLOperationType opType;
+  JS::WebIDLParam required;
+  required.type = longType;
+  JS::WebIDLParam optionalWithDefault;
+  optionalWithDefault.type = longType;
+  optionalWithDefault.optional = true;
+  optionalWithDefault.defaultValue =
+      mozilla::Some(JS::WebIDLValue::makeSigned(longType, 42));
+  if (!opType.params.append(std::move(required)) ||
+      !opType.params.append(std::move(optionalWithDefault))) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  opType.returnType = mozilla::Some(longType);
+  if (!out.append(std::move(opType))) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  return true;
+}
+
+// foo(long first, long... rest) -> long
+static bool WebIDLTestVariadic_buildTypes(JSContext* cx,
+                                          JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  JS::WebIDLOperationType opType;
+  JS::WebIDLParam fixed;
+  fixed.type = longType;
+  JS::WebIDLParam variadic;
+  variadic.type = longType;
+  variadic.variadic = true;
+  if (!opType.params.append(std::move(fixed)) ||
+      !opType.params.append(std::move(variadic))) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  opType.returnType = mozilla::Some(longType);
+  if (!out.append(std::move(opType))) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  return true;
+}
+
+// get label() -> DOMString
+static bool WebIDLTestGetter_buildTypes(JSContext* cx,
+                                        JS::WebIDLOperationTypeVector& out) {
+  return AppendSimpleOperationType(
+      cx, out, {},
+      mozilla::Some(JS::WebIDLType::primitive(JS::WebIDLTypeKind::DOMString)));
+}
+
+// set label(DOMString) -> undefined
+static bool WebIDLTestSetter_buildTypes(JSContext* cx,
+                                        JS::WebIDLOperationTypeVector& out) {
+  return AppendSimpleOperationType(
+      cx, out, {JS::WebIDLType::primitive(JS::WebIDLTypeKind::DOMString)},
+      mozilla::Nothing());
+}
+
+// new WebIDLTestResource(DOMString) -> WebIDLTestResource
+static bool WebIDLTestConstructor_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType ifaceType;
+  if (!JS::WebIDLType::interface_(WebIDLTestInterface(), &ifaceType)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  return AppendSimpleOperationType(
+      cx, out, {JS::WebIDLType::primitive(JS::WebIDLTypeKind::DOMString)},
+      mozilla::Some(ifaceType));
+}
+
+// The jitinfo's getter/method/staticMethod union slot is left null since
+// nothing reads it yet; the plain-JSNative `call` in webIDLTestFunctions
+// below is what ordinary JS calls actually invoke.
+#  define WEBIDL_TEST_METHODINFO(name, opType)               \
+    static const JSWebIDLMethodJitInfo name##_methodinfo = { \
+        {{nullptr},                                          \
+         {0} /* protoID */,                                  \
+         {0} /* depth */,                                    \
+         JSJitInfo::opType,                                  \
+         JSJitInfo::AliasEverything,                         \
+         JSVAL_TYPE_UNKNOWN,                                 \
+         false /* isInfallible */,                           \
+         false /* isMovable */,                              \
+         false /* isEliminatable */,                         \
+         false /* isAlwaysInSlot */,                         \
+         false /* isLazilyCachedInSlot */,                   \
+         false /* isTypedMethod */,                          \
+         0 /* slotIndex */,                                  \
+         true /* isWebIDLTyped */},                          \
+        name##_buildTypes,                                   \
+    }
+
+WEBIDL_TEST_METHODINFO(WebIDLTestOptionalDefault, Method);
+WEBIDL_TEST_METHODINFO(WebIDLTestVariadic, Method);
+WEBIDL_TEST_METHODINFO(WebIDLTestGetter, Getter);
+WEBIDL_TEST_METHODINFO(WebIDLTestSetter, Setter);
+WEBIDL_TEST_METHODINFO(WebIDLTestConstructor, StaticMethod);
+
+#  undef WEBIDL_TEST_METHODINFO
+
+// Like WEBIDL_TEST_METHODINFO above, but for a fixture with native overload
+// entries: `name##_overloadEntries` must already be defined, index-aligned
+// with `name##_buildTypes`' output order.
+#  define WEBIDL_NATIVE_METHODINFO(name, opType)                   \
+    static const JSWebIDLNativeMethodJitInfo name##_methodinfo = { \
+      {                                                            \
+          {{nullptr},                                              \
+           {0} /* protoID */,                                      \
+           {0} /* depth */,                                        \
+           JSJitInfo::opType,                                      \
+           JSJitInfo::AliasEverything,                             \
+           JSVAL_TYPE_UNKNOWN,                                     \
+           false /* isInfallible */,                               \
+           false /* isMovable */,                                  \
+           false /* isEliminatable */,                             \
+           false /* isAlwaysInSlot */,                             \
+           false /* isLazilyCachedInSlot */,                       \
+           false /* isTypedMethod */,                              \
+           0 /* slotIndex */,                                      \
+           true /* isWebIDLTyped */,                               \
+           true /* hasNativeOverloadEntries */},                   \
+          name##_buildTypes,                                       \
+      },                                                           \
+      name##_overloadEntries,                                      \
+    }
+
+// A hand-written "static walk" for each of webidlTestOverloaded's two
+// overloads: reads params directly via each CoerceStep's own `access`,
+// computes the same sum WebIDLTestOverloaded_native does, and lowers the
+// result straight into `*resultsPtr`.
+static bool WebIDLTestOverloaded_native0(const wasm::CallAdapter* adapterPtr,
+                                         JS::WebIDLContext* abiPtr,
+                                         const JS::WasmScalarVal* paramsPtr,
+                                         uint32_t resultMemBase,
+                                         JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  int32_t a;
+  if (!JS::ReadCoercedInt32(abi, coreParams, adapter.paramSteps[0].step, 0,
+                            &a)) {
+    return false;
+  }
+  *resultsPtr = JS::WasmScalarVal::fromI32(uint32_t(a));
+  return true;
+}
+
+static bool WebIDLTestOverloaded_native1(const wasm::CallAdapter* adapterPtr,
+                                         JS::WebIDLContext* abiPtr,
+                                         const JS::WasmScalarVal* paramsPtr,
+                                         uint32_t resultMemBase,
+                                         JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 2);
+  int32_t a, b;
+  if (!JS::ReadCoercedInt32(abi, coreParams, adapter.paramSteps[0].step, 0,
+                            &a) ||
+      !JS::ReadCoercedInt32(abi, coreParams, adapter.paramSteps[1].step, 0,
+                            &b)) {
+    return false;
+  }
+  *resultsPtr = JS::WasmScalarVal::fromI32(uint32_t(a + b));
+  return true;
+}
+
+// Index-aligned with WebIDLTestOverloaded_buildTypes' output order.
+static const JS::WebIDLNativeCall WebIDLTestOverloaded_overloadEntries[] = {
+    WebIDLTestOverloaded_native0,
+    WebIDLTestOverloaded_native1,
+};
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestOverloaded, Method);
+
+// Each fixture below is a single-overload native entry reading its one
+// param via the JS::ReadCoerced*/WriteCoerced* primitive under test, plus a
+// plain JS-callable performing the identical computation.
+
+// foo(long long a) -> long long : a*2
+static bool WebIDLTestNativeLongLong_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType llType =
+      JS::WebIDLType::primitive(JS::WebIDLTypeKind::LongLong);
+  return AppendSimpleOperationType(cx, out, {llType}, mozilla::Some(llType));
+}
+
+static bool WebIDLTestNativeLongLong_native0(
+    const wasm::CallAdapter* adapterPtr, JS::WebIDLContext* abiPtr,
+    const JS::WasmScalarVal* paramsPtr, uint32_t resultMemBase,
+    JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  int64_t a;
+  if (!JS::ReadCoercedInt64(abi, coreParams, adapter.paramSteps[0].step, 0,
+                            &a)) {
+    return false;
+  }
+  *resultsPtr = JS::WasmScalarVal::fromI64(uint64_t(a * 2));
+  return true;
+}
+
+static bool WebIDLTestNativeLongLong_native(JSContext* cx, unsigned argc,
+                                            JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  double a;
+  if (!JS::ToNumber(cx, args.get(0), &a)) {
+    return false;
+  }
+  args.rval().setNumber(a * 2);
+  return true;
+}
+
+static const JS::WebIDLNativeCall WebIDLTestNativeLongLong_overloadEntries[] = {
+    WebIDLTestNativeLongLong_native0,
+};
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeLongLong, Method);
+
+// foo(float a) -> long : int32(a)
+static bool WebIDLTestNativeFloat_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType floatType =
+      JS::WebIDLType::primitive(JS::WebIDLTypeKind::Float);
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  return AppendSimpleOperationType(cx, out, {floatType},
+                                   mozilla::Some(longType));
+}
+
+static bool WebIDLTestNativeFloat_native0(const wasm::CallAdapter* adapterPtr,
+                                          JS::WebIDLContext* abiPtr,
+                                          const JS::WasmScalarVal* paramsPtr,
+                                          uint32_t resultMemBase,
+                                          JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  double a;
+  if (!JS::ReadCoercedDouble(abi, coreParams, adapter.paramSteps[0].step, 0,
+                             &a)) {
+    return false;
+  }
+  *resultsPtr = JS::WasmScalarVal::fromI32(uint32_t(int32_t(a)));
+  return true;
+}
+
+static bool WebIDLTestNativeFloat_native(JSContext* cx, unsigned argc,
+                                         JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  double a;
+  if (!JS::ToNumber(cx, args.get(0), &a)) {
+    return false;
+  }
+  args.rval().setInt32(int32_t(a));
+  return true;
+}
+
+static const JS::WebIDLNativeCall WebIDLTestNativeFloat_overloadEntries[] = {
+    WebIDLTestNativeFloat_native0,
+};
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeFloat, Method);
+
+// foo(DOMString c) -> long : codePointAt(0)+1
+static bool WebIDLTestNativeCodePoint_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType strType =
+      JS::WebIDLType::primitive(JS::WebIDLTypeKind::DOMString);
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  return AppendSimpleOperationType(cx, out, {strType}, mozilla::Some(longType));
+}
+
+static bool WebIDLTestNativeCodePoint_native0(
+    const wasm::CallAdapter* adapterPtr, JS::WebIDLContext* abiPtr,
+    const JS::WasmScalarVal* paramsPtr, uint32_t resultMemBase,
+    JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  uint32_t cp;
+  if (!JS::ReadCoercedCodePoint(abi, coreParams, adapter.paramSteps[0].step, 0,
+                                &cp)) {
+    return false;
+  }
+  *resultsPtr = JS::WasmScalarVal::fromI32(cp + 1);
+  return true;
+}
+
+static bool WebIDLTestNativeCodePoint_native(JSContext* cx, unsigned argc,
+                                             JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (args.length() < 1 || !args[0].isString()) {
+    JS_ReportErrorASCII(cx, "webidlTestNativeCodePoint: expected a string");
+    return false;
+  }
+  RootedString str(cx, args[0].toString());
+  char16_t lead;
+  if (!JS_GetStringCharAt(cx, str, 0, &lead)) {
+    return false;
+  }
+  uint32_t cp = lead;
+  if (lead >= 0xD800 && lead <= 0xDBFF && JS_GetStringLength(str) > 1) {
+    char16_t trail;
+    if (!JS_GetStringCharAt(cx, str, 1, &trail)) {
+      return false;
+    }
+    if (trail >= 0xDC00 && trail <= 0xDFFF) {
+      cp = 0x10000 + ((lead - 0xD800) << 10) + (trail - 0xDC00);
+    }
+  }
+  args.rval().setInt32(int32_t(cp + 1));
+  return true;
+}
+
+static const JS::WebIDLNativeCall WebIDLTestNativeCodePoint_overloadEntries[] =
+    {
+        WebIDLTestNativeCodePoint_native0,
+    };
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeCodePoint, Method);
+
+// foo(byte [EnforceRange] a) -> long : a+1, or trap if out of byte range
+static bool WebIDLTestNativeEnforceRange_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType byteType = JS::WebIDLType::primitive(
+      JS::WebIDLTypeKind::Byte, JS::WebIDLTypeFlag_EnforceRange);
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  return AppendSimpleOperationType(cx, out, {byteType},
+                                   mozilla::Some(longType));
+}
+
+static bool WebIDLTestNativeEnforceRange_native0(
+    const wasm::CallAdapter* adapterPtr, JS::WebIDLContext* abiPtr,
+    const JS::WasmScalarVal* paramsPtr, uint32_t resultMemBase,
+    JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  int32_t a;
+  if (!JS::ReadCoercedInt32(abi, coreParams, adapter.paramSteps[0].step, 0,
+                            &a)) {
+    return false;
+  }
+  *resultsPtr = JS::WasmScalarVal::fromI32(uint32_t(a + 1));
+  return true;
+}
+
+static bool WebIDLTestNativeEnforceRange_native(JSContext* cx, unsigned argc,
+                                                JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  double a;
+  if (!JS::ToNumber(cx, args.get(0), &a)) {
+    return false;
+  }
+  args.rval().setNumber(a + 1);
+  return true;
+}
+
+static const JS::WebIDLNativeCall
+    WebIDLTestNativeEnforceRange_overloadEntries[] = {
+        WebIDLTestNativeEnforceRange_native0,
+    };
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeEnforceRange, Method);
+
+// foo(octet [Clamp] a) -> long : a+1 (a already clamped into [0,255])
+static bool WebIDLTestNativeClamp_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType octetType = JS::WebIDLType::primitive(
+      JS::WebIDLTypeKind::Octet, JS::WebIDLTypeFlag_Clamp);
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  return AppendSimpleOperationType(cx, out, {octetType},
+                                   mozilla::Some(longType));
+}
+
+static bool WebIDLTestNativeClamp_native0(const wasm::CallAdapter* adapterPtr,
+                                          JS::WebIDLContext* abiPtr,
+                                          const JS::WasmScalarVal* paramsPtr,
+                                          uint32_t resultMemBase,
+                                          JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  int32_t a;
+  if (!JS::ReadCoercedInt32(abi, coreParams, adapter.paramSteps[0].step, 0,
+                            &a)) {
+    return false;
+  }
+  *resultsPtr = JS::WasmScalarVal::fromI32(uint32_t(a + 1));
+  return true;
+}
+
+static bool WebIDLTestNativeClamp_native(JSContext* cx, unsigned argc,
+                                         JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  double a;
+  if (!JS::ToNumber(cx, args.get(0), &a)) {
+    return false;
+  }
+  args.rval().setNumber(a + 1);
+  return true;
+}
+
+static const JS::WebIDLNativeCall WebIDLTestNativeClamp_overloadEntries[] = {
+    WebIDLTestNativeClamp_native0,
+};
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeClamp, Method);
+
+// foo(long a) -> long long : a*1000000, with a return type deliberately
+// wider than a narrower component result would accept, so the write must
+// narrow via `adapter.resultStep`.
+static bool WebIDLTestNativeResultNarrow_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  JS::WebIDLType llType =
+      JS::WebIDLType::primitive(JS::WebIDLTypeKind::LongLong);
+  return AppendSimpleOperationType(cx, out, {longType}, mozilla::Some(llType));
+}
+
+static bool WebIDLTestNativeResultNarrow_native0(
+    const wasm::CallAdapter* adapterPtr, JS::WebIDLContext* abiPtr,
+    const JS::WasmScalarVal* paramsPtr, uint32_t resultMemBase,
+    JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  MOZ_ASSERT(adapter.resultStep);
+  int32_t a;
+  if (!JS::ReadCoercedInt32(abi, coreParams, adapter.paramSteps[0].step, 0,
+                            &a)) {
+    return false;
+  }
+  int64_t big = int64_t(a) * 1000000;
+  if (!JS::WriteCoercedInt64(abi, *adapter.resultStep, resultMemBase, big,
+                             resultsPtr)) {
+    return false;
+  }
+  return true;
+}
+
+static bool WebIDLTestNativeResultNarrow_native(JSContext* cx, unsigned argc,
+                                                JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  double a;
+  if (!JS::ToNumber(cx, args.get(0), &a)) {
+    return false;
+  }
+  args.rval().setNumber(a * 1000000);
+  return true;
+}
+
+static const JS::WebIDLNativeCall
+    WebIDLTestNativeResultNarrow_overloadEntries[] = {
+        WebIDLTestNativeResultNarrow_native0,
+    };
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeResultNarrow, Method);
+
+// foo(DOMString s) -> long : s.length (utf8 byte length)
+static bool WebIDLTestNativeStringLen_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType strType =
+      JS::WebIDLType::primitive(JS::WebIDLTypeKind::DOMString);
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  return AppendSimpleOperationType(cx, out, {strType}, mozilla::Some(longType));
+}
+
+static bool WebIDLTestNativeStringLen_native0(
+    const wasm::CallAdapter* adapterPtr, JS::WebIDLContext* abiPtr,
+    const JS::WasmScalarVal* paramsPtr, uint32_t resultMemBase,
+    JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  uint32_t ptr, len;
+  if (!JS::ReadCoercedStringRange(abi, coreParams, adapter.paramSteps[0].step,
+                                  0, &ptr, &len)) {
+    return false;
+  }
+  *resultsPtr = JS::WasmScalarVal::fromI32(len);
+  return true;
+}
+
+static bool WebIDLTestNativeStringLen_native(JSContext* cx, unsigned argc,
+                                             JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (args.length() < 1 || !args[0].isString()) {
+    JS_ReportErrorASCII(cx, "webidlTestNativeStringLen: expected a string");
+    return false;
+  }
+  RootedString str(cx, args[0].toString());
+  JS::UniqueChars utf8 = JS_EncodeStringToUTF8(cx, str);
+  if (!utf8) {
+    return false;
+  }
+  args.rval().setInt32(int32_t(strlen(utf8.get())));
+  return true;
+}
+
+static const JS::WebIDLNativeCall WebIDLTestNativeStringLen_overloadEntries[] =
+    {
+        WebIDLTestNativeStringLen_native0,
+    };
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeStringLen, Method);
+
+// foo(long n) -> DOMString : "value:<n>"
+static bool WebIDLTestNativeStringResult_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  JS::WebIDLType strType =
+      JS::WebIDLType::primitive(JS::WebIDLTypeKind::DOMString);
+  return AppendSimpleOperationType(cx, out, {longType}, mozilla::Some(strType));
+}
+
+static bool WebIDLTestNativeStringResult_native0(
+    const wasm::CallAdapter* adapterPtr, JS::WebIDLContext* abiPtr,
+    const JS::WasmScalarVal* paramsPtr, uint32_t resultMemBase,
+    JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  MOZ_ASSERT(adapter.resultStep);
+  int32_t n;
+  if (!JS::ReadCoercedInt32(abi, coreParams, adapter.paramSteps[0].step, 0,
+                            &n)) {
+    return false;
+  }
+  char buf[32];
+  int len = snprintf(buf, sizeof(buf), "value:%d", n);
+  if (!JS::WriteCoercedString(abi, *adapter.resultStep, resultMemBase, buf,
+                              size_t(len), resultsPtr)) {
+    return false;
+  }
+  return true;
+}
+
+static bool WebIDLTestNativeStringResult_native(JSContext* cx, unsigned argc,
+                                                JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  double n;
+  if (!JS::ToNumber(cx, args.get(0), &n)) {
+    return false;
+  }
+  char buf[32];
+  int len = snprintf(buf, sizeof(buf), "value:%d", int32_t(n));
+  JSString* str = JS_NewStringCopyN(cx, buf, len);
+  if (!str) {
+    return false;
+  }
+  args.rval().setString(str);
+  return true;
+}
+
+static const JS::WebIDLNativeCall
+    WebIDLTestNativeStringResult_overloadEntries[] = {
+        WebIDLTestNativeStringResult_native0,
+    };
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeStringResult, Method);
+
+// foo(enum) -> long : the target label's own index
+static bool WebIDLTestNativeEnum_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  mozilla::Vector<JS::UniqueChars, 0, js::SystemAllocPolicy> labels;
+  for (const char* name : {"red", "green", "blue"}) {
+    JS::UniqueChars label = js::DuplicateString(cx, name);
+    if (!label || !labels.append(std::move(label))) {
+      ReportOutOfMemory(cx);
+      return false;
+    }
+  }
+  JS::WebIDLType enumType;
+  if (!JS::WebIDLType::enumeration(std::move(labels), &enumType)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  return AppendSimpleOperationType(cx, out, {enumType},
+                                   mozilla::Some(longType));
+}
+
+static bool WebIDLTestNativeEnum_native0(const wasm::CallAdapter* adapterPtr,
+                                         JS::WebIDLContext* abiPtr,
+                                         const JS::WasmScalarVal* paramsPtr,
+                                         uint32_t resultMemBase,
+                                         JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  uint32_t targetIndex;
+  if (!JS::ReadCoercedEnumIndex(abi, coreParams, adapter.paramSteps[0].step, 0,
+                                &targetIndex)) {
+    return false;
+  }
+  *resultsPtr = JS::WasmScalarVal::fromI32(targetIndex);
+  return true;
+}
+
+static bool WebIDLTestNativeEnum_native(JSContext* cx, unsigned argc,
+                                        JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (args.length() < 1 || !args[0].isString()) {
+    JS_ReportErrorASCII(cx, "webidlTestNativeEnum: expected a string");
+    return false;
+  }
+  RootedString str(cx, args[0].toString());
+  JS::UniqueChars utf8 = JS_EncodeStringToUTF8(cx, str);
+  if (!utf8) {
+    return false;
+  }
+  static const char* const labels[] = {"red", "green", "blue"};
+  for (size_t i = 0; i < std::size(labels); i++) {
+    if (strcmp(utf8.get(), labels[i]) == 0) {
+      args.rval().setInt32(int32_t(i));
+      return true;
+    }
+  }
+  JS_ReportErrorASCII(cx, "webidlTestNativeEnum: unrecognized label");
+  return false;
+}
+
+static const JS::WebIDLNativeCall WebIDLTestNativeEnum_overloadEntries[] = {
+    WebIDLTestNativeEnum_native0,
+};
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeEnum, Method);
+
+// foo(sequence<long> xs) -> long : sum(xs)
+static bool WebIDLTestNativeListSum_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  JS::WebIDLType seqType;
+  if (!JS::WebIDLType::sequence(longType, &seqType)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  return AppendSimpleOperationType(cx, out, {seqType}, mozilla::Some(longType));
+}
+
+static bool WebIDLTestNativeListSum_native0(const wasm::CallAdapter* adapterPtr,
+                                            JS::WebIDLContext* abiPtr,
+                                            const JS::WasmScalarVal* paramsPtr,
+                                            uint32_t resultMemBase,
+                                            JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  const JS::WebIDLCoerceStep& step = adapter.paramSteps[0].step;
+  uint32_t elemPtr, len;
+  if (!JS::ReadCoercedListHeader(abi, coreParams, step, 0, &elemPtr, &len)) {
+    return false;
+  }
+  int32_t sum = 0;
+  for (uint32_t i = 0; i < len; i++) {
+    uint32_t elemBase = elemPtr + i * step.access.elemStride;
+    int32_t v;
+    if (!JS::ReadCoercedInt32(abi, coreParams, *step.child, elemBase, &v)) {
+      return false;
+    }
+    sum += v;
+  }
+  *resultsPtr = JS::WasmScalarVal::fromI32(uint32_t(sum));
+  return true;
+}
+
+static bool WebIDLTestNativeListSum_native(JSContext* cx, unsigned argc,
+                                           JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (args.length() < 1 || !args[0].isObject()) {
+    JS_ReportErrorASCII(cx, "webidlTestNativeListSum: expected an array");
+    return false;
+  }
+  RootedObject arr(cx, &args[0].toObject());
+  uint32_t len;
+  if (!JS::GetArrayLength(cx, arr, &len)) {
+    return false;
+  }
+  double sum = 0;
+  RootedValue elem(cx);
+  for (uint32_t i = 0; i < len; i++) {
+    if (!JS_GetElement(cx, arr, i, &elem)) {
+      return false;
+    }
+    double d;
+    if (!JS::ToNumber(cx, elem, &d)) {
+      return false;
+    }
+    sum += d;
+  }
+  args.rval().setNumber(sum);
+  return true;
+}
+
+static const JS::WebIDLNativeCall WebIDLTestNativeListSum_overloadEntries[] = {
+    WebIDLTestNativeListSum_native0,
+};
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeListSum, Method);
+
+// foo(dictionary {x: long, y: long}) -> long : x+y
+static bool WebIDLTestNativeRecordSum_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  JS::WebIDLType dictType;
+  if (!JS::WebIDLType::dictionary(&dictType)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  JS::UniqueChars xName = js::DuplicateString(cx, "x");
+  JS::UniqueChars yName = js::DuplicateString(cx, "y");
+  if (!xName || !yName ||
+      !dictType.addDictionaryMember(std::move(xName), longType, true) ||
+      !dictType.addDictionaryMember(std::move(yName), longType, true)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  return AppendSimpleOperationType(cx, out, {dictType},
+                                   mozilla::Some(longType));
+}
+
+static bool WebIDLTestNativeRecordSum_native0(
+    const wasm::CallAdapter* adapterPtr, JS::WebIDLContext* abiPtr,
+    const JS::WasmScalarVal* paramsPtr, uint32_t resultMemBase,
+    JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  const JS::WebIDLCoerceStep& step = adapter.paramSteps[0].step;
+  int32_t sum = 0;
+  for (const JS::WebIDLDictMemberStep& dm : step.dictMembers) {
+    if (dm.presence != JS::WebIDLDictMemberStep::Presence::FromSource) {
+      continue;
+    }
+    int32_t v;
+    if (!JS::ReadCoercedInt32(abi, coreParams, *dm.step, 0, &v)) {
+      return false;
+    }
+    sum += v;
+  }
+  *resultsPtr = JS::WasmScalarVal::fromI32(uint32_t(sum));
+  return true;
+}
+
+static bool WebIDLTestNativeRecordSum_native(JSContext* cx, unsigned argc,
+                                             JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (args.length() < 1 || !args[0].isObject()) {
+    JS_ReportErrorASCII(cx, "webidlTestNativeRecordSum: expected an object");
+    return false;
+  }
+  RootedObject obj(cx, &args[0].toObject());
+  RootedValue xVal(cx), yVal(cx);
+  if (!JS_GetProperty(cx, obj, "x", &xVal) ||
+      !JS_GetProperty(cx, obj, "y", &yVal)) {
+    return false;
+  }
+  double x, y;
+  if (!JS::ToNumber(cx, xVal, &x) || !JS::ToNumber(cx, yVal, &y)) {
+    return false;
+  }
+  args.rval().setNumber(x + y);
+  return true;
+}
+
+static const JS::WebIDLNativeCall WebIDLTestNativeRecordSum_overloadEntries[] =
+    {
+        WebIDLTestNativeRecordSum_native0,
+    };
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeRecordSum, Method);
+
+// foo(WebIDLTestResource obj) -> WebIDLTestResource : obj unchanged (a
+// fresh handle for the same underlying object).
+static bool WebIDLTestNativeResourceRoundTrip_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType ifaceType;
+  if (!JS::WebIDLType::interface_(WebIDLTestInterface(), &ifaceType)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  return AppendSimpleOperationType(cx, out, {ifaceType},
+                                   mozilla::Some(ifaceType));
+}
+
+static bool WebIDLTestNativeResourceRoundTrip_native0(
+    const wasm::CallAdapter* adapterPtr, JS::WebIDLContext* abiPtr,
+    const JS::WasmScalarVal* paramsPtr, uint32_t resultMemBase,
+    JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  MOZ_ASSERT(adapter.resultStep);
+  JSObject* obj;
+  if (!JS::ReadCoercedInterface(abi, coreParams, adapter.paramSteps[0].step, 0,
+                                &obj)) {
+    return false;
+  }
+  if (!JS::WriteCoercedInterface(abi, *adapter.resultStep, resultMemBase, obj,
+                                 resultsPtr)) {
+    return false;
+  }
+  return true;
+}
+
+static bool WebIDLTestNativeResourceRoundTrip_native(JSContext* cx,
+                                                     unsigned argc,
+                                                     JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  args.rval().set(args.get(0));
+  return true;
+}
+
+static const JS::WebIDLNativeCall
+    WebIDLTestNativeResourceRoundTrip_overloadEntries[] = {
+        WebIDLTestNativeResourceRoundTrip_native0,
+    };
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeResourceRoundTrip, Method);
+
+// A fake interface with native ops, distinct from WebIDLTestInterface (which
+// has none), so a resource bound to it can be adopted as either Native or
+// Wrapped repr - see canon-resource-native-repr.js's NativeIface.
+static JS::WebIDLInterface* WebIDLTestMethodInterface() {
+  static RefPtr<JS::WebIDLInterface> iface;
+  if (!iface) {
+    JS::UniqueChars name = js::DuplicateString("WebIDLTestMethodResource");
+    if (name) {
+      iface = js_new<JS::WebIDLInterface>(
+          std::move(name), nullptr, ShellNativeResource_addRef,
+          ShellNativeResource_release, ShellNativeResource_reflect,
+          ShellNativeResource_unwrap);
+    }
+  }
+  return iface.get();
+}
+
+// Counts webidlTestNativeMethod's _native0 invocations, so a test can tell
+// the fused native path fired rather than falling back to JS::Call.
+static uint32_t gWebIDLTestNativeMethodCallCount = 0;
+
+// self.getTagPlusN(n) -> self.tag + n : a `[method]` shape (a leading
+// receiver param plus one ordinary param), exercising TryCallWebIDLNative's
+// receiver support. `self` is read via JS::ReadCoercedInterface, which
+// reflects to the same JS view (a Native repr's fresh {tag} object, or a
+// Wrapped repr's stored object) the generic JS::Call fallback below sees as
+// `this`, so both paths agree on `self.tag`.
+static bool WebIDLTestNativeMethod_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType ifaceType;
+  if (!JS::WebIDLType::interface_(WebIDLTestMethodInterface(), &ifaceType)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  return AppendSimpleOperationType(cx, out, {ifaceType, longType},
+                                   mozilla::Some(longType));
+}
+
+static bool WebIDLTestNativeMethod_native0(const wasm::CallAdapter* adapterPtr,
+                                           JS::WebIDLContext* abiPtr,
+                                           const JS::WasmScalarVal* paramsPtr,
+                                           uint32_t resultMemBase,
+                                           JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 2);
+  gWebIDLTestNativeMethodCallCount++;
+  JSObject* selfObj;
+  if (!JS::ReadCoercedInterface(abi, coreParams, adapter.paramSteps[0].step, 0,
+                                &selfObj)) {
+    return false;
+  }
+  int32_t n;
+  if (!JS::ReadCoercedInt32(abi, coreParams, adapter.paramSteps[1].step, 0,
+                            &n)) {
+    return false;
+  }
+  JSContext* cx = abi.cx();
+  RootedObject self(cx, selfObj);
+  RootedValue tagVal(cx);
+  int32_t tag;
+  if (!JS_GetProperty(cx, self, "tag", &tagVal) ||
+      !JS::ToInt32(cx, tagVal, &tag)) {
+    return false;
+  }
+  *resultsPtr = JS::WasmScalarVal::fromI32(uint32_t(tag + n));
+  return true;
+}
+
+// The `[method]` generic fallback: LoweredCall binds `self` as `this`, not as
+// args[0].
+static bool WebIDLTestNativeMethod_native(JSContext* cx, unsigned argc,
+                                          JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.thisv().isObject()) {
+    JS_ReportErrorASCII(cx, "webidlTestNativeMethod: expected an object this");
+    return false;
+  }
+  RootedObject self(cx, &args.thisv().toObject());
+  RootedValue tagVal(cx);
+  if (!JS_GetProperty(cx, self, "tag", &tagVal)) {
+    return false;
+  }
+  double tag, n;
+  if (!JS::ToNumber(cx, tagVal, &tag) || !JS::ToNumber(cx, args.get(0), &n)) {
+    return false;
+  }
+  args.rval().setNumber(tag + n);
+  return true;
+}
+
+static const JS::WebIDLNativeCall WebIDLTestNativeMethod_overloadEntries[] = {
+    WebIDLTestNativeMethod_native0,
+};
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeMethod, Method);
+
+// foo(long a0, ..., a16) -> long : sum(a0..a16) - 17 params, one more than
+// MaxFlatParams(16), so the whole call spills to a single pointer; the
+// native entry must detect spilling itself rather than assuming memBase 0.
+static bool WebIDLTestNativeSpillSum_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  JS::WebIDLOperationType opType;
+  if (!opType.params.reserve(17)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  for (int i = 0; i < 17; i++) {
+    JS::WebIDLParam param;
+    param.type = longType;
+    opType.params.infallibleAppend(std::move(param));
+  }
+  opType.returnType = mozilla::Some(longType);
+  if (!out.append(std::move(opType))) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  return true;
+}
+
+static bool WebIDLTestNativeSpillSum_native0(
+    const wasm::CallAdapter* adapterPtr, JS::WebIDLContext* abiPtr,
+    const JS::WasmScalarVal* paramsPtr, uint32_t resultMemBase,
+    JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 17);
+  uint32_t base = 0;
+  if (adapter.paramSteps[0].step.access.mode ==
+      JS::WebIDLAccessLoc::Mode::Mem) {
+    base = coreParams[0].i32();
+  }
+  int32_t sum = 0;
+  for (const JS::WebIDLParamStep& p : adapter.paramSteps) {
+    int32_t v;
+    if (!JS::ReadCoercedInt32(abi, coreParams, p.step, base, &v)) {
+      return false;
+    }
+    sum += v;
+  }
+  *resultsPtr = JS::WasmScalarVal::fromI32(uint32_t(sum));
+  return true;
+}
+
+static bool WebIDLTestNativeSpillSum_native(JSContext* cx, unsigned argc,
+                                            JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  double sum = 0;
+  for (unsigned i = 0; i < args.length(); i++) {
+    double d;
+    if (!JS::ToNumber(cx, args[i], &d)) {
+      return false;
+    }
+    sum += d;
+  }
+  args.rval().setNumber(sum);
+  return true;
+}
+
+static const JS::WebIDLNativeCall WebIDLTestNativeSpillSum_overloadEntries[] = {
+    WebIDLTestNativeSpillSum_native0,
+};
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeSpillSum, Method);
+
+// foo(long n) -> sequence<long> : [n, n+1, n+2]
+static bool WebIDLTestNativeListResult_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  JS::WebIDLType seqType;
+  if (!JS::WebIDLType::sequence(longType, &seqType)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  return AppendSimpleOperationType(cx, out, {longType}, mozilla::Some(seqType));
+}
+
+static bool WebIDLTestNativeListResult_native0(
+    const wasm::CallAdapter* adapterPtr, JS::WebIDLContext* abiPtr,
+    const JS::WasmScalarVal* paramsPtr, uint32_t resultMemBase,
+    JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  MOZ_ASSERT(adapter.resultStep);
+  int32_t n;
+  if (!JS::ReadCoercedInt32(abi, coreParams, adapter.paramSteps[0].step, 0,
+                            &n)) {
+    return false;
+  }
+  const JS::WebIDLCoerceStep& seqStep = *adapter.resultStep;
+  uint32_t elemPtr;
+  if (!JS::WriteCoercedListHeader(abi, seqStep, resultMemBase, 3, resultsPtr,
+                                  &elemPtr)) {
+    return false;
+  }
+  for (uint32_t i = 0; i < 3; i++) {
+    uint32_t elemBase = elemPtr + i * seqStep.destAccess.elemStride;
+    if (!JS::WriteCoercedInt32(abi, *seqStep.child, elemBase, n + int32_t(i),
+                               resultsPtr)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool WebIDLTestNativeListResult_native(JSContext* cx, unsigned argc,
+                                              JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  double n;
+  if (!JS::ToNumber(cx, args.get(0), &n)) {
+    return false;
+  }
+  RootedObject arr(cx, JS::NewArrayObject(cx, 3));
+  if (!arr) {
+    return false;
+  }
+  for (uint32_t i = 0; i < 3; i++) {
+    if (!JS_SetElement(cx, arr, i, int32_t(n) + int32_t(i))) {
+      return false;
+    }
+  }
+  args.rval().setObject(*arr);
+  return true;
+}
+
+static const JS::WebIDLNativeCall WebIDLTestNativeListResult_overloadEntries[] =
+    {
+        WebIDLTestNativeListResult_native0,
+    };
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeListResult, Method);
+
+// foo(long x, long y) -> dictionary{x,y} - a 2-long record always spills
+// (its flat form is 2 slots, over MaxFlatResults), so BuildResultStep already
+// baked a `resultMemBase`-relative offset into each `dictMembers[i].step`;
+// writes each field via its own step and has no flat result of its own to
+// append.
+static bool WebIDLTestNativeRecordResult_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  JS::WebIDLType dictType;
+  if (!JS::WebIDLType::dictionary(&dictType)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  JS::UniqueChars xName = js::DuplicateString(cx, "x");
+  JS::UniqueChars yName = js::DuplicateString(cx, "y");
+  if (!xName || !yName ||
+      !dictType.addDictionaryMember(std::move(xName), longType, true) ||
+      !dictType.addDictionaryMember(std::move(yName), longType, true)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  return AppendSimpleOperationType(cx, out, {longType, longType},
+                                   mozilla::Some(dictType));
+}
+
+static bool WebIDLTestNativeRecordResult_native0(
+    const wasm::CallAdapter* adapterPtr, JS::WebIDLContext* abiPtr,
+    const JS::WasmScalarVal* paramsPtr, uint32_t resultMemBase,
+    JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 2);
+  MOZ_ASSERT(adapter.resultStep);
+  int32_t x, y;
+  if (!JS::ReadCoercedInt32(abi, coreParams, adapter.paramSteps[0].step, 0,
+                            &x) ||
+      !JS::ReadCoercedInt32(abi, coreParams, adapter.paramSteps[1].step, 0,
+                            &y)) {
+    return false;
+  }
+  const JS::WebIDLCoerceStep& dictStep = *adapter.resultStep;
+  if (!JS::WriteCoercedInt32(abi, *dictStep.dictMembers[0].step, resultMemBase,
+                             x, resultsPtr) ||
+      !JS::WriteCoercedInt32(abi, *dictStep.dictMembers[1].step, resultMemBase,
+                             y, resultsPtr)) {
+    return false;
+  }
+  return true;
+}
+
+static bool WebIDLTestNativeRecordResult_native(JSContext* cx, unsigned argc,
+                                                JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  double x, y;
+  if (!JS::ToNumber(cx, args.get(0), &x) ||
+      !JS::ToNumber(cx, args.get(1), &y)) {
+    return false;
+  }
+  RootedObject obj(cx, JS_NewPlainObject(cx));
+  if (!obj) {
+    return false;
+  }
+  RootedValue xVal(cx, JS::NumberValue(x));
+  RootedValue yVal(cx, JS::NumberValue(y));
+  if (!JS_DefineProperty(cx, obj, "x", xVal, JSPROP_ENUMERATE) ||
+      !JS_DefineProperty(cx, obj, "y", yVal, JSPROP_ENUMERATE)) {
+    return false;
+  }
+  args.rval().setObject(*obj);
+  return true;
+}
+
+static const JS::WebIDLNativeCall
+    WebIDLTestNativeRecordResult_overloadEntries[] = {
+        WebIDLTestNativeRecordResult_native0,
+    };
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeRecordResult, Method);
+
+// foo(long? x) -> long : x ?? -1
+static bool WebIDLTestNativeOption_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  JS::WebIDLType nullableLongType;
+  if (!JS::WebIDLType::nullable(longType, &nullableLongType)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  return AppendSimpleOperationType(cx, out, {nullableLongType},
+                                   mozilla::Some(longType));
+}
+
+static bool WebIDLTestNativeOption_native0(const wasm::CallAdapter* adapterPtr,
+                                           JS::WebIDLContext* abiPtr,
+                                           const JS::WasmScalarVal* paramsPtr,
+                                           uint32_t resultMemBase,
+                                           JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  const wasm::CoerceStep& step = adapter.paramSteps[0].step;
+  bool hasValue;
+  if (!JS::ReadCoercedOptionDiscriminant(abi, coreParams, step, 0, &hasValue)) {
+    return false;
+  }
+  int32_t result = -1;
+  if (hasValue &&
+      !JS::ReadCoercedInt32(abi, coreParams, *step.child, 0, &result)) {
+    return false;
+  }
+  *resultsPtr = JS::WasmScalarVal::fromI32(result);
+  return true;
+}
+
+static bool WebIDLTestNativeOption_native(JSContext* cx, unsigned argc,
+                                          JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (args.length() < 1 || (!args[0].isNull() && !args[0].isNumber())) {
+    JS_ReportErrorASCII(cx,
+                        "webidlTestNativeOption: expected a number or null");
+    return false;
+  }
+  args.rval().setInt32(args[0].isNull() ? -1 : int32_t(args[0].toNumber()));
+  return true;
+}
+
+static const JS::WebIDLNativeCall WebIDLTestNativeOption_overloadEntries[] = {
+    WebIDLTestNativeOption_native0,
+};
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeOption, Method);
+
+// foo(variant{empty, num(long)}) -> long : num's value, or -1 for empty
+static bool WebIDLTestNativeVariant_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  mozilla::Vector<JS::UniqueChars, 0, js::SystemAllocPolicy> labels;
+  for (const char* name : {"empty", "num"}) {
+    JS::UniqueChars label = js::DuplicateString(cx, name);
+    if (!label || !labels.append(std::move(label))) {
+      ReportOutOfMemory(cx);
+      return false;
+    }
+  }
+  JS::WebIDLType kindEnum;
+  if (!JS::WebIDLType::enumeration(std::move(labels), &kindEnum)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  JS::WebIDLType dictType;
+  if (!JS::WebIDLType::dictionary(&dictType)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  JS::UniqueChars kindName = js::DuplicateString(cx, "kind");
+  JS::UniqueChars valueName = js::DuplicateString(cx, "value");
+  if (!kindName || !valueName ||
+      !dictType.addDictionaryMember(std::move(kindName), kindEnum, true) ||
+      !dictType.addDictionaryMember(std::move(valueName), longType, false)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  return AppendSimpleOperationType(cx, out, {dictType},
+                                   mozilla::Some(longType));
+}
+
+static bool WebIDLTestNativeVariant_native0(const wasm::CallAdapter* adapterPtr,
+                                            JS::WebIDLContext* abiPtr,
+                                            const JS::WasmScalarVal* paramsPtr,
+                                            uint32_t resultMemBase,
+                                            JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  const wasm::CoerceStep& step = adapter.paramSteps[0].step;
+  uint32_t sourceCaseIndex, targetKindIndex;
+  if (!JS::ReadCoercedVariantCase(abi, coreParams, step, 0, &sourceCaseIndex,
+                                  &targetKindIndex)) {
+    return false;
+  }
+  int32_t result = -1;
+  const auto& caseStep = step.variantCases[sourceCaseIndex];
+  if (caseStep.payloadStep &&
+      !JS::ReadCoercedInt32(abi, coreParams, *caseStep.payloadStep, 0,
+                            &result)) {
+    return false;
+  }
+  *resultsPtr = JS::WasmScalarVal::fromI32(result);
+  return true;
+}
+
+// Label-agnostic (checks for the "value" member's presence, not any
+// particular "kind" label), so this is reused as-is below for result<T,E>.
+static bool WebIDLTestNativeVariant_native(JSContext* cx, unsigned argc,
+                                           JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (args.length() < 1 || !args[0].isObject()) {
+    JS_ReportErrorASCII(cx, "webidlTestNativeVariant: expected an object");
+    return false;
+  }
+  RootedObject obj(cx, &args[0].toObject());
+  bool hasValue;
+  if (!JS_HasProperty(cx, obj, "value", &hasValue)) {
+    return false;
+  }
+  if (!hasValue) {
+    args.rval().setInt32(-1);
+    return true;
+  }
+  RootedValue valueVal(cx);
+  if (!JS_GetProperty(cx, obj, "value", &valueVal)) {
+    return false;
+  }
+  double v;
+  if (!JS::ToNumber(cx, valueVal, &v)) {
+    return false;
+  }
+  args.rval().setNumber(v);
+  return true;
+}
+
+static const JS::WebIDLNativeCall WebIDLTestNativeVariant_overloadEntries[] = {
+    WebIDLTestNativeVariant_native0,
+};
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeVariant, Method);
+
+// Same {kind, value?} shape and native0/native as WebIDLTestNativeVariant
+// above, but sourced from a component result<s32, void> instead of a variant.
+static bool WebIDLTestNativeResultVariant_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  mozilla::Vector<JS::UniqueChars, 0, js::SystemAllocPolicy> labels;
+  for (const char* name : {"ok", "error"}) {
+    JS::UniqueChars label = js::DuplicateString(cx, name);
+    if (!label || !labels.append(std::move(label))) {
+      ReportOutOfMemory(cx);
+      return false;
+    }
+  }
+  JS::WebIDLType kindEnum;
+  if (!JS::WebIDLType::enumeration(std::move(labels), &kindEnum)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  JS::WebIDLType dictType;
+  if (!JS::WebIDLType::dictionary(&dictType)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  JS::UniqueChars kindName = js::DuplicateString(cx, "kind");
+  JS::UniqueChars valueName = js::DuplicateString(cx, "value");
+  if (!kindName || !valueName ||
+      !dictType.addDictionaryMember(std::move(kindName), kindEnum, true) ||
+      !dictType.addDictionaryMember(std::move(valueName), longType, false)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  return AppendSimpleOperationType(cx, out, {dictType},
+                                   mozilla::Some(longType));
+}
+
+static const JS::WebIDLNativeCall
+    WebIDLTestNativeResultVariant_overloadEntries[] = {
+        WebIDLTestNativeVariant_native0,
+    };
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeResultVariant, Method);
+
+// foo(long n) -> long? : n < 0 ? null : n
+static bool WebIDLTestNativeOptionResult_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  JS::WebIDLType nullableLongType;
+  if (!JS::WebIDLType::nullable(longType, &nullableLongType)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  return AppendSimpleOperationType(cx, out, {longType},
+                                   mozilla::Some(nullableLongType));
+}
+
+static bool WebIDLTestNativeOptionResult_native0(
+    const wasm::CallAdapter* adapterPtr, JS::WebIDLContext* abiPtr,
+    const JS::WasmScalarVal* paramsPtr, uint32_t resultMemBase,
+    JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  MOZ_ASSERT(adapter.resultStep);
+  int32_t n;
+  if (!JS::ReadCoercedInt32(abi, coreParams, adapter.paramSteps[0].step, 0,
+                            &n)) {
+    return false;
+  }
+  const JS::WebIDLCoerceStep& optionStep = *adapter.resultStep;
+  bool hasValue = n >= 0;
+  uint32_t ptr;
+  if (!JS::WriteCoercedOptionDiscriminant(abi, optionStep, resultMemBase,
+                                          hasValue, resultsPtr, &ptr)) {
+    return false;
+  }
+  if (hasValue &&
+      !JS::WriteCoercedInt32(abi, *optionStep.child, ptr, n, resultsPtr)) {
+    return false;
+  }
+  return true;
+}
+
+static bool WebIDLTestNativeOptionResult_native(JSContext* cx, unsigned argc,
+                                                JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  double n;
+  if (!JS::ToNumber(cx, args.get(0), &n)) {
+    return false;
+  }
+  if (n < 0) {
+    args.rval().setNull();
+  } else {
+    args.rval().setNumber(n);
+  }
+  return true;
+}
+
+static const JS::WebIDLNativeCall
+    WebIDLTestNativeOptionResult_overloadEntries[] = {
+        WebIDLTestNativeOptionResult_native0,
+    };
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeOptionResult, Method);
+
+// foo(long n) -> {kind: "empty"|"num", value?: long} : n < 0 ? {kind:
+// "empty"} : {kind: "num", value: n}
+static bool WebIDLTestNativeVariantResult_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  mozilla::Vector<JS::UniqueChars, 0, js::SystemAllocPolicy> labels;
+  for (const char* name : {"empty", "num"}) {
+    JS::UniqueChars label = js::DuplicateString(cx, name);
+    if (!label || !labels.append(std::move(label))) {
+      ReportOutOfMemory(cx);
+      return false;
+    }
+  }
+  JS::WebIDLType kindEnum;
+  if (!JS::WebIDLType::enumeration(std::move(labels), &kindEnum)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  JS::WebIDLType longType = JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long);
+  JS::WebIDLType dictType;
+  if (!JS::WebIDLType::dictionary(&dictType)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  JS::UniqueChars kindName = js::DuplicateString(cx, "kind");
+  JS::UniqueChars valueName = js::DuplicateString(cx, "value");
+  if (!kindName || !valueName ||
+      !dictType.addDictionaryMember(std::move(kindName), kindEnum, true) ||
+      !dictType.addDictionaryMember(std::move(valueName), longType, false)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  return AppendSimpleOperationType(cx, out, {longType},
+                                   mozilla::Some(dictType));
+}
+
+static bool WebIDLTestNativeVariantResult_native0(
+    const wasm::CallAdapter* adapterPtr, JS::WebIDLContext* abiPtr,
+    const JS::WasmScalarVal* paramsPtr, uint32_t resultMemBase,
+    JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  MOZ_ASSERT(adapter.resultStep);
+  int32_t n;
+  if (!JS::ReadCoercedInt32(abi, coreParams, adapter.paramSteps[0].step, 0,
+                            &n)) {
+    return false;
+  }
+  const JS::WebIDLCoerceStep& variantStep = *adapter.resultStep;
+  uint32_t caseIndex = n >= 0 ? 1 : 0;  // "num" : "empty"
+  uint32_t ptr;
+  if (!JS::WriteCoercedVariantCase(abi, variantStep, resultMemBase, caseIndex,
+                                   resultsPtr, &ptr)) {
+    return false;
+  }
+  if (caseIndex == 1 &&
+      !JS::WriteCoercedInt32(abi,
+                             *variantStep.variantCases[caseIndex].payloadStep,
+                             ptr, n, resultsPtr)) {
+    return false;
+  }
+  return true;
+}
+
+// variant{empty, num(long)} shape: "num" carries the value.
+static bool WebIDLTestNativeVariantResult_native(JSContext* cx, unsigned argc,
+                                                 JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  double n;
+  if (!JS::ToNumber(cx, args.get(0), &n)) {
+    return false;
+  }
+  RootedObject obj(cx, JS_NewPlainObject(cx));
+  if (!obj) {
+    return false;
+  }
+  bool hasValue = n >= 0;
+  RootedString kindStr(cx, JS_NewStringCopyZ(cx, hasValue ? "num" : "empty"));
+  if (!kindStr) {
+    return false;
+  }
+  RootedValue kindVal(cx);
+  kindVal.setString(kindStr);
+  if (!JS_DefineProperty(cx, obj, "kind", kindVal, JSPROP_ENUMERATE)) {
+    return false;
+  }
+  if (hasValue) {
+    RootedValue nVal(cx, JS::NumberValue(n));
+    if (!JS_DefineProperty(cx, obj, "value", nVal, JSPROP_ENUMERATE)) {
+      return false;
+    }
+  }
+  args.rval().setObject(*obj);
+  return true;
+}
+
+static const JS::WebIDLNativeCall
+    WebIDLTestNativeVariantResult_overloadEntries[] = {
+        WebIDLTestNativeVariantResult_native0,
+    };
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeVariantResult, Method);
+
+#  undef WEBIDL_NATIVE_METHODINFO
+
+static bool GetWebIDLOperationTypesImpl(JSContext* cx,
+                                        JS::WebIDLOperationTypeVector& opTypes,
+                                        JS::MutableHandleValue rval) {
+  RootedObject proto(cx, GetGlobalCtorPrototype(cx, "WebIDLOperationType"));
+  if (!proto) {
+    return false;
+  }
+  JS::RootedValueVector elems(cx);
+  for (JS::WebIDLOperationType& opType : opTypes) {
+    RootedObject obj(
+        cx, JS_NewObjectWithGivenProto(cx, &WebIDLOperationTypeClass, proto));
+    if (!obj) {
+      return false;
+    }
+    JS::WebIDLOperationType* heap =
+        js_new<JS::WebIDLOperationType>(std::move(opType));
+    if (!heap) {
+      ReportOutOfMemory(cx);
+      return false;
+    }
+    JS::SetReservedSlot(obj, 0, JS::PrivateValue(heap));
+    if (!elems.append(ObjectValue(*obj))) {
+      ReportOutOfMemory(cx);
+      return false;
+    }
+  }
+  JSObject* array = JS::NewArrayObject(cx, elems);
+  if (!array) {
+    return false;
+  }
+  rval.setObject(*array);
+  return true;
+}
+
+static bool ShellGetWebIDLOperationTypes(JSContext* cx, unsigned argc,
+                                         JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (args.length() < 1 || !args[0].isObject() ||
+      !JS::IsCallable(&args[0].toObject())) {
+    JS_ReportErrorASCII(cx,
+                        "getWebIDLOperationTypes(fn): fn must be a function");
+    return false;
+  }
+  // Safe to unwrap: this only reads `fun`'s JSJitInfo, never executes JS or
+  // stores `fun` anywhere.
+  RootedObject fun(cx, UncheckedUnwrap(&args[0].toObject()));
+  JS::WebIDLOperationTypeVector opTypes;
+  if (!JS::GetWebIDLOperationTypes(cx, fun, opTypes)) {
+    return false;
+  }
+  return GetWebIDLOperationTypesImpl(cx, opTypes, args.rval());
+}
+
+static bool ShellGetWebIDLConstructorTypes(JSContext* cx, unsigned argc,
+                                           JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (args.length() < 1 || !args[0].isObject()) {
+    JS_ReportErrorASCII(cx,
+                        "getWebIDLConstructorTypes(ctor): ctor must be an "
+                        "object");
+    return false;
+  }
+  RootedObject ctor(cx, UncheckedUnwrap(&args[0].toObject()));
+  JS::WebIDLOperationTypeVector opTypes;
+  if (!JS::GetWebIDLConstructorTypes(cx, ctor, opTypes)) {
+    return false;
+  }
+  return GetWebIDLOperationTypesImpl(cx, opTypes, args.rval());
+}
+
+// Wraps WebIDLTestInterface()'s singleton so a test can declare a component
+// resource with that exact interface identity (isOrDerivedFrom is a
+// pointer-identity check, not a name match).
+static bool GetWebIDLTestResourceInterface(JSContext* cx, unsigned argc,
+                                           JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  RootedObject obj(cx, JS_NewObject(cx, &WebIDLInterfaceClass));
+  if (!obj) {
+    return false;
+  }
+  JS::WebIDLInterface* iface = WebIDLTestInterface();
+  iface->AddRef();
+  JS::SetReservedSlot(obj, 0, JS::PrivateValue(iface));
+  args.rval().setObject(*obj);
+  return true;
+}
+
+// Wraps WebIDLTestMethodInterface()'s singleton, the interface identity
+// webidlTestNativeMethod's self param is typed against.
+static bool GetWebIDLTestMethodResourceInterface(JSContext* cx, unsigned argc,
+                                                 JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  RootedObject obj(cx, JS_NewObject(cx, &WebIDLInterfaceClass));
+  if (!obj) {
+    return false;
+  }
+  JS::WebIDLInterface* iface = WebIDLTestMethodInterface();
+  iface->AddRef();
+  JS::SetReservedSlot(obj, 0, JS::PrivateValue(iface));
+  args.rval().setObject(*obj);
+  return true;
+}
+
+static bool GetWebIDLTestNativeMethodCallCount(JSContext* cx, unsigned argc,
+                                               JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  args.rval().setInt32(int32_t(gWebIDLTestNativeMethodCallCount));
+  return true;
+}
+
+static const JSFunctionSpec webIDLTestFunctions[] = {
+    JS_FNINFO("webidlTestOverloaded", WebIDLTestOverloaded_native,
+              &WebIDLTestOverloaded_methodinfo.base.base, 2, 0),
+    JS_FNINFO("webidlTestNativeLongLong", WebIDLTestNativeLongLong_native,
+              &WebIDLTestNativeLongLong_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeFloat", WebIDLTestNativeFloat_native,
+              &WebIDLTestNativeFloat_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeCodePoint", WebIDLTestNativeCodePoint_native,
+              &WebIDLTestNativeCodePoint_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeEnforceRange",
+              WebIDLTestNativeEnforceRange_native,
+              &WebIDLTestNativeEnforceRange_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeClamp", WebIDLTestNativeClamp_native,
+              &WebIDLTestNativeClamp_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeResultNarrow",
+              WebIDLTestNativeResultNarrow_native,
+              &WebIDLTestNativeResultNarrow_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeStringLen", WebIDLTestNativeStringLen_native,
+              &WebIDLTestNativeStringLen_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeStringResult",
+              WebIDLTestNativeStringResult_native,
+              &WebIDLTestNativeStringResult_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeEnum", WebIDLTestNativeEnum_native,
+              &WebIDLTestNativeEnum_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeListSum", WebIDLTestNativeListSum_native,
+              &WebIDLTestNativeListSum_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeRecordSum", WebIDLTestNativeRecordSum_native,
+              &WebIDLTestNativeRecordSum_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeResourceRoundTrip",
+              WebIDLTestNativeResourceRoundTrip_native,
+              &WebIDLTestNativeResourceRoundTrip_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeMethod", WebIDLTestNativeMethod_native,
+              &WebIDLTestNativeMethod_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeSpillSum", WebIDLTestNativeSpillSum_native,
+              &WebIDLTestNativeSpillSum_methodinfo.base.base, 17, 0),
+    JS_FNINFO("webidlTestNativeListResult", WebIDLTestNativeListResult_native,
+              &WebIDLTestNativeListResult_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeRecordResult",
+              WebIDLTestNativeRecordResult_native,
+              &WebIDLTestNativeRecordResult_methodinfo.base.base, 2, 0),
+    JS_FNINFO("webidlTestNativeOption", WebIDLTestNativeOption_native,
+              &WebIDLTestNativeOption_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeVariant", WebIDLTestNativeVariant_native,
+              &WebIDLTestNativeVariant_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeResultVariant", WebIDLTestNativeVariant_native,
+              &WebIDLTestNativeResultVariant_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeOptionResult",
+              WebIDLTestNativeOptionResult_native,
+              &WebIDLTestNativeOptionResult_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeVariantResult",
+              WebIDLTestNativeVariantResult_native,
+              &WebIDLTestNativeVariantResult_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestOptionalDefault", WebIDLTest_stubNative,
+              &WebIDLTestOptionalDefault_methodinfo.base, 1, 0),
+    JS_FNINFO("webidlTestVariadic", WebIDLTest_stubNative,
+              &WebIDLTestVariadic_methodinfo.base, 1, 0),
+    JS_FNINFO("webidlTestGetter", WebIDLTest_stubNative,
+              &WebIDLTestGetter_methodinfo.base, 0, 0),
+    JS_FNINFO("webidlTestSetter", WebIDLTest_stubNative,
+              &WebIDLTestSetter_methodinfo.base, 1, 0),
+    JS_FNINFO("webidlTestConstructor", WebIDLTest_stubNative,
+              &WebIDLTestConstructor_methodinfo.base, 1, 0),
+    JS_FN("getWebIDLOperationTypes", ShellGetWebIDLOperationTypes, 1, 0),
+    JS_FN("getWebIDLConstructorTypes", ShellGetWebIDLConstructorTypes, 1, 0),
+    JS_FN("getWebIDLTestResourceInterface", GetWebIDLTestResourceInterface, 0,
+          0),
+    JS_FN("getWebIDLTestMethodResourceInterface",
+          GetWebIDLTestMethodResourceInterface, 0, 0),
+    JS_FN("getWebIDLTestNativeMethodCallCount",
+          GetWebIDLTestNativeMethodCallCount, 0, 0),
+    JS_FS_END,
+};
+
+// Wraps a `wasm::ComponentHandleTable`, standing in for a component
+// instance's resource handle table (this prototype has no live instance
+// yet).
+static void ComponentHandleTable_finalize(JS::GCContext* gcx, JSObject* obj) {
+  JS::Value slot = JS::GetReservedSlot(obj, 0);
+  if (!slot.isUndefined()) {
+    js_delete(static_cast<wasm::ComponentHandleTable*>(slot.toPrivate()));
+  }
+}
+static void ComponentHandleTable_trace(JSTracer* trc, JSObject* obj) {
+  JS::Value slot = JS::GetReservedSlot(obj, 0);
+  if (!slot.isUndefined()) {
+    static_cast<wasm::ComponentHandleTable*>(slot.toPrivate())->trace(trc);
+  }
+}
+static const JSClassOps ComponentHandleTableClassOps = {
+    .finalize = ComponentHandleTable_finalize,
+    .trace = ComponentHandleTable_trace,
+};
+static const JSClass ComponentHandleTableClass = {
+    "ComponentHandleTable",
+    JSCLASS_HAS_RESERVED_SLOTS(1) | JSCLASS_BACKGROUND_FINALIZE,
+    &ComponentHandleTableClassOps};
+
+static wasm::ComponentHandleTable* ShellComponentHandleTable(JSObject* obj) {
+  return static_cast<wasm::ComponentHandleTable*>(
+      JS::GetReservedSlot(obj, 0).toPrivate());
+}
+
+static bool IsShellComponentHandleTable(HandleValue v) {
+  return v.isObject() &&
+         JS::GetClass(&v.toObject()) == &ComponentHandleTableClass;
+}
+
+static bool ComponentHandleTable_construct(JSContext* cx, unsigned argc,
+                                           JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.isConstructing()) {
+    JS_ReportErrorASCII(cx, "ComponentHandleTable must be called with new");
+    return false;
+  }
+  RootedObject obj(
+      cx, JS_NewObjectForConstructor(cx, &ComponentHandleTableClass, args));
+  if (!obj) {
+    return false;
+  }
+  wasm::ComponentHandleTable* heap = js_new<wasm::ComponentHandleTable>();
+  if (!heap) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  JS::SetReservedSlot(obj, 0, JS::PrivateValue(heap));
+  args.rval().setObject(*obj);
+  return true;
+}
+
+static bool ComponentHandleTable_getCount(JSContext* cx, unsigned argc,
+                                          JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!IsShellComponentHandleTable(args.thisv())) {
+    JS_ReportErrorASCII(cx, "not a ComponentHandleTable");
+    return false;
+  }
+  wasm::ComponentHandleTable* table =
+      ShellComponentHandleTable(&args.thisv().toObject());
+  args.rval().setNumber(double(table->count()));
+  return true;
+}
+
+static const JSPropertySpec ComponentHandleTable_properties[] = {
+    JS_PSG("count", ComponentHandleTable_getCount, 0),
+    JS_PS_END,
+};
+
+#endif  // ENABLE_WASM_COMPONENTS
+
+static bool DefineWebIDLTestClasses(JSContext* cx, HandleObject obj) {
+  if (!JS_InitClass(cx, obj, &WebIDLTypeClass, nullptr, "WebIDLType",
+                    WebIDLType_construct, 1, WebIDLType_properties, nullptr,
+                    nullptr, nullptr)) {
+    return false;
+  }
+  if (!JS_InitClass(cx, obj, &WebIDLValueClass, nullptr, "WebIDLValue",
+                    WebIDLValue_construct, 2, nullptr, WebIDLValue_methods,
+                    nullptr, nullptr)) {
+    return false;
+  }
+  if (!JS_InitClass(cx, obj, &WebIDLInterfaceClass, nullptr, "WebIDLInterface",
+                    WebIDLInterface_construct, 1, WebIDLInterface_properties,
+                    WebIDLInterface_methods, nullptr, nullptr)) {
+    return false;
+  }
+  if (!JS_InitClass(cx, obj, &WebIDLNativeResourceClass, nullptr,
+                    "WebIDLNativeResource", WebIDLNativeResource_construct, 1,
+                    nullptr, nullptr, nullptr, nullptr)) {
+    return false;
+  }
+#ifdef ENABLE_WASM_COMPONENTS
+  RootedObject webIDLTestGlobal(cx, JS::CurrentGlobalOrNull(cx));
+  RootedValue containerVal(cx, ObjectValue(*obj));
+  if (!JS_DefineProperty(cx, webIDLTestGlobal, "@@WebIDLTestClassContainer",
+                         containerVal, 0)) {
+    return false;
+  }
+  if (!JS_InitClass(cx, obj, &ComponentTypeClass, nullptr, "ComponentType",
+                    ComponentType_construct, 1, ComponentType_properties,
+                    ComponentType_methods, nullptr, nullptr)) {
+    return false;
+  }
+  if (!JS_InitClass(cx, obj, &ComponentValueClass, nullptr, "ComponentValue",
+                    ComponentValue_construct, 2, nullptr,
+                    ComponentValue_methods, nullptr, nullptr)) {
+    return false;
+  }
+  if (!JS_InitClass(cx, obj, &ComponentExceptionClass, nullptr,
+                    "ComponentException", ComponentException_construct, 1,
+                    ComponentException_properties, nullptr, nullptr, nullptr)) {
+    return false;
+  }
+  if (!JS_InitClass(cx, obj, &ComponentFuncTypeClass, nullptr,
+                    "ComponentFuncType", ComponentFuncType_construct, 1,
+                    nullptr, nullptr, nullptr, nullptr)) {
+    return false;
+  }
+  if (!JS_InitClass(cx, obj, &WebIDLOperationTypeClass, nullptr,
+                    "WebIDLOperationType", WebIDLOperationType_construct, 1,
+                    WebIDLOperationType_properties, WebIDLOperationType_methods,
+                    nullptr, nullptr)) {
+    return false;
+  }
+  if (!JS_InitClass(cx, obj, &ComponentHandleTableClass, nullptr,
+                    "ComponentHandleTable", ComponentHandleTable_construct, 0,
+                    ComponentHandleTable_properties, nullptr, nullptr,
+                    nullptr)) {
+    return false;
+  }
+  if (!JS_DefineFunctions(cx, obj, webIDLTestFunctions)) {
+    return false;
+  }
+  JS::AddResourceInterfaceFromValueHook(ResourceInterfaceFromTestingValue);
+#endif
+  return true;
+}
+
 bool js::InitTestingFunctions() { return disasmPrinter.init(); }
 
 bool js::DefineTestingFunctions(JSContext* cx, HandleObject obj,
@@ -11785,6 +15598,10 @@ bool js::DefineTestingFunctions(JSContext* cx, HandleObject obj,
   }
 
   if (!JS_DefineFunctionsWithHelp(cx, fdlibm, FdLibMTestingFunctions)) {
+    return false;
+  }
+
+  if (!DefineWebIDLTestClasses(cx, obj)) {
     return false;
   }
 

@@ -1075,6 +1075,18 @@ enum class MozOp {
   // particular operation id. See BuiltinModuleFuncId above.
   CallBuiltinModuleFunc = 0x01,
 
+  // Calls straight into a JS::WebIDLNativeCall selected ahead of time for a
+  // wasm component's `canon lower` core func (see
+  // wasm::GenerateCanonLowerNative). Operand: leb u64 pointer to the
+  // wasm::LoweredNativeClosure to call through - already fully populated by
+  // the time this compiles, so codegen reads everything else it needs
+  // (entry point, scratch buffers, param/result counts) straight off it
+  // rather than threading more immediates through the bytecode. Pops this
+  // function's own params, pushes its own results (this operator is always
+  // the sole statement of a function generated to have exactly the
+  // closure's own flat param/result shape).
+  CallCanonLowerNative,
+
 #ifdef ENABLE_WASM_JSPI
   // Check that there is a WebAssembly.promising function ready to suspend to.
   GuardSuspending,

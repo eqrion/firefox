@@ -569,15 +569,18 @@ JSObject* MaybeUnwrapSuspendingObject(JSObject* wrapper);
 // objects.
 class WasmComponentInstanceObject : public NativeObject {
   static const unsigned INSTANCE_SLOT = 0;
+  static const unsigned EXPORTS_OBJ_SLOT = 1;
 
   static const JSClassOps classOps_;
   static const ClassSpec classSpec_;
+  static bool exportsGetterImpl(JSContext* cx, const CallArgs& args);
+  static bool exportsGetter(JSContext* cx, unsigned argc, Value* vp);
   bool isNewborn() const;
   static void finalize(JS::GCContext* gcx, JSObject* obj);
   static void trace(JSTracer* trc, JSObject* obj);
 
  public:
-  static const unsigned RESERVED_SLOTS = 1;
+  static const unsigned RESERVED_SLOTS = 2;
   static const JSClass class_;
   static const JSClass& protoClass_;
   static const JSPropertySpec properties[];
@@ -587,9 +590,11 @@ class WasmComponentInstanceObject : public NativeObject {
 
   static WasmComponentInstanceObject* create(
       JSContext* cx, HandleObject proto,
-      const RefPtr<const wasm::Component> component);
+      const RefPtr<const wasm::Component> component, HandleObject importObj);
+  void initExportsObj(JSObject& exportsObj);
 
   wasm::ComponentInstance& instance() const;
+  JSObject& exportsObj() const;
 };
 #endif  // ENABLE_WASM_COMPONENTS
 

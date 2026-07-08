@@ -1883,6 +1883,9 @@ struct BaseCompiler final {
 #  endif
 #endif
   [[nodiscard]] bool emitCallBuiltinModuleFunc();
+#ifdef ENABLE_WASM_COMPONENTS
+  [[nodiscard]] bool emitCallCanonLowerNative();
+#endif
 };
 
 }  // namespace wasm

@@ -1,0 +1,268 @@
+<!DOCTYPE HTML>
+<html>
+<!--
+Wasm_WebIDL_ABI_Plan.md stage 8/9, end to end from a real Mochitest: drives
+the actual wasm-component-calls-WebIDL ABI (ComponentCanonLower, manually
+built WebAssembly.Memory/handle table) against real Codegen.py-generated
+native call entries, not just JS::GetWebIDLOperationTypes type recovery
+(see test_webidl_component_call.html for that half) and not just the shell/
+jit-test coverage of hand-written fixtures. Covers: a static TestFunctions
+method, a console namespace method, and - via a resource handle seeded with
+the real `document` - a DOM instance getter and method, proving self
+resolution and real-Gecko-interface identity (WebIDLType.interface) work
+through the fused native path.
+
+Every real call below also checks getWebIDLTestNativeCallCount() to confirm
+TryCallWebIDLNative's fused path actually fired, rather than merely
+producing a coincidentally-matching value via the slow JS::Call + dynamic-
+interpreter fallback (both paths are independently correct, so the return
+value alone can't tell them apart). componentStaticAdd is additionally
+cross-checked against ComponentCanonLowerOracle - the deliberately-slow,
+always-stepwise reference implementation - to catch any fused/dynamic
+divergence specifically on a real Codegen-generated entry (the shell/jit-
+tests only run this differential check against hand-written fixtures).
+Limited to a static method: the oracle always calls with `this` undefined,
+so it can't correctly invoke a real instance method's self-having form -
+see the comment next to its use below.
+
+SpecialPowers note: `SpecialPowers.Cu.getJSTestingFunctions()` already
+returns a self-wrapping Proxy (see WrapPrivileged.sys.mjs) - its
+constructors/functions transparently wrap results and unwrap arguments at
+every call, including when a result from one is fed into another. Do NOT
+SpecialPowers.unwrap()/wrap() anything reached through it - that bypasses
+the proxy's automatic (un)wrapping and produces content/chrome Xray
+mismatches ("Permission denied ...") instead.
+-->
+<head>
+  <meta charset="utf-8">
+  <title>Test for the WebIDL component ABI prototype's Gecko codegen, end to end (stage 8/9)</title>
+  <script src="/tests/SimpleTest/SimpleTest.js"></script>
+  <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
+  <script type="application/javascript">
+
+  SimpleTest.waitForExplicitFinish();
+
+  // A minimal hand-encoded wasm module (no wasmTextToBinary in Mochitests):
+  //   (module
+  //     (memory (export "memory") 1)
+  //     (global $top (mut i32) (i32.const 4096))
+  //     (func (export "realloc")
+  //           (param $origPtr i32) (param $origSize i32)
+  //           (param $align i32) (param $newSize i32) (result i32)
+  //       (local $ptr i32)
+  //       (local.set $ptr (global.get $top))
+  //       (global.set $top (i32.add (global.get $top) (local.get $newSize)))
+  //       (local.get $ptr))
+  //     (func (export "identity_i32") (param $v i32) (result i32) (local.get $v)))
+  const MODULE_BYTES = new Uint8Array([
+    0,97,115,109,1,0,0,0,1,14,2,96,4,127,127,127,127,1,127,96,1,127,1,127,3,3,
+    2,0,1,5,3,1,0,1,6,7,1,127,1,65,128,32,11,7,35,3,6,109,101,109,111,114,121,
+    2,0,7,114,101,97,108,108,111,99,0,0,12,105,100,101,110,116,105,116,121,95,
+    105,51,50,0,1,10,24,2,17,1,1,127,35,0,33,4,35,0,32,3,106,36,0,32,4,11,4,0,
+    32,0,11,
+  ]);
+
+  function writeUtf8String(memory, realloc, str) {
+    const bytes = new TextEncoder().encode(str);
+    const ptr = realloc(0, 0, 1, bytes.length);
+    new Uint8Array(memory.buffer, ptr, bytes.length).set(bytes);
+    return [ptr, bytes.length];
+  }
+
+  function go() {
+    try {
+      const T = SpecialPowers.Cu.getJSTestingFunctions();
+      if (!T.ComponentCanonLower) {
+        // ENABLE_WASM_COMPONENTS not built into this binary.
+        ok(true, "wasm components not built - skipping");
+        return;
+      }
+
+      const instance = new WebAssembly.Instance(new WebAssembly.Module(MODULE_BYTES));
+      const { memory, realloc } = instance.exports;
+      // Like array contents, an options object's *own* properties aren't
+      // auto-unwrapped by the top-level construct/apply traps either.
+      const options = SpecialPowers.Cu.waiveXrays({ memory, realloc });
+
+      // Need a new global that will pick up the test-interfaces pref.
+      var ifr = document.createElement("iframe");
+      document.body.appendChild(ifr);
+      var win = ifr.contentWindow;
+
+      runTests(T, win, instance, options);
+    } catch (e) {
+      // Property access on `e` can itself throw across some Xray
+      // boundaries; waiving first gets a real message in the common case.
+      let message = "(unknown)";
+      try {
+        message = String(SpecialPowers.Cu.waiveXrays(e));
+      } catch (e2) {}
+      ok(false, "uncaught exception: " + message);
+    } finally {
+      SimpleTest.finish();
+    }
+  }
+
+  function runTests(T, win, instance, options) {
+    const { memory, realloc } = instance.exports;
+    // SpecialPowers.Cu.getJSTestingFunctions()'s Proxy auto-(un)wraps
+    // *top-level* call/construct arguments and return values, but does not
+    // recurse into array contents - a param-types array's own elements
+    // (e.g. ComponentType instances) need an explicit SpecialPowers.unwrap
+    // per element, and the array itself needs its Xrays waived, or the
+    // native side sees opaque, un-Xrayable wrappers when it iterates it.
+    const uw = (v) => SpecialPowers.unwrap(v);
+    const mkArr = (...items) => SpecialPowers.Cu.waiveXrays(items.map(uw));
+
+    // 1) TestFunctions.componentStaticAdd via the real wasm ABI (static
+    //    method, scalar args/return - Codegen's static-method jitinfo
+    //    reachability fix).
+    {
+      const s32 = new T.ComponentType("s32");
+      const funcType = new T.ComponentFuncType(mkArr(s32, s32), s32);
+      const fn = T.ComponentCanonLower(
+          win.TestFunctions.componentStaticAdd, funcType, options);
+      T.getWebIDLTestNativeCallCount(); // drain any stray count first
+      is(fn(3, 4), 7, "TestFunctions.componentStaticAdd via wasm ABI");
+      is(T.getWebIDLTestNativeCallCount(), 1,
+         "componentStaticAdd used the fused native call path");
+
+      // Differential check: ComponentCanonLowerOracle is the deliberately-
+      // slow, always-stepwise reference implementation (core -> component
+      // -> WebIDL(canonical) -> WebIDL(op) -> JS, never fused, and never
+      // consulting jitinfo) that the fast path above is meant to agree
+      // with. The shell/jit-tests already run this comparison against
+      // hand-written fixtures; running it here catches divergence that's
+      // specific to a real Codegen-generated entry instead. Limited to a
+      // static method: the oracle always calls with `this` undefined and
+      // every operation param (including a non-static op's prepended self
+      // receiver) as a plain argument, so it can't correctly invoke a real
+      // instance method expecting `this` to be the receiver - a separate,
+      // pre-existing gap, not exercised by this differential check.
+      const fnOracle = T.ComponentCanonLowerOracle(
+          win.TestFunctions.componentStaticAdd, funcType, options);
+      is(fnOracle(3, 4), 7,
+         "fused and oracle paths agree on componentStaticAdd's result");
+    }
+
+    // 2) console.clear() via the real wasm ABI (a WebIDL `namespace`
+    //    operation - Codegen's PrototypeIDAndDepth fix for namespaces,
+    //    which have no interface prototype object).
+    {
+      const funcType = new T.ComponentFuncType(mkArr(), null);
+      const fn = T.ComponentCanonLower(win.console.clear, funcType, options);
+      T.getWebIDLTestNativeCallCount(); // drain any stray count first
+      let threw = false;
+      try {
+        fn();
+      } catch (e) {
+        threw = true;
+      }
+      ok(!threw, "console.clear() via wasm ABI should not throw");
+      is(T.getWebIDLTestNativeCallCount(), 1,
+         "console.clear used the fused native call path");
+    }
+
+    // 3) A real DOM instance getter/method, with `win.document` seeded as
+    //    a component resource handle - proves self resolution
+    //    (paramSteps[0] as an Interface-typed receiver) and that a real
+    //    Gecko interface's *interned* identity (not just its name) can be
+    //    bridged from JS via the new WebIDLType.interface accessor, so a
+    //    resource's declared interface isOrDerivedFrom-matches the
+    //    receiver type Codegen's generated buildOperationTypes recovers.
+    {
+      const table = new T.ComponentHandleTable();
+      // Build fresh from the raw exports each time, rather than spreading
+      // the already-waived `options` - spreading it and re-waiving the
+      // copy produces a double proxy layer that UncheckedUnwrap can't see
+      // all the way through on the native side.
+      const withTable = (t) =>
+          SpecialPowers.Cu.waiveXrays({ memory, realloc, handleTable: uw(t) });
+
+      // Recover the *real* interned "Document" JS::WebIDLInterface via a
+      // real Document-receiver operation's own recovered self type.
+      const createTextNodeOpTypes =
+          T.getWebIDLOperationTypes(win.Document.prototype.createTextNode);
+      const documentIface = createTextNodeOpTypes[0].paramType(0).interface;
+      ok(documentIface, "recovered a real WebIDLInterface for Document");
+
+      const R = new T.ComponentType("resource", documentIface);
+      const ownR = new T.ComponentType("own", R);
+      const borrowR = new T.ComponentType("borrow", R);
+
+      // Bootstrap: insert `win.document` into the handle table as an
+      // owning "own<R>" handle, getting its handle index back as the
+      // lifted s32 result of a trivial identity core call.
+      const s32 = new T.ComponentType("s32");
+      const addHandle = T.ComponentCanonLift(
+          instance.exports.identity_i32,
+          new T.ComponentFuncType(mkArr(ownR), s32),
+          withTable(table));
+      const selfHandle = addHandle(win.document);
+      is(table.count, 1, "document was inserted into the handle table");
+
+      // 3a) Node.prototype.nodeType getter: self (borrow<R>, so the
+      // handle survives for reuse below) -> unsigned short.
+      {
+        const funcType = new T.ComponentFuncType(mkArr(borrowR), s32);
+        const fn = T.ComponentCanonLower(
+            win.Node.prototype.__lookupGetter__("nodeType"), funcType,
+            withTable(table));
+        T.getWebIDLTestNativeCallCount(); // drain any stray count first
+        // Node.DOCUMENT_NODE == 9.
+        is(fn(selfHandle), 9, "document.nodeType via wasm ABI (self resolution)");
+        is(T.getWebIDLTestNativeCallCount(), 1,
+           "nodeType getter used the fused native call path");
+      }
+
+      // 3b) Document.prototype.createTextNode(DOMString) -> Text: self
+      // (borrow<R>) plus a real string argument, written into linear
+      // memory ourselves (no JS-string-to-core-ABI helper on the caller
+      // side, by design - Web.md's canonical ABI is explicit about this).
+      {
+        const [ptr, len] = writeUtf8String(memory, realloc, "hello wasm");
+        // The result is Interface-typed: it comes back as a *handle
+        // index* into our own table (WriteCoercedInterface), not a JS
+        // value directly - lift it back out via identity_i32 + CanonLift
+        // to get the actual Text node and inspect it.
+        const funcType = new T.ComponentFuncType(
+            mkArr(borrowR, new T.ComponentType("string")), ownR);
+        const fn = T.ComponentCanonLower(
+            win.Document.prototype.createTextNode, funcType,
+            withTable(table));
+        T.getWebIDLTestNativeCallCount(); // drain any stray count first
+        const textHandle = fn(selfHandle, ptr, len);
+        is(T.getWebIDLTestNativeCallCount(), 1,
+           "createTextNode used the fused native call path");
+
+        const liftText = T.ComponentCanonLift(
+            instance.exports.identity_i32,
+            new T.ComponentFuncType(mkArr(s32), ownR),
+            withTable(table));
+        const textNode = liftText(textHandle);
+        // instanceof doesn't see through the SpecialPowers proxy (its
+        // default getPrototypeOf trap reflects off the proxy's own dummy
+        // target, not the real wrapped object) - unwrap first.
+        ok(SpecialPowers.unwrap(textNode) instanceof win.Text,
+           "createTextNode via wasm ABI returned a real Text node");
+        is(textNode.data, "hello wasm",
+           "the created Text node has the data we passed through linear memory");
+      }
+    }
+  }
+
+  addLoadEvent(function() {
+    SpecialPowers.pushPrefEnv({set: [["dom.expose_test_interfaces", true]]},
+                              go);
+  });
+  </script>
+</head>
+<body>
+<p id="display"></p>
+<div id="content" style="display: none">
+
+</div>
+<pre id="test">
+</pre>
+</body>
+</html>
