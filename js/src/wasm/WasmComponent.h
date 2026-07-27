@@ -43,6 +43,12 @@ namespace wasm {
 // subset of `sort`. Sorts that are valid for `externdesc` have the highest bit
 // set. Additionally, sorts that can be exported by core modules (core:sort)
 // have the second-highest bit set, and correspond to wasm::DefinitionKind.
+// The bracket tag on an import/export name: `[constructor]r`, `[method]r.m`,
+// `[static]r.m`, or an untagged plain name. Web.md's "Read the imports object"
+// resolves the tagged forms against the resource type's JS constructor, and
+// `canon lower` consults the tag again to decide how to invoke the callee.
+enum class ComponentNameKind : uint8_t { Plain, Constructor, Method, Static };
+
 enum class ComponentSort : uint8_t {
   Invalid = 0,
 
@@ -767,11 +773,14 @@ using JS::WebIDLStringKind;
 // `this` instead of being passed positionally; a WebIDL-typed callee instead
 // declares `self` as an ordinary leading interface param on its own
 // advertised overload.
+// A `[constructor]` import resolves to the interface object itself, which must
+// be invoked as a construct - a WebIDL constructor throws when merely called.
 [[nodiscard]] bool LoweredCall(JSContext* cx, JS::HandleObject callee,
                                const ComponentFuncType& funcType,
                                const JS::WebIDLOperationType& opType,
                                JS::WebIDLContext& abiCtx,
-                               const JS::CallArgs& args, bool bindThisReceiver);
+                               const JS::CallArgs& args,
+                               ComponentNameKind nameKind);
 
 // A hash policy for StronglyUniqueNameSet that hashes items based on their
 // trimmed, lowercased versions, but matches based on the full strongly-unique
@@ -1642,10 +1651,13 @@ class ComponentInstance {
   // during `init`, before any core module is instantiated.
   ComponentFuncVector componentFuncs_;
 
-  // 1:1 with componentFuncs_: whether the func was imported as a
-  // `[method]` (its first flat param is a `borrow<self>` that `canon lower`
-  // should bind as the callee's `this`, rather than pass positionally).
-  mozilla::Vector<bool, 0, SystemAllocPolicy> componentFuncBindsThis_;
+  // 1:1 with componentFuncs_: the bracket tag the func was imported under,
+  // which decides how `canon lower` invokes it. `[method]`'s first flat param
+  // is a `borrow<self>` to bind as the callee's `this` rather than pass
+  // positionally; `[constructor]` must be invoked as a construct, not a call.
+  // `[static]` and an untagged name both behave as Plain here.
+  mozilla::Vector<ComponentNameKind, 0, SystemAllocPolicy>
+      componentFuncNameKinds_;
 
   using LoweredNativeClosureVector =
       mozilla::Vector<mozilla::UniquePtr<LoweredNativeClosure>, 0,
@@ -1695,7 +1707,7 @@ class ComponentInstance {
 
   [[nodiscard]] bool resizeComponentFuncs(uint32_t length) {
     return componentFuncs_.resize(length) &&
-           componentFuncBindsThis_.resize(length);
+           componentFuncNameKinds_.resize(length);
   }
   void setComponentFunc(uint32_t funcIndex, JSObject* value) {
     componentFuncs_[funcIndex] = value;
@@ -1703,11 +1715,11 @@ class ComponentInstance {
   JSObject* componentFunc(uint32_t funcIndex) const {
     return componentFuncs_[funcIndex];
   }
-  void setComponentFuncBindsThis(uint32_t funcIndex, bool bindsThis) {
-    componentFuncBindsThis_[funcIndex] = bindsThis;
+  void setComponentFuncNameKind(uint32_t funcIndex, ComponentNameKind kind) {
+    componentFuncNameKinds_[funcIndex] = kind;
   }
-  bool componentFuncBindsThis(uint32_t funcIndex) const {
-    return componentFuncBindsThis_[funcIndex];
+  ComponentNameKind componentFuncNameKind(uint32_t funcIndex) const {
+    return componentFuncNameKinds_[funcIndex];
   }
 
   [[nodiscard]] bool resizeLoweredNativeClosures(uint32_t length) {

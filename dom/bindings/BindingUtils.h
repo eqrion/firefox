@@ -718,6 +718,13 @@ struct DOMInterfaceInfo {
   // namespace, which has no DOMInterfaceInfo at all). The returned pointer is
   // non-owning: it's interned forever by GetOrCreateWebIDLInterface's cache.
   JS::WebIDLInterface* (*mGetWebIDLInterface)();
+
+  // The constructor's WebIDL operation type(s) and native call entries, to
+  // attach to the interface object so a component `[constructor]` import can
+  // recover them (JS::GetWebIDLConstructorTypes / SelectNativeOverload both key
+  // off the interface object's jitinfo). Null for an interface with no
+  // constructor.
+  const JSJitInfo* mConstructorJitInfo;
 };
 
 struct LegacyFactoryFunction {
@@ -3618,11 +3625,21 @@ bool WriteWebIDLNativeString(JS::WebIDLContext& aCtx,
 bool ReadWebIDLNativeUTF8String(JS::WebIDLContext& aCtx,
                                 const JS::WasmScalarVal* aCoreParams,
                                 const JS::WebIDLCoerceStep& aStep,
-                                uint32_t aMemBase, nsACString& out);
+                                uint32_t aMemBase, nsACString& value);
 bool WriteWebIDLNativeUTF8String(JS::WebIDLContext& aCtx,
                                  const JS::WebIDLCoerceStep& aStep,
                                  uint32_t aMemBase, const nsACString& value,
                                  JS::WasmScalarVal* aResult);
+
+// Lowers `aValue` (the typed array a WebIDL getter handed back) into a
+// component `list<u8>`. See JS::WriteCoercedByteListFromBufferSource for why
+// this passes the object along rather than a data pointer. The read direction
+// is ReadWebIDLNativeByteArray, in TypedArray.h - it needs the typed-array
+// APIs, which this header deliberately doesn't pull in.
+bool WriteWebIDLNativeByteArray(JS::WebIDLContext& aCtx,
+                                const JS::WebIDLCoerceStep& aStep,
+                                uint32_t aMemBase, JS::Handle<JSObject*> aValue,
+                                JS::WasmScalarVal* aResult);
 
 #endif  // ENABLE_WASM_COMPONENTS
 

@@ -13751,6 +13751,44 @@ static bool WebIDLTestSetter_buildTypes(JSContext* cx,
       mozilla::Nothing());
 }
 
+// The `Uint8ClampedArray` WebIDL type shared by the byte-array fixtures.
+static bool WebIDLTestByteArrayType(JSContext* cx, JS::WebIDLType* out) {
+  if (!JS::WebIDLType::bufferSource(
+          JS::WebIDLBufferSourceKind::Uint8ClampedArray,
+          JS::WebIDLTypeFlag_None, out)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  return true;
+}
+
+// foo(Uint8ClampedArray a) -> long, and foo(long n) -> Uint8ClampedArray, with
+// the same schemas as the webidlTestNativeByteArray* fixtures below but *no*
+// native overload entries - so a component call falls back to the dynamic
+// interpreter walk, which is what exercises WalkBufferSourceStep and the
+// BufferSource arm of WriteResultValueAtStep.
+static bool WebIDLTestByteArraySumDynamic_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType bufType;
+  if (!WebIDLTestByteArrayType(cx, &bufType)) {
+    return false;
+  }
+  return AppendSimpleOperationType(
+      cx, out, {bufType},
+      mozilla::Some(JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long)));
+}
+
+static bool WebIDLTestByteArrayResultDynamic_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  JS::WebIDLType bufType;
+  if (!WebIDLTestByteArrayType(cx, &bufType)) {
+    return false;
+  }
+  return AppendSimpleOperationType(
+      cx, out, {JS::WebIDLType::primitive(JS::WebIDLTypeKind::Long)},
+      mozilla::Some(bufType));
+}
+
 // new WebIDLTestResource(DOMString) -> WebIDLTestResource
 static bool WebIDLTestConstructor_buildTypes(
     JSContext* cx, JS::WebIDLOperationTypeVector& out) {
@@ -13788,6 +13826,8 @@ static bool WebIDLTestConstructor_buildTypes(
 
 WEBIDL_TEST_METHODINFO(WebIDLTestOptionalDefault, Method);
 WEBIDL_TEST_METHODINFO(WebIDLTestVariadic, Method);
+WEBIDL_TEST_METHODINFO(WebIDLTestByteArraySumDynamic, Method);
+WEBIDL_TEST_METHODINFO(WebIDLTestByteArrayResultDynamic, Method);
 WEBIDL_TEST_METHODINFO(WebIDLTestGetter, Getter);
 WEBIDL_TEST_METHODINFO(WebIDLTestSetter, Setter);
 WEBIDL_TEST_METHODINFO(WebIDLTestConstructor, StaticMethod);
@@ -14275,6 +14315,158 @@ static const JS::WebIDLNativeCall
     };
 
 WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeStringResult, Method);
+
+// foo(Uint8ClampedArray a) -> long : the sum of a's bytes. Exercises the
+// param direction of the component `list<u8>` <-> byte-view bridge: the
+// declared param is a buffer source, so BuildCoerceStep produces a
+// BufferSource step over the list's element buffer.
+static bool WebIDLTestNativeByteArraySum_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  return WebIDLTestByteArraySumDynamic_buildTypes(cx, out);
+}
+
+static bool WebIDLTestNativeByteArraySum_native0(
+    const wasm::CallAdapter* adapterPtr, JS::WebIDLContext* abiPtr,
+    const JS::WasmScalarVal* paramsPtr, uint32_t resultMemBase,
+    JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  uint32_t ptr, len;
+  if (!JS::ReadCoercedByteListRange(abi, coreParams, adapter.paramSteps[0].step,
+                                    0, &ptr, &len)) {
+    return false;
+  }
+  // Reads the bytes in place rather than materializing a typed array: this
+  // fixture is testing the primitive, not Gecko's typed-array construction.
+  // ReadCoercedByteListRange already bounds-checked [ptr, ptr+len).
+  uint8_t* base;
+  size_t memLen;
+  if (!abi.memoryBytes(&base, &memLen)) {
+    return false;
+  }
+  int32_t sum = 0;
+  for (uint32_t i = 0; i < len; i++) {
+    sum += base[ptr + i];
+  }
+  *resultsPtr = JS::WasmScalarVal::fromI32(uint32_t(sum));
+  return true;
+}
+
+static bool WebIDLTestNativeByteArraySum_native(JSContext* cx, unsigned argc,
+                                                JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (args.length() < 1 || !args[0].isObject()) {
+    JS_ReportErrorASCII(cx,
+                        "webidlTestNativeByteArraySum: expected a typed array");
+    return false;
+  }
+  RootedObject obj(cx, &args[0].toObject());
+  JS::ArrayBufferView view = JS::ArrayBufferView::unwrap(obj);
+  if (!view) {
+    JS_ReportErrorASCII(cx,
+                        "webidlTestNativeByteArraySum: expected a typed array");
+    return false;
+  }
+  int32_t sum = 0;
+  {
+    JS::AutoCheckCannotGC nogc;
+    bool isShared;
+    for (uint8_t b : view.getData(&isShared, nogc)) {
+      sum += b;
+    }
+  }
+  args.rval().setInt32(sum);
+  return true;
+}
+
+static const JS::WebIDLNativeCall
+    WebIDLTestNativeByteArraySum_overloadEntries[] = {
+        WebIDLTestNativeByteArraySum_native0,
+    };
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeByteArraySum, Method);
+
+// foo(long n) -> Uint8ClampedArray : bytes [0, 1, ..., n-1]. Exercises the
+// result direction: the component result is a `list<u8>`, so BuildResultStep
+// makes a Sequence step, and the buffer-source-ness is on the WebIDL side.
+static bool WebIDLTestNativeByteArrayResult_buildTypes(
+    JSContext* cx, JS::WebIDLOperationTypeVector& out) {
+  return WebIDLTestByteArrayResultDynamic_buildTypes(cx, out);
+}
+
+static bool WebIDLTestNativeByteArrayResult_native0(
+    const wasm::CallAdapter* adapterPtr, JS::WebIDLContext* abiPtr,
+    const JS::WasmScalarVal* paramsPtr, uint32_t resultMemBase,
+    JS::WasmScalarVal* resultsPtr) {
+  const wasm::CallAdapter& adapter = *adapterPtr;
+  JS::WebIDLContext& abi = *abiPtr;
+  const JS::WasmScalarVal* coreParams = paramsPtr;
+  MOZ_ASSERT(!adapter.isTrap);
+  MOZ_ASSERT(adapter.paramSteps.length() == 1);
+  MOZ_ASSERT(adapter.resultStep);
+  int32_t n;
+  if (!JS::ReadCoercedInt32(abi, coreParams, adapter.paramSteps[0].step, 0,
+                            &n)) {
+    return false;
+  }
+  if (n < 0) {
+    JS_ReportErrorASCII(abi.cx(), "webidlTestNativeByteArrayResult: negative");
+    return false;
+  }
+  RootedObject arr(abi.cx(), JS_NewUint8ClampedArray(abi.cx(), size_t(n)));
+  if (!arr) {
+    return false;
+  }
+  {
+    JS::AutoCheckCannotGC nogc;
+    bool isShared;
+    mozilla::Span<uint8_t> data =
+        JS::Uint8ClampedArray::fromObject(arr).getData(&isShared, nogc);
+    for (int32_t i = 0; i < n; i++) {
+      data[i] = uint8_t(i);
+    }
+  }
+  return JS::WriteCoercedByteListFromBufferSource(
+      abi, *adapter.resultStep, resultMemBase, arr, resultsPtr);
+}
+
+static bool WebIDLTestNativeByteArrayResult_native(JSContext* cx, unsigned argc,
+                                                   JS::Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  double n;
+  if (!JS::ToNumber(cx, args.get(0), &n)) {
+    return false;
+  }
+  if (n < 0) {
+    JS_ReportErrorASCII(cx, "webidlTestNativeByteArrayResult: negative");
+    return false;
+  }
+  RootedObject arr(cx, JS_NewUint8ClampedArray(cx, size_t(n)));
+  if (!arr) {
+    return false;
+  }
+  {
+    JS::AutoCheckCannotGC nogc;
+    bool isShared;
+    mozilla::Span<uint8_t> data =
+        JS::Uint8ClampedArray::fromObject(arr).getData(&isShared, nogc);
+    for (size_t i = 0; i < data.Length(); i++) {
+      data[i] = uint8_t(i);
+    }
+  }
+  args.rval().setObject(*arr);
+  return true;
+}
+
+static const JS::WebIDLNativeCall
+    WebIDLTestNativeByteArrayResult_overloadEntries[] = {
+        WebIDLTestNativeByteArrayResult_native0,
+    };
+
+WEBIDL_NATIVE_METHODINFO(WebIDLTestNativeByteArrayResult, Method);
 
 // foo(enum) -> long : the target label's own index
 static bool WebIDLTestNativeEnum_buildTypes(
@@ -15364,6 +15556,19 @@ static const JSFunctionSpec webIDLTestFunctions[] = {
               &WebIDLTestNativeStringResult_methodinfo.base.base, 1, 0),
     JS_FNINFO("webidlTestNativeEnum", WebIDLTestNativeEnum_native,
               &WebIDLTestNativeEnum_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeByteArraySum",
+              WebIDLTestNativeByteArraySum_native,
+              &WebIDLTestNativeByteArraySum_methodinfo.base.base, 1, 0),
+    JS_FNINFO("webidlTestNativeByteArrayResult",
+              WebIDLTestNativeByteArrayResult_native,
+              &WebIDLTestNativeByteArrayResult_methodinfo.base.base, 1, 0),
+    // Same schemas, no native entries: forces the dynamic interpreter walk.
+    JS_FNINFO("webidlTestByteArraySumDynamic",
+              WebIDLTestNativeByteArraySum_native,
+              &WebIDLTestByteArraySumDynamic_methodinfo.base, 1, 0),
+    JS_FNINFO("webidlTestByteArrayResultDynamic",
+              WebIDLTestNativeByteArrayResult_native,
+              &WebIDLTestByteArrayResultDynamic_methodinfo.base, 1, 0),
     JS_FNINFO("webidlTestNativeListSum", WebIDLTestNativeListSum_native,
               &WebIDLTestNativeListSum_methodinfo.base.base, 1, 0),
     JS_FNINFO("webidlTestNativeRecordSum", WebIDLTestNativeRecordSum_native,

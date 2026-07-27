@@ -1048,9 +1048,16 @@ class CGInterfaceObjectInfo(CGThing):
         if self.descriptor.interface.ctor():
             ctorname = CONSTRUCT_HOOK_NAME
             constructorArgs = methodLength(self.descriptor.interface.ctor())
+            ctorJitInfo = CGConstructorJITInfo(self.descriptor)
+            ctorJitInfoStmts = ctorJitInfo.define()
+            # A JSWebIDLNativeMethodJitInfo composes two structs onto its
+            # JSJitInfo; mConstructorJitInfo wants the innermost.
+            ctorJitInfoRef = "&%s.base.base" % ctorJitInfo.infoName
         else:
             ctorname = "ThrowingConstructor"
             constructorArgs = 0
+            ctorJitInfoStmts = ""
+            ctorJitInfoRef = "nullptr"
         constructorName = self.descriptor.interface.getClassName()
         wantsIsInstance = self.descriptor.interface.hasInterfacePrototypeObject()
 
@@ -1090,6 +1097,7 @@ class CGInterfaceObjectInfo(CGThing):
               return iface.get();
             }
 
+            $*{ctorJitInfoStmts}
             static const DOMInterfaceInfo sInterfaceObjectInfo = {
               { ${ctorname}, ${hooks} },
               ${protoHandleGetter},
@@ -1099,10 +1107,13 @@ class CGInterfaceObjectInfo(CGThing):
               ${constructorArgs},
               "${constructorName}",
               GetWebIDLInterface_${constructorName},
+              ${ctorJitInfoRef},
             };
             """,
             webIDLInterfaceStmts=webIDLInterfaceStmts,
             setNativeOpsStmt=setNativeOpsStmt,
+            ctorJitInfoStmts=ctorJitInfoStmts,
+            ctorJitInfoRef=ctorJitInfoRef,
             ctorname=ctorname,
             hooks=NativePropertyHooks(self.descriptor),
             protoHandleGetter=protoHandleGetter,
@@ -12336,6 +12347,18 @@ class CGMemberJITInfo(CGThing):
                 step=stepExpr,
                 enumName=enumName,
             )
+        if self.byteArrayTypeName(t) is not None:
+            return fill(
+                """
+                ${typeName} ${argVar};
+                if (!mozilla::dom::ReadWebIDLNativeByteArray(ctx, coreParams, ${step}, 0, ${argVar})) {
+                  return false;
+                }
+                """,
+                typeName=self.byteArrayTypeName(t),
+                argVar=argVar,
+                step=stepExpr,
+            )
         if self.nativeInterfaceTypeName(t) is not None:
             typeName = self.nativeInterfaceTypeName(t)
             return fill(
@@ -12483,6 +12506,20 @@ class CGMemberJITInfo(CGThing):
             )
         return None
 
+    def byteArrayTypeName(self, t):
+        """The `mozilla::dom` typed-array wrapper for `t` if it is a
+        byte-typed buffer source, else None. Only these bridge to a component
+        `list<u8>`, as one bulk memcpy - see
+        JS::WebIDLBufferSourceKindIsBytes. A plain ArrayBuffer is excluded
+        here even though the engine accepts one: it has no
+        mozilla::dom::TypedArray wrapper with the Create/Init shape the
+        readers below use."""
+        if t.nullable() or not t.isSpiderMonkeyInterface():
+            return None
+        if not t.isTypedArray() or t.name not in ("Uint8Array", "Uint8ClampedArray"):
+            return None
+        return "mozilla::dom::%s" % t.name
+
     def nativeInterfaceTypeName(self, t):
         """The native C++ type for the Gecko interface type `t`, or None if
         `t` isn't a plain same-process Gecko interface (WindowProxy,
@@ -12549,6 +12586,19 @@ class CGMemberJITInfo(CGThing):
                 }
                 """,
                 writer=writer,
+                resultVar=resultVar,
+            )
+        if self.byteArrayTypeName(returnType) is not None:
+            # A SpiderMonkey-interface return is declared JS::Rooted<JSObject*>
+            # by getRetvalDeclarationForType, so this is already a rooted
+            # handle - which is what the lowering needs, since allocating the
+            # component-side buffer can GC.
+            return fill(
+                """
+                if (!mozilla::dom::WriteWebIDLNativeByteArray(ctx, *adapter.resultStep, resultMemBase, ${resultVar}, resultsPtr)) {
+                  return false;
+                }
+                """,
                 resultVar=resultVar,
             )
         if self.nativeInterfaceTypeName(returnType) is not None:
@@ -12652,13 +12702,12 @@ class CGMemberJITInfo(CGThing):
         `argVar` for an *optional* WebIDL parameter `arg`. Returns None if
         `arg`'s type/default isn't one of the shapes this hack supports.
 
-        This is a quick hack, not real optional-argument support: it never
-        attempts to read or coerce an actual value for this param - only
-        the value to use when the component call site omits it
-        (ParamStep::Source::Default). If the call site actually supplies a
-        value (::Positional), it traps rather than mis-handle it. Fine as
-        long as nothing needs a real value here yet; if that changes, this
-        needs to actually read+coerce the Positional case like a normal arg.
+        Handles both sources. `ParamStep::Source::Default` uses the declared
+        default (or an unset `Optional<T>`); `::Positional` reads and coerces
+        the supplied value exactly like a required arg, via
+        nativeOptionalArgPositionalStmts. That reader only covers the types
+        whose `Optional<T>` *owns* its value, so a shape it can't install
+        still traps rather than mis-handle the value - see its docstring.
 
         Which "omitted" value/declared type to use mirrors
         IDLArgument.canHaveMissingValue in the WebIDL parser (`optional and
@@ -12677,17 +12726,67 @@ class CGMemberJITInfo(CGThing):
             declStmts = self.nativeOptionalArgUnsetStmts(arg.type, argVar)
         if declStmts is None:
             return None
+        positionalStmts = self.nativeOptionalArgPositionalStmts(
+            arg, argVar, paramIndex
+        )
+        if positionalStmts is None:
+            return fill(
+                """
+                if (adapter.paramSteps[${i}].source == JS::WebIDLParamStep::Source::Positional) {
+                  JS_ReportErrorASCII(ctx.cx(), "optional argument not yet supported by native call");
+                  return false;
+                }
+                $*{declStmts}
+                """,
+                i=paramIndex,
+                declStmts=declStmts,
+            )
         return fill(
             """
-            if (adapter.paramSteps[${i}].source == JS::WebIDLParamStep::Source::Positional) {
-              JS_ReportErrorASCII(ctx.cx(), "optional argument not yet supported by native call");
-              return false;
-            }
             $*{declStmts}
+            if (adapter.paramSteps[${i}].source == JS::WebIDLParamStep::Source::Positional) {
+            $*{positionalStmts}
+            }
             """,
             i=paramIndex,
             declStmts=declStmts,
+            positionalStmts=indent(positionalStmts),
         )
+
+    def nativeOptionalArgPositionalStmts(self, arg, argVar, paramIndex):
+        """Reads an optional param the component call site actually supplied,
+        installing it into the already-declared `argVar`. Returns None if
+        `arg`'s type isn't one this can install, leaving the caller to keep
+        trapping on the Positional case.
+
+        Restricted to types whose `Optional<T>` owns its value (scalars and
+        enums, via Optional_base::Construct). Notably *not* strings:
+        `Optional<nsAString>` only holds a borrowed pointer (see
+        BindingDeclarations.h), so the backing string would have to outlive
+        this block, but nativeArgReadStmts declares its local inline - it
+        would dangle. Unions are excluded for the same reason the plain
+        union path is limited: only one arm is actually read.
+
+        An arg *with* a declared default has the plain (non-Optional) type,
+        so installing is a plain assignment; one without is an
+        `Optional<T>`, so it's a Construct."""
+        t = arg.type
+        if t.nullable() or t.isUnion():
+            return None
+        if not (t.isBoolean() or t.isInteger() or t.isFloat() or t.isEnum()):
+            return None
+        tempVar = "%s_positional" % argVar
+        readStmts = self.nativeArgReadStmts(
+            t, tempVar, "adapter.paramSteps[%d].step" % paramIndex
+        )
+        if readStmts is None:
+            return None
+        install = (
+            "%s = %s;\n" % (argVar, tempVar)
+            if arg.defaultValue is not None
+            else "%s.Construct(%s);\n" % (argVar, tempVar)
+        )
+        return readStmts + install
 
     def nativeOptionalArgUnsetStmts(self, t, argVar):
         """Declares `argVar` as an unset Optional<T>, for an omitted
@@ -12860,9 +12959,14 @@ class CGMemberJITInfo(CGThing):
         extendedAttributes = self.descriptor.getExtendedAttributes(
             self.member, getter=(opType == "Getter"), setter=(opType == "Setter")
         )
+        # Same order CGPerSignatureCall uses: the GlobalObject (statics only)
+        # first, then cx. A static can still want cx - needCx returns true for
+        # [ImplicitJSContext] regardless of staticness - so this must not be
+        # an either/or, or such a member would generate a call missing an
+        # argument.
         argsPre = ["webIDLGlobal"] if isStatic else []
-        if not isStatic and needCx(returnType, args, extendedAttributes, True, isStatic):
-            argsPre = ["cx"] + argsPre
+        if needCx(returnType, args, extendedAttributes, True, isStatic):
+            argsPre.append("cx")
         call = CGCallGenerator(
             "needsErrorResult" in extendedAttributes,
             needsCallerType(self.member),
@@ -13089,10 +13193,18 @@ class CGMemberJITInfo(CGThing):
         if t.isSpiderMonkeyInterface():
             if t.isArrayBuffer():
                 kind = "ArrayBuffer"
+            elif t.isTypedArray() and t.name in ("Uint8Array", "Uint8ClampedArray"):
+                # No per-kind predicate exists on IDLBuiltinType; the rest of
+                # Codegen identifies a SpiderMonkey interface by name too (see
+                # e.g. getUnionTypeTemplateVars).
+                kind = t.name
             else:
-                # ArrayBufferView and the specific typed-array kinds all
-                # collapse to ArrayBufferView - WebIDLBufferSourceKind only
-                # distinguishes ArrayBuffer/ArrayBufferView/Uint8Array.
+                # The remaining typed-array kinds, DataView and a plain
+                # ArrayBufferView all collapse to ArrayBufferView. Only the
+                # byte-typed kinds above are distinguished, because only they
+                # can bridge to a component `list<u8>` (see
+                # JS::WebIDLBufferSourceKindIsBytes); everything else has no
+                # statically known element type and traps in BuildCoerceStep.
                 kind = "ArrayBufferView"
             flags = []
             if t.hasAllowShared():
@@ -14071,6 +14183,65 @@ class CGMemberJITInfo(CGThing):
         if type == existingType:
             return existingType
         return "%s | %s" % (existingType, type)
+
+
+class CGConstructorJITInfo(CGMemberJITInfo):
+    """The JITInfo for an interface's constructor.
+
+    Unlike every other jitinfo here this one doesn't describe a prototype
+    property - it hangs off the interface object itself (a JSFunction), reached
+    via DOMInterfaceInfo::mConstructorJitInfo. That is what lets a component
+    `[constructor]` import recover the constructor's WebIDL operation type(s)
+    and native call entries: JS::GetWebIDLConstructorTypes and
+    js::wasm::SelectNativeOverload both key off the interface object's jitinfo.
+
+    A constructor's IDLConstructor is an IDLMethod that is static and returns
+    the interface, so the inherited machinery mostly applies unchanged; only the
+    naming and the opType differ.
+    """
+
+    infoName = "sConstructorJitInfo"
+
+    def __init__(self, descriptor):
+        CGMemberJITInfo.__init__(self, descriptor, descriptor.interface.ctor())
+
+    def memberSuffix(self, opType):
+        return "Constructor"
+
+    def webIDLOperationTypeSignatures(self, opType):
+        assert opType == "StaticMethod"
+        return self.member.signatures()
+
+    def buildNativeCallEntryFunction(self, funcName, opType, returnType, args):
+        # An [HTMLConstructor] doesn't call a C++ constructor at all - it
+        # derives everything from new.target (see CGClassConstructor) - so there
+        # is nothing for CGCallGenerator to call.
+        if self.member.isHTMLConstructor():
+            return None
+        return CGMemberJITInfo.buildNativeCallEntryFunction(
+            self, funcName, opType, returnType, args
+        )
+
+    def define(self):
+        # No opName: the interface object's own native is the shared
+        # InterfaceObjectJSNative, and nothing reads this union slot for a
+        # StaticMethod - the JIT's DOM-call paths all require Method/Getter/
+        # Setter. Not movable or eliminatable either, since constructing is
+        # observable.
+        return self.defineJitInfo(
+            self.infoName,
+            "nullptr",
+            "StaticMethod",
+            False,
+            False,
+            False,
+            "AliasEverything",
+            False,
+            False,
+            None,
+            [s[0] for s in self.member.signatures()],
+            None,
+        )
 
 
 class CGStaticMethodJitinfo(CGGeneric):

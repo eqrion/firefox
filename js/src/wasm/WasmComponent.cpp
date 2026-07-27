@@ -30,11 +30,13 @@
 #  include "jsfriendapi.h"  // js::NewFunctionWithReserved, js::SetFunctionNativeReserved
 
 #  include "js/Array.h"                 // JS::NewArrayObject
+#  include "js/ArrayBuffer.h"           // JS::NewArrayBuffer, JS::ArrayBuffer
 #  include "js/BigInt.h"                // JS::BigInt::createFromInt64/Uint64
 #  include "js/CallAndConstruct.h"      // JS::Call
 #  include "js/CharacterEncoding.h"     // JS::UTF8Chars
 #  include "js/Conversions.h"           // JS::ToUint32
 #  include "js/experimental/JitInfo.h"  // JSJitInfo, JSWebIDLMethodJitInfo
+#  include "js/experimental/TypedData.h"  // JS_NewUint8{,Clamped}Array, JS::Uint8{,Clamped}Array
 #  include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #  include "js/Printer.h"               // js::QuoteString
 #  include "js/Printf.h"                // JS_smprintf
@@ -160,8 +162,6 @@ static bool NameHasAttribute(mozilla::Span<const char> name) {
   // The name should already be well-formed from parse time.
   return name.Length() == 0 || name.data()[0] == '[';
 }
-
-enum class ComponentNameKind { Plain, Constructor, Method, Static };
 
 // Splits a raw component name into its bracket-tag classification, for
 // resolving `[constructor]`/`[method]`/`[static]` imports against a
@@ -3704,7 +3704,7 @@ static bool WasmComponentLoweredJS(JSContext* cx, unsigned argc, Value* vp) {
   // }
 
   RootedObject callee(cx, instance.componentFunc(loweredFuncIndex));
-  bool bindsThis = instance.componentFuncBindsThis(loweredFuncIndex);
+  ComponentNameKind nameKind = instance.componentFuncNameKind(loweredFuncIndex);
   ComponentType funcTypeVal =
       instance.component()->getTypeForFunc(loweredFuncIndex);
   const ComponentFuncType& funcType = funcTypeVal.asFunc();
@@ -3738,7 +3738,7 @@ static bool WasmComponentLoweredJS(JSContext* cx, unsigned argc, Value* vp) {
   }
   JS::WebIDLContext abiCtx(cx, memory, memoryBase, realloc,
                            &instance.handles());
-  return LoweredCall(cx, callee, funcType, opType, abiCtx, args, bindsThis);
+  return LoweredCall(cx, callee, funcType, opType, abiCtx, args, nameKind);
 }
 
 static JSFunction* BuildLoweredJSCoreFunc(
@@ -3785,6 +3785,16 @@ static JSFunction* BuildLoweredJSCoreFunc(
   ComponentType funcTypeVal =
       instance.component()->getTypeForFunc(loweredFuncIndex);
   const ComponentFuncType& funcType = funcTypeVal.asFunc();
+
+  // Logged before the decision so the "native call path: ..." line that
+  // SelectNativeOverload emits next can be attributed to an import by name -
+  // otherwise a page with several imports produces an unattributable list.
+  if (mozilla::Maybe<mozilla::Span<const char>> importName =
+          ComponentFuncImportNameForLog(*instance.component(),
+                                        loweredFuncIndex)) {
+    JS_LOG(wasmComponents, Info, "canon lower resolve: import %.*s",
+           int(importName->Length()), importName->Elements());
+  }
 
   bool eligible = false;
   JS::WebIDLNativeCall entry = nullptr;
@@ -4154,6 +4164,15 @@ static JS::ResourceInterfaceFromValueFn
 static size_t gNumResourceInterfaceFromValueHooks = 0;
 
 void JS::AddResourceInterfaceFromValueHook(ResourceInterfaceFromValueFn fn) {
+  // Idempotent: an embedder may run its registration more than once per
+  // process (js::DefineTestingFunctions does, once per global), and since
+  // ResourceInterfaceFromValue just tries every hook in turn, a duplicate
+  // would only burn a slot - and, with a table this small, overflow it.
+  for (size_t i = 0; i < gNumResourceInterfaceFromValueHooks; i++) {
+    if (gResourceInterfaceFromValueHooks[i] == fn) {
+      return;
+    }
+  }
   MOZ_RELEASE_ASSERT(gNumResourceInterfaceFromValueHooks <
                      MaxResourceInterfaceFromValueHooks);
   gResourceInterfaceFromValueHooks[gNumResourceInterfaceFromValueHooks++] = fn;
@@ -4297,9 +4316,11 @@ static JS::WebIDLInterface* ResourceInterfaceFromValue(JSContext* cx,
     JSContext* cx, HandleObject importObj, const CacheableName& name,
     const ComponentFuncType& funcType,
     const ResourceConstructorTable& resourceConstructors,
-    MutableHandleValue importVal, UniqueChars* accessPath, bool* bindsThis) {
+    MutableHandleValue importVal, UniqueChars* accessPath,
+    ComponentNameKind* nameKind) {
   ParsedComponentName parsed = ParseComponentName(name.utf8Bytes());
-  *bindsThis = parsed.kind == ComponentNameKind::Method;
+  *nameKind = parsed.kind;
+  bool bindsThis = parsed.kind == ComponentNameKind::Method;
 
   RootedValue ctor(cx);
   bool haveCtor = parsed.kind != ComponentNameKind::Plain &&
@@ -4366,7 +4387,7 @@ static JS::WebIDLInterface* ResourceInterfaceFromValue(JSContext* cx,
       return false;
     }
     RootedId memberId(cx, AtomToId(memberAtom));
-    if (!ReadComponentImportProperty(cx, holder, memberId, funcType, *bindsThis,
+    if (!ReadComponentImportProperty(cx, holder, memberId, funcType, bindsThis,
                                      importVal)) {
       return false;
     }
@@ -4386,7 +4407,7 @@ static JS::WebIDLInterface* ResourceInterfaceFromValue(JSContext* cx,
     return false;
   }
   RootedId id(cx, AtomToId(atom));
-  if (!ReadComponentImportProperty(cx, importObj, id, funcType, *bindsThis,
+  if (!ReadComponentImportProperty(cx, importObj, id, funcType, bindsThis,
                                    importVal)) {
     return false;
   }
@@ -4448,10 +4469,10 @@ bool ComponentInstance::init(JSContext* cx, HandleObject importObj) {
         }
         UniqueChars accessPath;
         RootedValue importVal(cx);
-        bool bindsThis;
+        ComponentNameKind nameKind;
         if (!ReadComponentFuncImport(cx, importObj, imp.name(), funcType,
                                      resourceConstructors, &importVal,
-                                     &accessPath, &bindsThis)) {
+                                     &accessPath, &nameKind)) {
           return false;
         }
         if (!accessPath) {
@@ -4462,7 +4483,7 @@ bool ComponentInstance::init(JSContext* cx, HandleObject importObj) {
           return ThrowBadComponentImportType(cx, accessPath.get(), "Function");
         }
         setComponentFunc(funcIndex, &importVal.toObject());
-        setComponentFuncBindsThis(funcIndex, bindsThis);
+        setComponentFuncNameKind(funcIndex, nameKind);
       } break;
       case ComponentItem::ItemKind::Export: {
         // The re-exported func's index is always less than this Export's own
@@ -6553,14 +6574,23 @@ static bool BuildCoerceStep(JSContext* cx, const ComponentType& componentType,
       return true;
     }
 
-    case JS::WebIDLTypeKind::BufferSource:
-      if (srcKind != ComponentTypeKind::List) {
+    case JS::WebIDLTypeKind::BufferSource: {
+      // Only a component `list<u8>` bridges to a buffer source, and only to a
+      // byte-typed one: the conversion is a bulk memcpy of the list's element
+      // buffer, which needs both sides to agree that an element is one byte.
+      // A generic `ArrayBufferView` target has no statically known element
+      // type, so it traps like any other unsupported shape.
+      if (srcKind != ComponentTypeKind::List ||
+          !JS::WebIDLBufferSourceKindIsBytes(target.bufferSourceKind()) ||
+          componentType.asList().kind() != ComponentTypeKind::U8) {
         out->kind = StepKind::Trap;
         return true;
       }
       out->kind = StepKind::BufferSource;
       out->bufferKind = target.bufferSourceKind();
+      out->access.elemStride = 1;
       return true;
+    }
 
     // A WebIDL record<K,V> target is underspecified for a fixed-shape component
     // source and not modeled, same as Promise/ReadableStream/Callback.
@@ -7569,6 +7599,82 @@ static bool WalkInterfaceStep(CoerceWalkContext& wc, const CoerceStep& step,
   return true;
 }
 
+// Creates a fresh byte-typed buffer source holding a copy of the `len` bytes
+// at `ptr` in linear memory. Copies rather than aliasing: the resulting object
+// outlives this call, while linear memory can later be grown, moved or
+// detached.
+static bool NewByteBufferSourceFromMemory(JSContext* cx, WebIDLContext& abi,
+                                          JS::WebIDLBufferSourceKind kind,
+                                          uint32_t ptr, uint32_t len,
+                                          JS::MutableHandleObject out) {
+  MOZ_ASSERT(JS::WebIDLBufferSourceKindIsBytes(kind));
+  RootedObject obj(cx);
+  switch (kind) {
+    case JS::WebIDLBufferSourceKind::ArrayBuffer:
+      obj = JS::NewArrayBuffer(cx, len);
+      break;
+    case JS::WebIDLBufferSourceKind::Uint8Array:
+      obj = JS_NewUint8Array(cx, len);
+      break;
+    case JS::WebIDLBufferSourceKind::Uint8ClampedArray:
+      obj = JS_NewUint8ClampedArray(cx, len);
+      break;
+    default:
+      MOZ_CRASH("not a byte-typed buffer source kind");
+  }
+  if (!obj) {
+    return false;
+  }
+  if (len > 0) {
+    // Fetched only after the allocation above, which can GC and move linear
+    // memory.
+    uint8_t* base;
+    size_t memLen;
+    if (!abi.memoryBytes(&base, &memLen)) {
+      return false;
+    }
+    if (uint64_t(ptr) + len > memLen) {
+      return ReportComponentTrap(cx, "list<u8> out of bounds of memory");
+    }
+    JS::AutoCheckCannotGC nogc;
+    bool isShared;
+    mozilla::Span<uint8_t> dest;
+    switch (kind) {
+      case JS::WebIDLBufferSourceKind::ArrayBuffer:
+        dest = JS::ArrayBuffer::fromObject(obj).getData(&isShared, nogc);
+        break;
+      case JS::WebIDLBufferSourceKind::Uint8Array:
+        dest = JS::Uint8Array::fromObject(obj).getData(&isShared, nogc);
+        break;
+      case JS::WebIDLBufferSourceKind::Uint8ClampedArray:
+        dest = JS::Uint8ClampedArray::fromObject(obj).getData(&isShared, nogc);
+        break;
+      default:
+        MOZ_CRASH("not a byte-typed buffer source kind");
+    }
+    MOZ_RELEASE_ASSERT(dest.Length() == len);
+    memcpy(dest.Elements(), base + ptr, len);
+  }
+  out.set(obj);
+  return true;
+}
+
+static bool WalkBufferSourceStep(CoerceWalkContext& wc, const CoerceStep& step,
+                                 uint32_t memBase, JS::MutableHandleValue out) {
+  uint32_t ptr, len;
+  if (!JS::ReadCoercedByteListRange(wc.abi, wc.coreParams, step, memBase, &ptr,
+                                    &len)) {
+    return false;
+  }
+  RootedObject obj(wc.cx);
+  if (!NewByteBufferSourceFromMemory(wc.cx, wc.abi, step.bufferKind, ptr, len,
+                                     &obj)) {
+    return false;
+  }
+  out.setObject(*obj);
+  return true;
+}
+
 static bool WalkSequenceStep(CoerceWalkContext& wc, const CoerceStep& step,
                              uint32_t memBase, JS::MutableHandleValue out) {
   uint32_t ptr, len;
@@ -7852,9 +7958,7 @@ static bool WalkCoerceStepToJS(CoerceWalkContext& wc, const CoerceStep& step,
       return WalkGenericStep(wc, step, memBase, out);
 
     case StepKind::BufferSource:
-      return ReportComponentTrap(wc.cx,
-                                 "BufferSource coercion not yet implemented by "
-                                 "the dynamic interpreter");
+      return WalkBufferSourceStep(wc, step, memBase, out);
 
     default:
       MOZ_CRASH("unhandled StepKind in WalkCoerceStepToJS");
@@ -8003,6 +8107,14 @@ static bool WriteResultValueAtStep(JSContext* cx, WebIDLContext& abi,
                                      result);
   }
   if (step.kind == StepKind::Sequence) {
+    // A `list<u8>` component result canonicalizes to sequence<octet>, so the
+    // step is a Sequence either way - but when the operation's declared return
+    // type is a byte-typed buffer source, the value is a typed array, not a
+    // sequence, and the whole thing lowers as one bulk copy.
+    if (value.get().type().kind() == JS::WebIDLTypeKind::BufferSource) {
+      return JS::WriteCoercedByteListFromBufferSource(
+          abi, step, memBase, value.get().asObject(), result);
+    }
     const JS::WebIDLValueVector& elements =
         value.get().data()->asSequence().elements;
     uint32_t elemPtr;
@@ -8236,6 +8348,30 @@ bool JS::ReadCoercedListHeader(WebIDLContext& ctx,
   MOZ_ASSERT(step.kind == StepKind::Sequence);
   CoerceWalkContext wc{ctx.cx(), ctx, coreParams};
   return ReadRawPtrLen(wc, step, memBase, outElemPtr, outLen);
+}
+
+bool JS::ReadCoercedByteListRange(WebIDLContext& ctx,
+                                  const WasmScalarVal* coreParams,
+                                  const WebIDLCoerceStep& step,
+                                  uint32_t memBase, uint32_t* outPtr,
+                                  uint32_t* outLen) {
+  MOZ_ASSERT(step.kind == StepKind::BufferSource);
+  MOZ_ASSERT(step.access.elemStride == 1);
+  CoerceWalkContext wc{ctx.cx(), ctx, coreParams};
+  if (!ReadRawPtrLen(wc, step, memBase, outPtr, outLen)) {
+    return false;
+  }
+  // The range must be wholly inside linear memory before anyone reads it: a
+  // (ptr,len) header comes straight from the guest and is otherwise unchecked.
+  uint8_t* base;
+  size_t memLen;
+  if (!ctx.memoryBytes(&base, &memLen)) {
+    return false;
+  }
+  if (uint64_t(*outPtr) + *outLen > memLen) {
+    return ReportComponentTrap(ctx.cx(), "list<u8> out of bounds of memory");
+  }
+  return true;
 }
 
 bool JS::ReadCoercedInterface(WebIDLContext& ctx,
@@ -8612,6 +8748,72 @@ bool JS::WriteCoercedListHeader(WebIDLContext& ctx,
     *result = WasmScalarVal::fromI32(headerPtr);
   }
   *outElemPtr = elemPtr;
+  return true;
+}
+
+bool JS::WriteCoercedByteListFromBufferSource(WebIDLContext& ctx,
+                                              const WebIDLCoerceStep& step,
+                                              uint32_t memBase,
+                                              JSObject* bufferSource,
+                                              WasmScalarVal* result) {
+  MOZ_ASSERT(step.kind == StepKind::Sequence);
+  MOZ_ASSERT(step.destAccess.elemStride == 1);
+  JSContext* cx = ctx.cx();
+
+  // Unwrapped once up front (`unwrap` does a CheckedUnwrapStatic), then kept
+  // rooted: it has to survive the allocation below, which can GC.
+  RootedObject source(
+      cx, JS::ArrayBufferOrView::unwrap(bufferSource).asObjectUnbarriered());
+  if (!source) {
+    return ReportComponentTrap(cx, "list<u8> result is not a buffer source");
+  }
+  if (JS::ArrayBufferOrView::fromObject(source).isDetached()) {
+    return ReportComponentTrap(cx, "list<u8> result is detached");
+  }
+
+  bool isBuffer = !!JS::ArrayBuffer::fromObject(source);
+  size_t len = isBuffer ? JS::GetArrayBufferByteLength(source)
+                        : JS_GetArrayBufferViewByteLength(source);
+  if (len > UINT32_MAX) {
+    return ReportComponentTrap(cx, "list<u8> result too large");
+  }
+  uint32_t count = uint32_t(len);
+
+  uint32_t elemPtr;
+  // Runs the guest's `realloc`, so this can GC, move linear memory, and even
+  // detach or resize `source` - nothing acquired before this point stays valid
+  // past it.
+  if (!JS::WriteCoercedListHeader(ctx, step, memBase, count, result,
+                                  &elemPtr)) {
+    return false;
+  }
+  if (count == 0) {
+    return true;
+  }
+
+  uint8_t* base;
+  size_t memLen;
+  if (!ctx.memoryBytes(&base, &memLen)) {
+    return false;
+  }
+  // WriteCoercedListHeader just reallocated `count` bytes at elemPtr, so this
+  // is a check on realloc's own behaviour, not a guest-controlled bound.
+  MOZ_RELEASE_ASSERT(uint64_t(elemPtr) + count <= memLen);
+
+  if (JS::ArrayBufferOrView::fromObject(source).isDetached()) {
+    return ReportComponentTrap(cx, "list<u8> result detached during realloc");
+  }
+  JS::AutoCheckCannotGC nogc;
+  bool isShared;
+  mozilla::Span<uint8_t> src =
+      isBuffer
+          ? JS::ArrayBuffer::fromObject(source).getData(&isShared, nogc)
+          : JS::ArrayBufferView::fromObject(source).getData(&isShared, nogc);
+  if (src.Length() != count) {
+    return ReportComponentTrap(cx,
+                               "list<u8> result changed length during realloc");
+  }
+  memcpy(base + elemPtr, src.Elements(), count);
   return true;
 }
 
@@ -9057,11 +9259,36 @@ bool js::wasm::LiftedCall(JSContext* cx, JS::HandleObject coreCallee,
 // (BuildCallAdapter + BuildJSArgsFromAdapter) instead of the oracle's
 // stepwise ComponentValue/WebIDLValue pipeline - no intermediate value is
 // materialized per argument.
+// Invokes a lowered import's callee the way its bracket tag demands. A
+// `[constructor]` import resolves to the interface object itself (see
+// ReadComponentFuncImport), and a WebIDL constructor throws when merely
+// called, so it has to be a construct. `thisv` is unused in that case: a
+// construct derives its receiver from new.target, which is the callee.
+[[nodiscard]] static bool InvokeLoweredCallee(JSContext* cx,
+                                              HandleObject callee,
+                                              HandleValue thisv,
+                                              const JS::HandleValueArray& args,
+                                              bool isConstructor,
+                                              MutableHandleValue rval) {
+  RootedValue calleeVal(cx, JS::ObjectValue(*callee));
+  if (!isConstructor) {
+    return JS::Call(cx, thisv, calleeVal, args, rval);
+  }
+  RootedObject result(cx);
+  if (!JS::Construct(cx, calleeVal, args, &result)) {
+    return false;
+  }
+  rval.setObject(*result);
+  return true;
+}
+
 bool js::wasm::LoweredCall(JSContext* cx, JS::HandleObject callee,
                            const ComponentFuncType& funcType,
                            const JS::WebIDLOperationType& opType,
                            JS::WebIDLContext& abiCtx, const JS::CallArgs& args,
-                           bool bindThisReceiver) {
+                           ComponentNameKind nameKind) {
+  bool bindThisReceiver = nameKind == ComponentNameKind::Method;
+  bool isConstructor = nameKind == ComponentNameKind::Constructor;
   RootedValVector coreParams(cx);
   if (!RawCoreValuesToVals(cx, JS::HandleValueArray(args), funcType.paramTypes,
                            MaxFlatParams, coreParams)) {
@@ -9139,8 +9366,8 @@ bool js::wasm::LoweredCall(JSContext* cx, JS::HandleObject callee,
            JS::WebIDLOverloadKind(adapter.resultStep->targetType));
   if (resultFusable) {
     RootedValue jsResult(cx);
-    RootedValue calleeVal(cx, JS::ObjectValue(*callee));
-    if (!JS::Call(cx, thisv, calleeVal, callArgs, &jsResult)) {
+    if (!InvokeLoweredCallee(cx, callee, thisv, callArgs, isConstructor,
+                             &jsResult)) {
       return false;
     }
     ValTypeVector flatResultTypes;
@@ -9174,9 +9401,9 @@ bool js::wasm::LoweredCall(JSContext* cx, JS::HandleObject callee,
       IsResultType(funcType.resultType.ref(), &resultOkType, &resultErrType);
 
   RootedValue jsResult(cx);
-  RootedValue calleeVal(cx, JS::ObjectValue(*callee));
   ComponentValueVector componentResults;
-  if (!JS::Call(cx, thisv, calleeVal, callArgs, &jsResult)) {
+  if (!InvokeLoweredCallee(cx, callee, thisv, callArgs, isConstructor,
+                           &jsResult)) {
     if (!isResultReturn || !JS_IsExceptionPending(cx)) {
       return false;
     }

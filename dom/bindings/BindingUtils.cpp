@@ -804,9 +804,9 @@ bool LegacyFactoryFunctionJSNative(JSContext* cx, unsigned argc,
 static JSObject* CreateBuiltinFunctionForConstructor(
     JSContext* aCx, JSNative aNative, size_t aNativeReservedSlot,
     void* aNativeReserved, unsigned int aNargs, jsid aName,
-    JS::Handle<JSObject*> aProto) {
+    JS::Handle<JSObject*> aProto, const JSJitInfo* aJitInfo = nullptr) {
   JSFunction* fun = js::NewFunctionByIdWithReservedAndProto(
-      aCx, aNative, aProto, aNargs, JSFUN_CONSTRUCTOR, aName);
+      aCx, aNative, aProto, aNargs, JSFUN_CONSTRUCTOR, aName, aJitInfo);
   if (!fun) {
     return nullptr;
   }
@@ -981,7 +981,7 @@ static JSObject* CreateInterfaceObject(
       cx, CreateBuiltinFunctionForConstructor(
               cx, InterfaceObjectJSNative, INTERFACE_OBJECT_INFO_RESERVED_SLOT,
               const_cast<DOMInterfaceInfo*>(interfaceInfo), ctorNargs, nameId,
-              interfaceProto));
+              interfaceProto, interfaceInfo->mConstructorJitInfo));
   if (!constructor) {
     return nullptr;
   }
@@ -4317,6 +4317,18 @@ bool ReadWebIDLNativeUTF8String(JS::WebIDLContext& aCtx,
   }
   out.Assign(bytes, len);
   return true;
+}
+
+bool WriteWebIDLNativeByteArray(JS::WebIDLContext& aCtx,
+                                const JS::WebIDLCoerceStep& aStep,
+                                uint32_t aMemBase, JS::Handle<JSObject*> aValue,
+                                JS::WasmScalarVal* aResult) {
+  if (!aValue) {
+    JS_ReportErrorASCII(aCtx.cx(), "null buffer source result");
+    return false;
+  }
+  return JS::WriteCoercedByteListFromBufferSource(aCtx, aStep, aMemBase, aValue,
+                                                  aResult);
 }
 
 bool WriteWebIDLNativeUTF8String(JS::WebIDLContext& aCtx,

@@ -2,18 +2,23 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "mozilla/Vector.h"  // mozilla::Vector
+
 #include <cmath>
 #include <cstring>
 
 #include "jsapi.h"  // JS_New*, JS_EncodeStringToUTF8, JS_ReportError*
 
 #include "js/Array.h"        // JS::NewArrayObject
+#include "js/ArrayBuffer.h"  // JS::NewArrayBuffer, JS::ArrayBuffer
 #include "js/BigInt.h"       // JS::ToBigInt
 #include "js/Conversions.h"  // JS::ToNumber, JS::ToBoolean, JS::ToString
+#include "js/experimental/TypedData.h"  // JS_NewUint8{,Clamped}Array, JS::ArrayBufferOrView
 #include "js/experimental/WebIDL.h"
 #include "js/ForOfIterator.h"         // JS::ForOfIterator
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/PropertyAndElement.h"    // JS_GetProperty, JS_SetProperty
+#include "js/SharedArrayBuffer.h"     // JS::IsSharedArrayBufferObject
 #include "js/Utility.h"               // js_new
 #include "util/StringBuilder.h"       // js::StringBuilder
 #include "vm/BigIntType.h"            // JS::BigInt
@@ -26,6 +31,45 @@ static bool ThrowConversionError(JSContext* cx, const char* what) {
   JS_ReportErrorNumberASCII(cx, js::GetErrorMessage, nullptr,
                             JSMSG_CANT_CONVERT_TO, what, "WebIDL type");
   return false;
+}
+
+// Whether `obj` (possibly a cross-compartment wrapper) is of the buffer-source
+// kind `kind` demands. A buffer source is accepted by identity, so this is a
+// class test rather than a coercion.
+static bool MatchesBufferSourceKind(JSObject* obj,
+                                    WebIDLBufferSourceKind kind) {
+  switch (kind) {
+    case WebIDLBufferSourceKind::ArrayBuffer:
+      return !!JS::ArrayBuffer::unwrap(obj);
+    case WebIDLBufferSourceKind::ArrayBufferView:
+      return !!JS::ArrayBufferView::unwrap(obj);
+    case WebIDLBufferSourceKind::Uint8Array:
+      return !!JS::Uint8Array::unwrap(obj);
+    case WebIDLBufferSourceKind::Uint8ClampedArray:
+      return !!JS::Uint8ClampedArray::unwrap(obj);
+  }
+  MOZ_CRASH("bad WebIDLBufferSourceKind");
+}
+
+// Whether `obj`'s backing store is a SharedArrayBuffer, for enforcing the
+// absence of `[AllowShared]`. `obj` must already have matched `kind` via
+// MatchesBufferSourceKind.
+//
+// TODO(webidl): a DataView reaching the generic ArrayBufferView kind reports
+// false, so a shared one slips through. Recovering its sharedness needs
+// JS_GetArrayBufferViewBuffer, which can throw. Not a gap in practice yet: only
+// the byte kinds below bridge to a component `list<u8>` (see
+// WebIDLBufferSourceKindIsBytes), and the generic view kind traps in
+// BuildCoerceStep regardless.
+static bool IsSharedBufferSource(JSObject* obj, WebIDLBufferSourceKind kind) {
+  JSObject* unwrapped =
+      JS::ArrayBufferOrView::unwrap(obj).asObjectUnbarriered();
+  MOZ_ASSERT(unwrapped, "caller checked MatchesBufferSourceKind");
+  if (kind == WebIDLBufferSourceKind::ArrayBuffer) {
+    return JS::IsSharedArrayBufferObject(unwrapped);
+  }
+  return JS_IsTypedArrayObject(unwrapped) &&
+         JS_GetTypedArraySharedness(unwrapped);
 }
 
 JS_PUBLIC_API WebIDLOverloadClass
@@ -574,10 +618,25 @@ static bool JSToWebIDLValueImpl(JSContext* cx, HandleValue value,
       return ThrowConversionError(cx, "union");
     }
 
+    case WebIDLTypeKind::BufferSource: {
+      // Per WebIDL, a buffer source is accepted by identity only: the IDL value
+      // holds the very object the caller passed, with no copying or coercion.
+      if (!value.isObject() ||
+          !MatchesBufferSourceKind(&value.toObject(),
+                                   type.bufferSourceKind())) {
+        return ThrowConversionError(cx, "buffer source");
+      }
+      if (!type.hasAllowShared() &&
+          IsSharedBufferSource(&value.toObject(), type.bufferSourceKind())) {
+        return ThrowConversionError(cx, "shared buffer source");
+      }
+      out.set(WebIDLValue::makeObject(type, &value.toObject()));
+      return true;
+    }
+
     case WebIDLTypeKind::Record:
     case WebIDLTypeKind::Callback:
     case WebIDLTypeKind::Symbol:
-    case WebIDLTypeKind::BufferSource:
     case WebIDLTypeKind::Promise:
     case WebIDLTypeKind::ReadableStream:
       // TODO(webidl): implement these conversions.
@@ -714,11 +773,16 @@ static bool WebIDLValueToJSImpl(JSContext* cx, HandleWebIDLValue value,
       out.setObject(*obj);
       return true;
     }
+    case WebIDLTypeKind::BufferSource:
+      // Held by identity (see JSToWebIDLValueImpl), so this hands back the very
+      // object that came in.
+      out.setObject(*value.get().asObject());
+      return true;
+
     case WebIDLTypeKind::Union:
     case WebIDLTypeKind::Record:
     case WebIDLTypeKind::Callback:
     case WebIDLTypeKind::Symbol:
-    case WebIDLTypeKind::BufferSource:
     case WebIDLTypeKind::Promise:
     case WebIDLTypeKind::ReadableStream:
       // TODO(webidl): implement these conversions. A union value is stored
@@ -751,6 +815,130 @@ static bool NumericSourceAsDouble(const WebIDLValue& v, double* out) {
     return true;
   }
   return false;
+}
+
+// Copies a byte-typed buffer source's bytes out into `out`. Separated from its
+// callers because building anything on the GC heap invalidates the data
+// pointer, so the copy has to complete inside one no-GC region.
+static bool CopyBufferSourceBytes(JSContext* cx, JSObject* obj,
+                                  mozilla::Vector<uint8_t>* out) {
+  JSObject* unwrapped =
+      JS::ArrayBufferOrView::unwrap(obj).asObjectUnbarriered();
+  if (!unwrapped || JS::ArrayBufferOrView::fromObject(unwrapped).isDetached()) {
+    return ThrowConversionError(cx, "buffer source");
+  }
+  bool isBuffer = !!JS::ArrayBuffer::fromObject(unwrapped);
+  size_t len = isBuffer ? JS::GetArrayBufferByteLength(unwrapped)
+                        : JS_GetArrayBufferViewByteLength(unwrapped);
+  if (!out->resizeUninitialized(len)) {
+    js::ReportOutOfMemory(cx);
+    return false;
+  }
+  if (len == 0) {
+    return true;
+  }
+  JS::AutoCheckCannotGC nogc;
+  bool isShared;
+  mozilla::Span<uint8_t> src =
+      isBuffer
+          ? JS::ArrayBuffer::fromObject(unwrapped).getData(&isShared, nogc)
+          : JS::ArrayBufferView::fromObject(unwrapped).getData(&isShared, nogc);
+  MOZ_RELEASE_ASSERT(src.Length() == len);
+  memcpy(out->begin(), src.Elements(), len);
+  return true;
+}
+
+// A byte-typed buffer source coerced to `sequence<T>`: one element per byte,
+// each recursively coerced to the target's element type.
+static bool CoerceBufferSourceToSequence(JSContext* cx, HandleWebIDLValue from,
+                                         const WebIDLType& to,
+                                         MutableHandleWebIDLValue out) {
+  if (!WebIDLBufferSourceKindIsBytes(from.get().type().bufferSourceKind())) {
+    return ThrowConversionError(cx, "non-byte buffer source to sequence");
+  }
+  mozilla::Vector<uint8_t> bytes;
+  if (!CopyBufferSourceBytes(cx, from.get().asObject(), &bytes)) {
+    return false;
+  }
+
+  RefPtr<WebIDLValueData> data =
+      js_new<WebIDLValueData>(WebIDLValueData::SequenceData{});
+  if (!data) {
+    js::ReportOutOfMemory(cx);
+    return false;
+  }
+  out.set(WebIDLValue::makeComposite(to, data));
+
+  WebIDLType octet = WebIDLType::primitive(WebIDLTypeKind::Octet);
+  WebIDLType elementType = to.innerType();
+  RootedWebIDLValue srcElem(cx);
+  RootedWebIDLValue coercedElem(cx);
+  for (uint8_t b : bytes) {
+    srcElem = WebIDLValue::makeUnsigned(octet, b);
+    if (!JS::CoerceWebIDLValue(cx, srcElem, elementType, &coercedElem) ||
+        !data->appendSequenceElement(coercedElem.get())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// A `sequence<T>` coerced to a byte-typed buffer source: each element is
+// coerced to `octet`, then the whole run is copied into a fresh buffer source
+// of the target kind.
+static bool CoerceSequenceToBufferSource(JSContext* cx, HandleWebIDLValue from,
+                                         const WebIDLType& to,
+                                         MutableHandleWebIDLValue out) {
+  if (!WebIDLBufferSourceKindIsBytes(to.bufferSourceKind())) {
+    return ThrowConversionError(cx, "sequence to non-byte buffer source");
+  }
+  const WebIDLValueData::SequenceData& srcSeq = from.get().data()->asSequence();
+
+  WebIDLType octet = WebIDLType::primitive(WebIDLTypeKind::Octet);
+  mozilla::Vector<uint8_t> bytes;
+  if (!bytes.reserve(srcSeq.elements.length())) {
+    js::ReportOutOfMemory(cx);
+    return false;
+  }
+  RootedWebIDLValue srcElem(cx);
+  RootedWebIDLValue coercedElem(cx);
+  for (const WebIDLValue& elem : srcSeq.elements) {
+    srcElem = elem;
+    if (!JS::CoerceWebIDLValue(cx, srcElem, octet, &coercedElem)) {
+      return false;
+    }
+    bytes.infallibleAppend(uint8_t(coercedElem.get().asUnsigned()));
+  }
+
+  JS::Rooted<JSObject*> obj(cx);
+  switch (to.bufferSourceKind()) {
+    case WebIDLBufferSourceKind::ArrayBuffer:
+      obj = JS::NewArrayBuffer(cx, bytes.length());
+      break;
+    case WebIDLBufferSourceKind::Uint8Array:
+      obj = JS_NewUint8Array(cx, bytes.length());
+      break;
+    case WebIDLBufferSourceKind::Uint8ClampedArray:
+      obj = JS_NewUint8ClampedArray(cx, bytes.length());
+      break;
+    default:
+      MOZ_CRASH("not a byte-typed buffer source kind");
+  }
+  if (!obj) {
+    return false;
+  }
+  if (!bytes.empty()) {
+    JS::AutoCheckCannotGC nogc;
+    bool isShared;
+    mozilla::Span<uint8_t> dest =
+        to.bufferSourceKind() == WebIDLBufferSourceKind::ArrayBuffer
+            ? JS::ArrayBuffer::fromObject(obj).getData(&isShared, nogc)
+            : JS::ArrayBufferView::fromObject(obj).getData(&isShared, nogc);
+    MOZ_RELEASE_ASSERT(dest.Length() == bytes.length());
+    memcpy(dest.Elements(), bytes.begin(), bytes.length());
+  }
+  out.set(WebIDLValue::makeObject(to, obj));
+  return true;
 }
 
 JS_PUBLIC_API bool JS::CoerceWebIDLValue(JSContext* cx, HandleWebIDLValue from,
@@ -919,6 +1107,13 @@ JS_PUBLIC_API bool JS::CoerceWebIDLValue(JSContext* cx, HandleWebIDLValue from,
     case WebIDLTypeKind::Sequence:
     case WebIDLTypeKind::FrozenArray:
     case WebIDLTypeKind::ObservableArray: {
+      // A byte-typed buffer source coerces to a sequence element-wise. This
+      // crosses the overload class boundary (both are Object), which the
+      // within-kind restriction otherwise forbids - a deliberate extension so a
+      // component `list<u8>` can bridge to/from a Uint8Array-typed operation.
+      if (src.kind() == WebIDLTypeKind::BufferSource) {
+        return CoerceBufferSourceToSequence(cx, from, to, out);
+      }
       if (src.kind() != WebIDLTypeKind::Sequence &&
           src.kind() != WebIDLTypeKind::FrozenArray &&
           src.kind() != WebIDLTypeKind::ObservableArray) {
@@ -998,11 +1193,29 @@ JS_PUBLIC_API bool JS::CoerceWebIDLValue(JSContext* cx, HandleWebIDLValue from,
       return true;
     }
 
+    case WebIDLTypeKind::BufferSource:
+      // Identity within the same kind, per WebIDL. The sequence source is the
+      // deliberate extension described in CoerceBufferSourceToSequence's
+      // counterpart above.
+      if (src.kind() == WebIDLTypeKind::BufferSource) {
+        if (!MatchesBufferSourceKind(from.get().asObject(),
+                                     to.bufferSourceKind())) {
+          return ThrowConversionError(cx, "buffer source");
+        }
+        out.set(WebIDLValue::makeObject(to, from.get().asObject()));
+        return true;
+      }
+      if (src.kind() == WebIDLTypeKind::Sequence ||
+          src.kind() == WebIDLTypeKind::FrozenArray ||
+          src.kind() == WebIDLTypeKind::ObservableArray) {
+        return CoerceSequenceToBufferSource(cx, from, to, out);
+      }
+      return ThrowConversionError(cx, "buffer source");
+
     case WebIDLTypeKind::BigInt:
     case WebIDLTypeKind::Symbol:
     case WebIDLTypeKind::Callback:
     case WebIDLTypeKind::Record:
-    case WebIDLTypeKind::BufferSource:
     case WebIDLTypeKind::Promise:
     case WebIDLTypeKind::ReadableStream:
       // TODO(webidl): implement these coercions.

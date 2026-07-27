@@ -132,6 +132,11 @@ class TestFunctions : public NonRefcountedDOMObject {
                                     int32_t aB);
   static int32_t ComponentStaticAdd(GlobalObject& aGlobal, int32_t aA,
                                     int32_t aB, int32_t aC);
+  // Two overloads, like nsINode::Get/SetTextContent: [WasmUtf8] retypes only
+  // the wasm native-call entry, so the ordinary JS binding still calls this
+  // with the declared DOMString's nsAString. Without both, C++ overload
+  // resolution fails for one path or the other.
+  void ComponentEchoUtf8(const nsAString& aS, nsAString& aRetval);
   void ComponentEchoUtf8(const nsACString& aS, nsACString& aRetval);
   bool CheckWebIDLComponentCall(JSContext* aCx, JS::Handle<JSObject*> aSelfObj,
                                 ErrorResult& aRv);

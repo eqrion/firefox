@@ -18,6 +18,7 @@
 #include "mozilla/dom/WrapperCachedNonISupportsTestInterface.h"
 #include "nsComponentManagerUtils.h"
 #include "nsGlobalWindowInner.h"
+#include "nsPrintfCString.h"
 
 namespace mozilla::dom {
 
@@ -328,6 +329,10 @@ int32_t TestFunctions::ComponentStaticAdd(GlobalObject& aGlobal, int32_t aA,
   return aA + aB + aC;
 }
 
+void TestFunctions::ComponentEchoUtf8(const nsAString& aS, nsAString& aRetval) {
+  aRetval = aS;
+}
+
 void TestFunctions::ComponentEchoUtf8(const nsACString& aS,
                                       nsACString& aRetval) {
   aRetval = aS;
@@ -352,6 +357,27 @@ bool TestFunctions::CheckWebIDLComponentCall(JSContext* aCx,
     return true;
   };
 
+  // A non-static member's operation type carries a leading receiver param
+  // typed as the owning interface (see Codegen.py's buildSelfParamStmts), so
+  // its declared WebIDL arguments start at kSelfParam. Static members have no
+  // such param and start at 0.
+  constexpr size_t kSelfParam = 1;
+  auto checkSelfParam = [&](const JS::WebIDLOperationType& aOp,
+                            const char* aWhat) -> bool {
+    if (aOp.params.length() < kSelfParam) {
+      aRv.ThrowTypeError(nsPrintfCString("%s: missing self param", aWhat));
+      return false;
+    }
+    const JS::WebIDLType& type = aOp.params[0].type;
+    if (type.kind() != JS::WebIDLTypeKind::Interface || !type.interface() ||
+        strcmp(type.interface()->name(), "TestFunctions") != 0 ||
+        aOp.params[0].optional || aOp.params[0].variadic) {
+      aRv.ThrowTypeError(nsPrintfCString("%s: wrong self param", aWhat));
+      return false;
+    }
+    return true;
+  };
+
   JS::Rooted<JSObject*> componentAdd(aCx);
   if (!getMethod("componentAdd", &componentAdd)) {
     return false;
@@ -366,11 +392,15 @@ bool TestFunctions::CheckWebIDLComponentCall(JSContext* aCx,
   }
   for (size_t i = 0; i < addOverloads.length(); i++) {
     const JS::WebIDLOperationType& op = addOverloads[i];
-    if (op.params.length() != i + 2) {
+    if (!checkSelfParam(op, "componentAdd")) {
+      return false;
+    }
+    if (op.params.length() != kSelfParam + i + 2) {
       aRv.ThrowTypeError("componentAdd: wrong param count");
       return false;
     }
-    for (const JS::WebIDLParam& param : op.params) {
+    for (size_t j = kSelfParam; j < op.params.length(); j++) {
+      const JS::WebIDLParam& param = op.params[j];
       if (param.type.kind() != JS::WebIDLTypeKind::Long || param.optional ||
           param.variadic) {
         aRv.ThrowTypeError("componentAdd: wrong param shape");
@@ -392,12 +422,15 @@ bool TestFunctions::CheckWebIDLComponentCall(JSContext* aCx,
     return false;
   }
   if (defaultedOverloads.length() != 1 ||
-      defaultedOverloads[0].params.length() != 2) {
+      defaultedOverloads[0].params.length() != kSelfParam + 2) {
     aRv.ThrowTypeError("componentAddDefaulted: wrong shape");
     return false;
   }
-  const JS::WebIDLParam& p0 = defaultedOverloads[0].params[0];
-  const JS::WebIDLParam& p1 = defaultedOverloads[0].params[1];
+  if (!checkSelfParam(defaultedOverloads[0], "componentAddDefaulted")) {
+    return false;
+  }
+  const JS::WebIDLParam& p0 = defaultedOverloads[0].params[kSelfParam];
+  const JS::WebIDLParam& p1 = defaultedOverloads[0].params[kSelfParam + 1];
   if (p0.optional || p1.type.kind() != JS::WebIDLTypeKind::Long ||
       !p1.optional || p1.variadic || !p1.defaultValue ||
       p1.defaultValue->asSigned() != 100) {
@@ -414,11 +447,14 @@ bool TestFunctions::CheckWebIDLComponentCall(JSContext* aCx,
     return false;
   }
   if (acceptsOverloads.length() != 1 ||
-      acceptsOverloads[0].params.length() != 1) {
+      acceptsOverloads[0].params.length() != kSelfParam + 1) {
     aRv.ThrowTypeError("componentAcceptsSelf: wrong shape");
     return false;
   }
-  const JS::WebIDLType& paramType = acceptsOverloads[0].params[0].type;
+  if (!checkSelfParam(acceptsOverloads[0], "componentAcceptsSelf")) {
+    return false;
+  }
+  const JS::WebIDLType& paramType = acceptsOverloads[0].params[kSelfParam].type;
   if (paramType.kind() != JS::WebIDLTypeKind::Nullable) {
     aRv.ThrowTypeError("componentAcceptsSelf: expected nullable param");
     return false;
@@ -458,6 +494,8 @@ bool TestFunctions::CheckWebIDLComponentCall(JSContext* aCx,
     aRv.ThrowTypeError("componentStaticAdd: expected 2 overloads");
     return false;
   }
+  // Static, so no leading receiver param: the declared args start at 0, not
+  // kSelfParam.
   for (size_t i = 0; i < staticAddOverloads.length(); i++) {
     const JS::WebIDLOperationType& op = staticAddOverloads[i];
     if (op.params.length() != i + 2) {
@@ -477,6 +515,28 @@ bool TestFunctions::CheckWebIDLComponentCall(JSContext* aCx,
     }
   }
 
+  // The interface object carries the constructor's own operation type, via
+  // DOMInterfaceInfo::mConstructorJitInfo. Without that jitinfo this would be
+  // the `(any...) -> any` fallback, so checking for TestFunctions' real
+  // `constructor()` shape - no params, returning the interface - is what
+  // distinguishes the two.
+  JS::WebIDLOperationTypeVector ctorOverloads;
+  if (!JS::GetWebIDLConstructorTypes(aCx, ctorObj, ctorOverloads)) {
+    return false;
+  }
+  if (ctorOverloads.length() != 1 || !ctorOverloads[0].params.empty()) {
+    aRv.ThrowTypeError("constructor: wrong shape");
+    return false;
+  }
+  if (!ctorOverloads[0].returnType ||
+      ctorOverloads[0].returnType->kind() != JS::WebIDLTypeKind::Interface ||
+      !ctorOverloads[0].returnType->interface() ||
+      strcmp(ctorOverloads[0].returnType->interface()->name(),
+             "TestFunctions") != 0) {
+    aRv.ThrowTypeError("constructor: wrong return type");
+    return false;
+  }
+
   // [WasmUtf8] retypes componentEchoUtf8's native-call-entry C++ signature
   // (DOMString -> nsACString) but must leave the WebIDL-visible operation
   // type schema alone, so component overload matching is unaffected - the
@@ -491,11 +551,16 @@ bool TestFunctions::CheckWebIDLComponentCall(JSContext* aCx,
   if (!JS::GetWebIDLOperationTypes(aCx, echoUtf8, echoOverloads)) {
     return false;
   }
-  if (echoOverloads.length() != 1 || echoOverloads[0].params.length() != 1) {
+  if (echoOverloads.length() != 1 ||
+      echoOverloads[0].params.length() != kSelfParam + 1) {
     aRv.ThrowTypeError("componentEchoUtf8: wrong shape");
     return false;
   }
-  if (echoOverloads[0].params[0].type.kind() != JS::WebIDLTypeKind::DOMString) {
+  if (!checkSelfParam(echoOverloads[0], "componentEchoUtf8")) {
+    return false;
+  }
+  if (echoOverloads[0].params[kSelfParam].type.kind() !=
+      JS::WebIDLTypeKind::DOMString) {
     aRv.ThrowTypeError("componentEchoUtf8: wrong param type");
     return false;
   }

@@ -291,9 +291,14 @@ JS_PUBLIC_API JSFunction* NewFunctionByIdWithReserved(JSContext* cx,
                                                       unsigned nargs,
                                                       unsigned flags, jsid id);
 
+// `jitInfo`, if given, is attached to the new function the same way
+// JS_DefineFunctions attaches a JSFunctionSpec's. An embedder that builds a
+// callable by hand (rather than from a spec) needs this to make it recognizable
+// as, say, a WebIDL operation - see JS::GetWebIDLConstructorTypes, which keys
+// off an interface object's jitinfo.
 JS_PUBLIC_API JSFunction* NewFunctionByIdWithReservedAndProto(
     JSContext* cx, JSNative native, JS::Handle<JSObject*> proto, unsigned nargs,
-    unsigned flags, jsid id);
+    unsigned flags, jsid id, const JSJitInfo* jitInfo = nullptr);
 
 /**
  * Get or set function's reserved slot value.

@@ -136,7 +136,20 @@ enum class WebIDLBufferSourceKind : uint8_t {
   ArrayBuffer,
   ArrayBufferView,
   Uint8Array,
+  Uint8ClampedArray,
 };
+
+// Whether a buffer source is a view over (or a buffer of) plain bytes, with a
+// statically known element size of 1. Only these kinds can bridge to/from a
+// component `list<u8>`: the conversion is a bulk memcpy, which is only sound
+// when the element type and width are known to match. A generic
+// `ArrayBufferView` is deliberately excluded - its element type isn't known
+// until runtime.
+inline bool WebIDLBufferSourceKindIsBytes(WebIDLBufferSourceKind kind) {
+  return kind == WebIDLBufferSourceKind::ArrayBuffer ||
+         kind == WebIDLBufferSourceKind::Uint8Array ||
+         kind == WebIDLBufferSourceKind::Uint8ClampedArray;
+}
 
 // A WebIDL interface: name, parent link, and the embedder ops for its dual
 // native-pointer/wrapped resource representation. All ops are void*-typed
@@ -1015,6 +1028,18 @@ extern JS_PUBLIC_API bool ReadCoercedListHeader(WebIDLContext& ctx,
                                                 uint32_t* outElemPtr,
                                                 uint32_t* outLen);
 
+// Reads a BufferSource-kind WebIDLCoerceStep's raw (ptr,len) byte range in
+// linear memory, without copying it. The step's source is a component
+// `list<u8>` (BuildCoerceStep rejects any other element type for a
+// buffer-source target), so `len` is both the element count and the byte
+// count. The caller copies those bytes into a freshly-allocated typed array
+// rather than aliasing them: linear memory can be grown or detached by later
+// wasm execution, and the DOM object outlives this call.
+extern JS_PUBLIC_API bool ReadCoercedByteListRange(
+    WebIDLContext& ctx, const WasmScalarVal* coreParams,
+    const WebIDLCoerceStep& step, uint32_t memBase, uint32_t* outPtr,
+    uint32_t* outLen);
+
 // Reads an Interface-kind WebIDLCoerceStep's raw own/borrow handle index and
 // resolves it against `ctx`'s handle table (own removes the handle, borrow
 // only reads it), returning the resource's JSObject*. Traps if there is no
@@ -1154,6 +1179,28 @@ extern JS_PUBLIC_API bool WriteCoercedInterfaceNative(
 extern JS_PUBLIC_API bool WriteCoercedListHeader(
     WebIDLContext& ctx, const WebIDLCoerceStep& step, uint32_t memBase,
     uint32_t count, WasmScalarVal* result, uint32_t* outElemPtr);
+
+// Writes a whole component `list<u8>` result from a byte-typed buffer source
+// in one bulk copy: allocates the element buffer via WriteCoercedListHeader,
+// then memcpys `bufferSource`'s bytes into it. `step` is a Sequence whose
+// element is a single byte (asserted) - which is what BuildResultStep produces
+// for a `list<u8>` component result. The buffer-source-ness lives on the
+// *WebIDL* side, as the declared return type of the operation that produced
+// `bufferSource`.
+//
+// Takes the object rather than a Span deliberately: allocating the element
+// buffer runs the instance's `realloc`, which can GC, move linear memory, and
+// even detach or resize `bufferSource` itself. A caller cannot hold a data
+// pointer across that, so this owns the whole window - reading the length,
+// allocating, then re-acquiring the data under a fresh no-GC region and
+// re-checking the length before copying.
+//
+// `bufferSource` may be a cross-compartment wrapper. Traps if it isn't an
+// ArrayBuffer or ArrayBufferView, or if it is detached or changes length
+// across the allocation.
+extern JS_PUBLIC_API bool WriteCoercedByteListFromBufferSource(
+    WebIDLContext& ctx, const WebIDLCoerceStep& step, uint32_t memBase,
+    JSObject* bufferSource, WasmScalarVal* result);
 
 // Writes an Option-kind step's discriminant, allocating its own buffer when
 // top-level or resolving into the enclosing composite's when nested, and

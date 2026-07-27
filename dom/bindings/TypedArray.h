@@ -16,6 +16,7 @@
 #include "js/ScalarType.h"  // JS::Scalar::Type
 #include "js/SharedArrayBuffer.h"
 #include "js/experimental/TypedData.h"  // js::Unwrap(Ui|I)nt(8|16|32)Array, js::Get(Ui|I)nt(8|16|32)ArrayLengthAndData, js::UnwrapUint8ClampedArray, js::GetUint8ClampedArrayLengthAndData, js::UnwrapFloat(32|64)Array, js::GetFloat(32|64)ArrayLengthAndData, JS_GetArrayBufferViewType
+#include "js/experimental/WebIDL.h"  // JS::WebIDLContext, JS::ReadCoercedByteListRange
 #include "js/friend/ErrorMessages.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/Buffer.h"
@@ -1050,6 +1051,63 @@ template <typename T, typename Processor,
             std::forward<Processor>(aProcessor));
       });
 }
+
+#ifdef ENABLE_WASM_COMPONENTS
+
+// Reads a component `list<u8>` into a fresh byte-typed buffer source, for a
+// wasm native-call entry whose declared WebIDL argument is a Uint8Array or
+// Uint8ClampedArray. Copies rather than aliasing linear memory: the DOM object
+// outlives the call, while linear memory can later be grown, moved or
+// detached. Templated on the typed-array type so both kinds share one
+// definition; `out` is left uninited on failure.
+//
+// Lives here rather than beside WriteWebIDLNativeByteArray in BindingUtils.h
+// because it needs the typed-array APIs, which that header doesn't include.
+//
+// Deliberately takes no ErrorResult: a native-call entry's `rv` is declared by
+// CGCallGenerator, which emits *after* all the argument reads, so none is in
+// scope yet. An allocation failure reports on the JSContext and returns false,
+// like every other reader in this family.
+template <class JsArrayT>
+[[nodiscard]] bool ReadWebIDLNativeByteArray(
+    JS::WebIDLContext& aCtx, const JS::WasmScalarVal* aCoreParams,
+    const JS::WebIDLCoerceStep& aStep, uint32_t aMemBase,
+    TypedArray<JsArrayT>& out) {
+  static_assert(sizeof(typename JsArrayT::DataType) == 1,
+                "only byte-typed views bridge to a component list<u8>");
+  uint32_t ptr, len;
+  if (!JS::ReadCoercedByteListRange(aCtx, aCoreParams, aStep, aMemBase, &ptr,
+                                    &len)) {
+    return false;
+  }
+  IgnoredErrorResult rv;
+  JS::Rooted<JSObject*> obj(aCtx.cx(),
+                            TypedArray<JsArrayT>::Create(aCtx.cx(), len, rv));
+  if (!obj) {
+    JS_ReportOutOfMemory(aCtx.cx());
+    return false;
+  }
+  if (len > 0) {
+    // Fetched only after the allocation above, and used entirely inside the
+    // no-GC region below. ReadCoercedByteListRange already bounds-checked
+    // [ptr, ptr+len) against this same memory.
+    uint8_t* base;
+    size_t memLen;
+    if (!aCtx.memoryBytes(&base, &memLen)) {
+      return false;
+    }
+    MOZ_RELEASE_ASSERT(uint64_t(ptr) + len <= memLen);
+    JS::AutoCheckCannotGC nogc;
+    bool isShared;
+    mozilla::Span<typename JsArrayT::DataType> dest =
+        JsArrayT::fromObject(obj).getData(&isShared, nogc);
+    MOZ_RELEASE_ASSERT(dest.Length() == len);
+    memcpy(dest.Elements(), base + ptr, len);
+  }
+  return out.Init(obj);
+}
+
+#endif  // ENABLE_WASM_COMPONENTS
 
 }  // namespace mozilla::dom
 

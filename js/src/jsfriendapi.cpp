@@ -424,7 +424,7 @@ JS_PUBLIC_API JSFunction* js::NewFunctionByIdWithReserved(
 
 JS_PUBLIC_API JSFunction* js::NewFunctionByIdWithReservedAndProto(
     JSContext* cx, JSNative native, HandleObject proto, unsigned nargs,
-    unsigned flags, jsid id) {
+    unsigned flags, jsid id, const JSJitInfo* jitInfo) {
   MOZ_ASSERT(id.isAtom());
   MOZ_ASSERT(!cx->zone()->isAtomsZone());
   MOZ_ASSERT(native);
@@ -435,8 +435,13 @@ JS_PUBLIC_API JSFunction* js::NewFunctionByIdWithReservedAndProto(
   FunctionFlags funflags = (flags & JSFUN_CONSTRUCTOR)
                                ? FunctionFlags::NATIVE_CTOR
                                : FunctionFlags::NATIVE_FUN;
-  return NewFunctionWithProto(cx, native, nargs, funflags, nullptr, atom, proto,
-                              gc::AllocKind::FUNCTION_EXTENDED, TenuredObject);
+  JSFunction* fun =
+      NewFunctionWithProto(cx, native, nargs, funflags, nullptr, atom, proto,
+                           gc::AllocKind::FUNCTION_EXTENDED, TenuredObject);
+  if (fun && jitInfo) {
+    fun->setJitInfo(jitInfo);
+  }
+  return fun;
 }
 
 JS_PUBLIC_API const Value& js::GetFunctionNativeReserved(JSObject* fun,

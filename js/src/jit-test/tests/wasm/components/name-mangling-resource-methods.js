@@ -50,14 +50,11 @@ const component = new WebAssembly.Component(wasmTextToBinary(`
   )
 `));
 
-// A plain function rather than an ES class: Web.md's "read the component
-// function import" just invokes the JS value directly ("create a WebIDL
-// operation for a JS callable" is explicitly TODO on whether that's a call or
-// a construct - see Web.md line 324), so a class constructor would trap on
-// invocation ("class constructors must be invoked with 'new'"). That's a
-// pre-existing spec gap, not something this resolution change is meant to
-// settle; a plain function sidesteps it while still exercising the same
-// resource-association and camelCase-member resolution.
+// A plain function rather than an ES class, which keeps this test focused on
+// resource-association and camelCase-member resolution: a plain function is
+// callable *and* constructible, so it works whichever way `canon lower`
+// invokes it. That a `[constructor]` import is specifically constructed - and
+// so that an ES class works too - is canon-lower-constructor.js's job.
 const calls = [];
 function MyResource(n) { calls.push(["ctor", n]); }
 MyResource.prototype.getChild = function(n) { calls.push(["method", this, n]); };

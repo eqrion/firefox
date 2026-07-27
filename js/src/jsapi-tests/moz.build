@@ -158,6 +158,7 @@ UNIFIED_SOURCES += [
     "testWasmRefSubtypes.cpp",
     "testWasmReturnCalls.cpp",
     "testWeakMap.cpp",
+    "testWebIDLBufferSource.cpp",
     "testWebIDLCallAdapter.cpp",
     "testWebIDLComponentBridge.cpp",
     "testWebIDLOperationInfo.cpp",
