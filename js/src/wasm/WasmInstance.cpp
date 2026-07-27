@@ -137,6 +137,16 @@ FuncImportInstanceData& Instance::funcImportInstanceData(uint32_t funcIndex) {
   return instanceData[funcIndex];
 }
 
+ComponentImportInstanceData& Instance::componentImportInstanceData(
+    uint32_t funcIndex) {
+  MOZ_ASSERT(funcIndex < codeMeta().numFuncImports);
+  MOZ_ASSERT(codeMeta().componentImportsOffsetStart != UINT32_MAX);
+  ComponentImportInstanceData* instanceData =
+      (ComponentImportInstanceData*)(data() +
+                                     codeMeta().componentImportsOffsetStart);
+  return instanceData[funcIndex];
+}
+
 FuncExportInstanceData& Instance::funcExportInstanceData(
     uint32_t funcExportIndex) {
   FuncExportInstanceData* instanceData =

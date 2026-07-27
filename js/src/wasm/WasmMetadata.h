@@ -17,6 +17,31 @@ namespace wasm {
 using BuiltinModuleFuncIdVector =
     Vector<BuiltinModuleFuncId, 0, SystemAllocPolicy>;
 
+// A per-imported-function hint, provided by the component compiler, describing
+// what a core module import is actually bound to. It lets the wasm compilers
+// inline a `canon lower` or `resource.drop` directly at the call site instead
+// of calling out to the generated stub function that would otherwise satisfy
+// the import (see GenerateCanonLowerNative / GenerateResourceDropFunc). The
+// runtime-varying pointer the inlined code needs (the LoweredNativeClosure* or
+// the ComponentInstance*) is loaded from the import's
+// ComponentImportInstanceData slot, populated at instantiation.
+enum class ComponentImportKind : uint8_t {
+  None,
+  CanonLower,
+  ResourceDrop,
+};
+
+struct ComponentImportHint {
+  ComponentImportKind kind = ComponentImportKind::None;
+  // For CanonLower: whether the last core param is the linear-memory offset for
+  // a spilled result (i.e. the overload's result doesn't fit flat). The rest of
+  // the marshalling shape is derivable from the import's core func type.
+  bool resultOutParam = false;
+};
+
+using ComponentImportHintVector =
+    Vector<ComponentImportHint, 0, SystemAllocPolicy>;
+
 // ==== Printing of names
 //
 // The Developer-Facing Display Conventions section of the WebAssembly Web
@@ -53,6 +78,10 @@ struct CodeMetadata : public ShareableBase<CodeMetadata> {
   // This may be empty for internally constructed modules which don't care
   // about this information.
   BuiltinModuleFuncIdVector knownFuncImports;
+  // A vector of component import hints (or 'none') for all imported functions.
+  // Empty unless this is a core module of a wasm component whose compiler
+  // resolved some imports to canon builtins. See ComponentImportHint.
+  ComponentImportHintVector componentImportHints;
   // Treat imported wasm functions as if they were JS functions. This is used
   // when compiling the module for new WebAssembly.Function.
   bool funcImportsAreJS;
@@ -126,6 +155,10 @@ struct CodeMetadata : public ShareableBase<CodeMetadata> {
   // The start offset of the tag section of the instance data. There is one
   // entry for every tag.
   uint32_t tagsOffsetStart;
+  // The start offset of the ComponentImportInstanceData[] section of the
+  // instance data. There is one entry for every imported function, but the
+  // section is only allocated when componentImportHints is non-empty.
+  uint32_t componentImportsOffsetStart;
   // The total size of the instance data.
   uint32_t instanceDataLength;
 
@@ -141,6 +174,7 @@ struct CodeMetadata : public ShareableBase<CodeMetadata> {
         memoriesOffsetStart(UINT32_MAX),
         tablesOffsetStart(UINT32_MAX),
         tagsOffsetStart(UINT32_MAX),
+        componentImportsOffsetStart(UINT32_MAX),
         instanceDataLength(UINT32_MAX) {}
 
   [[nodiscard]] bool init() {
@@ -215,6 +249,13 @@ struct CodeMetadata : public ShareableBase<CodeMetadata> {
     return knownFuncImports[funcIndex];
   }
 
+  ComponentImportHint componentImportHint(uint32_t funcIndex) const {
+    if (componentImportHints.empty()) {
+      return ComponentImportHint{};
+    }
+    return componentImportHints[funcIndex];
+  }
+
   // Find the exported function index for a function index
   uint32_t findFuncExportIndex(uint32_t funcIndex) const;
 
@@ -241,6 +282,13 @@ struct CodeMetadata : public ShareableBase<CodeMetadata> {
   uint32_t offsetOfFuncImportInstanceData(uint32_t funcIndex) const {
     MOZ_RELEASE_ASSERT(funcIndex < numFuncImports);
     return funcImportsOffsetStart + funcIndex * sizeof(FuncImportInstanceData);
+  }
+
+  uint32_t offsetOfComponentImportInstanceData(uint32_t funcIndex) const {
+    MOZ_RELEASE_ASSERT(funcIndex < numFuncImports);
+    MOZ_RELEASE_ASSERT(componentImportsOffsetStart != UINT32_MAX);
+    return componentImportsOffsetStart +
+           funcIndex * sizeof(ComponentImportInstanceData);
   }
 
   uint32_t offsetOfFuncExportInstanceData(uint32_t funcExportIndex) const {

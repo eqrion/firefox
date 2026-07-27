@@ -1040,6 +1040,65 @@ SharedModule wasm::CompileModule(const CompileArgs& args,
 }
 
 #ifdef ENABLE_WASM_COMPONENTS
+PendingModuleCompile wasm::BeginCompileModule(const CompileArgs& args,
+                                              BytecodeSpan wholeBytecode,
+                                              UniqueChars* error,
+                                              UniqueCharsVector* warnings) {
+  MutableModuleMetadata moduleMeta = js_new<ModuleMetadata>();
+  if (!moduleMeta || !moduleMeta->init(args)) {
+    return PendingModuleCompile();
+  }
+
+  BytecodeSource bytecodeSource(wholeBytecode.data(), wholeBytecode.size());
+  Decoder envDecoder(bytecodeSource.envSpan(), bytecodeSource.envRange().start,
+                     error, warnings);
+  if (!DecodeModuleEnvironment(envDecoder, moduleMeta->codeMeta.get(),
+                               moduleMeta)) {
+    return PendingModuleCompile();
+  }
+
+  PendingModuleCompile pending;
+  pending.moduleMeta = moduleMeta;
+  pending.wholeBytecode = wholeBytecode;
+  pending.resumeOffset = envDecoder.currentOffset();
+  return pending;
+}
+
+SharedModule wasm::FinishCompileModule(
+    const CompileArgs& args, PendingModuleCompile&& pending, UniqueChars* error,
+    UniqueCharsVector* warnings, JS::OptimizedEncodingListener* listener) {
+  MutableModuleMetadata moduleMeta = std::move(pending.moduleMeta);
+  MOZ_ASSERT(moduleMeta);
+
+  CompilerEnvironment compilerEnv(args);
+  compilerEnv.computeParameters(*moduleMeta);
+  if (!moduleMeta->prepareForCompile(compilerEnv.mode())) {
+    return nullptr;
+  }
+
+  ModuleGenerator mg(*moduleMeta->codeMeta, compilerEnv,
+                     compilerEnv.initialState(), nullptr, error, warnings);
+  if (!mg.initializeCompleteTier()) {
+    return nullptr;
+  }
+
+  BytecodeSpan remaining(pending.wholeBytecode.data() + pending.resumeOffset,
+                         pending.wholeBytecode.size() - pending.resumeOffset);
+  Decoder d(remaining, pending.resumeOffset, error, warnings);
+  if (!DecodeCodeSection(*moduleMeta->codeMeta, d, mg)) {
+    return nullptr;
+  }
+  if (!DecodeModuleTail(d, moduleMeta->codeMeta, moduleMeta)) {
+    return nullptr;
+  }
+  MOZ_RELEASE_ASSERT(d.done());
+
+  BytecodeSource fullSource(pending.wholeBytecode.data(),
+                            pending.wholeBytecode.size());
+  return mg.finishModule(BytecodeBufferOrSource(fullSource), *moduleMeta,
+                         listener);
+}
+
 SharedComponent wasm::CompileComponent(
     const CompileArgs& args, const BytecodeBufferOrSource& bytecode,
     UniqueChars* error, UniqueCharsVector* warnings,

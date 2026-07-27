@@ -1885,6 +1885,19 @@ struct BaseCompiler final {
   [[nodiscard]] bool emitCallBuiltinModuleFunc();
 #ifdef ENABLE_WASM_COMPONENTS
   [[nodiscard]] bool emitCallCanonLowerNative();
+  // Loads the runtime pointer a ComponentImportHint-classified import stashed
+  // in its ComponentImportInstanceData slot at instantiation (a
+  // LoweredNativeClosure* for CanonLower, a ComponentInstance* for
+  // ResourceDrop) into a freshly allocated register.
+  RegPtr loadComponentImportPtr(uint32_t funcIndex);
+  // Inlines the call-site half of a ComponentImportHint-classified import
+  // (see CodeMetadata::componentImportHint) directly into this import call,
+  // instead of calling out to the per-instantiation stub
+  // GenerateResourceDropFunc / GenerateCanonLowerNative would otherwise
+  // compile. `funcIndex` is the import being called.
+  [[nodiscard]] bool emitCallComponentResourceDrop(uint32_t funcIndex);
+  [[nodiscard]] bool emitCallComponentCanonLower(uint32_t funcIndex,
+                                                 bool resultOutParam);
 #endif
 };
 

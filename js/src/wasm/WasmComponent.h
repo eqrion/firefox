@@ -1299,6 +1299,17 @@ class Component : public JS::WasmComponent {
 
  private:
   CoreModuleVector definedCoreModules_;
+  // Parallel to definedCoreModules_, but populated as soon as each module's
+  // slot is reserved rather than once compilation finishes (see
+  // wasm::BeginCompileModule / DecodeComponent's deferred core-module compile
+  // pass, which needs the whole component decoded before it can compute
+  // ComponentImportHints and finish compiling each module). ModuleMetadata,
+  // unlike a compiled SharedModule, has no dependency on the transient
+  // bytecode buffer decoding reads from, so it's safe to keep here for the
+  // type/shape queries (getCoreModuleMetadata, used by CoreInstanceDesc) that
+  // decode-time validation needs before any module is fully compiled.
+  mozilla::Vector<MutableModuleMetadata, 0, SystemAllocPolicy>
+      definedCoreModuleMeta_;
   CoreInstanceVector definedCoreInstances_;
   TypeVector definedTypes_;
   FuncVector definedFuncs_;
@@ -1456,9 +1467,31 @@ class Component : public JS::WasmComponent {
 
   const ItemVector& coreModules() const { return coreModules_; }
   SharedModule getCoreModule(uint32_t modIndex) const;
-  [[nodiscard]] bool addCoreModule(SharedModule module) {
-    return addDefinedItem(ComponentSort::CoreModule, std::move(module),
+  // The ModuleMetadata for a core module, whether or not it has finished
+  // compiling yet (see reserveCoreModule). Used for the type/shape queries
+  // (CoreInstanceDesc's getExport/getCoreFuncType/getTable/getMemory/
+  // getGlobal/getTag) decode-time validation needs before any module in the
+  // component is fully compiled - getCoreModule() can't serve those, since
+  // its SharedModule is null until setCoreModule() runs.
+  const ModuleMetadata& getCoreModuleMetadata(uint32_t modIndex) const;
+  // Reserves the next CoreModule index-space slot for a module whose
+  // compilation hasn't finished yet (see wasm::BeginCompileModule and
+  // DecodeComponent's deferred core-module compile pass, which needs the
+  // whole component decoded before it can compute ComponentImportHints for
+  // each module). The slot's SharedModule is null until setCoreModule()
+  // backfills it.
+  [[nodiscard]] bool reserveCoreModule(MutableModuleMetadata moduleMeta) {
+    if (!definedCoreModuleMeta_.append(std::move(moduleMeta))) {
+      return false;
+    }
+    return addDefinedItem(ComponentSort::CoreModule, SharedModule(nullptr),
                           definedCoreModules_, coreModules_);
+  }
+  // Backfills a slot reserved by reserveCoreModule(), in `definedCoreModules_`
+  // index order (i.e. the order reserveCoreModule() was called).
+  void setCoreModule(uint32_t definedIndex, SharedModule module) {
+    MOZ_ASSERT(!definedCoreModules_[definedIndex]);
+    definedCoreModules_[definedIndex] = std::move(module);
   }
 
   const ItemVector& coreInstances() const { return coreInstances_; }
@@ -1555,11 +1588,16 @@ struct LoweredNativeClosure {
   // exactly to this overload's flat param/result budget and filled in
   // immediately before, and drained immediately after, each native call, so
   // reuse (including across a same-thread reentrant call) is safe. Contains
-  // no GC pointers, so needs no tracing. Resized once, up front; a
-  // JIT-generated stub bakes a raw pointer to its storage directly into
-  // compiled code, so it must never be resized again afterward.
-  mozilla::Vector<JS::WasmScalarVal, 0, SystemAllocPolicy> paramsScratch;
-  mozilla::Vector<JS::WasmScalarVal, 0, SystemAllocPolicy> resultsScratch;
+  // no GC pointers, so needs no tracing. Allocated once, up front, and never
+  // resized again afterward: JIT-generated code reads `paramsScratch.get()` /
+  // `resultsScratch.get()`'s effect directly - either baked as an immediate
+  // (a stub compiled with `this` already known, see GenerateCanonLowerNative)
+  // or loaded at runtime through `this` (a core module inlining the call, see
+  // ComponentImportKind::CanonLower) - so these must be plain owned arrays,
+  // not a Vector: a JIT-generated load can only read a raw pointer field, not
+  // replicate Vector's internal layout.
+  mozilla::UniquePtr<JS::WasmScalarVal[]> paramsScratch;
+  mozilla::UniquePtr<JS::WasmScalarVal[]> resultsScratch;
   uint32_t numParams = 0;
   uint32_t numResultSlots = 0;
 
@@ -1570,6 +1608,10 @@ struct LoweredNativeClosure {
 
   void trace(JSTracer* trc) { ctx.trace(trc); }
 };
+
+static_assert(sizeof(mozilla::UniquePtr<JS::WasmScalarVal[]>) ==
+                  sizeof(JS::WasmScalarVal*),
+              "for JIT access");
 
 class ComponentInstance {
   // The containing JS::Realm.

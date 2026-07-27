@@ -5697,6 +5697,19 @@ enum class CoreInstanceExprKind : uint8_t {
   InlineExports = 0x01,
 };
 
+// Core modules embedded in a component are compiled in two steps (see
+// wasm::BeginCompileModule / FinishCompileModule): the module's environment
+// is decoded as soon as its CoreModule section is seen, but finishing
+// compilation - including attaching ComponentImportHint values - is deferred
+// until the whole component has been decoded and the compiler can classify
+// each import as either a canon builtin or a genuine cross-module import (see
+// FinishComponentCoreModules). This vector holds the modules still waiting on
+// that second step, indexed the same way as Component's CoreModule
+// `definedCoreModules_` (i.e. ComponentItem::itemIndex() for a Defined
+// CoreModule item).
+using PendingCoreModuleVector =
+    mozilla::Vector<PendingModuleCompile, 0, SystemAllocPolicy>;
+
 [[nodiscard]] static bool DecodeCoreInstance(Decoder& d, MutableComponent& c) {
   uint8_t exprType;
   if (!d.readFixedU8(&exprType)) {
@@ -5756,13 +5769,13 @@ enum class CoreInstanceExprKind : uint8_t {
       // Validate that the instantiate args satisfy the module's imports. (How
       // wonderful it is that we can do this statically for components!)
       {
-        SharedModule mod = c->getCoreModule(moduleIndex);
+        const ModuleMetadata& modMeta = c->getCoreModuleMetadata(moduleIndex);
         uint32_t functionIndex = 0;
         uint32_t tableIndex = 0;
         uint32_t memoryIndex = 0;
         uint32_t globalIndex = 0;
         uint32_t tagIndex = 0;
-        for (const Import& imp : mod->moduleMeta().imports) {
+        for (const Import& imp : modMeta.imports) {
           auto p = args.lookup(imp.module.utf8Bytes());
           if (!p) {
             return d.fail("no instantiate arg found");
@@ -5783,7 +5796,8 @@ enum class CoreInstanceExprKind : uint8_t {
               }
 
               uint32_t index = functionIndex++;
-              const TypeDef& importType = mod->codeMeta().getFuncTypeDef(index);
+              const TypeDef& importType =
+                  modMeta.codeMeta->getFuncTypeDef(index);
               const TypeDef& exportType = instance.getCoreFuncType(exp.index);
               if (!TypeDef::isSubTypeOf(&exportType, &importType)) {
                 return d.fail("incompatible function type for import");
@@ -5795,7 +5809,7 @@ enum class CoreInstanceExprKind : uint8_t {
               }
 
               uint32_t index = tableIndex++;
-              const TableDesc& importTable = mod->codeMeta().tables[index];
+              const TableDesc& importTable = modMeta.codeMeta->tables[index];
               const TableDesc& exportTable = instance.getTable(exp.index);
               if (!TableType::matches(exportTable.type, importTable.type)) {
                 return d.fail("incompatible table type for import");
@@ -5807,7 +5821,7 @@ enum class CoreInstanceExprKind : uint8_t {
               }
 
               uint32_t index = memoryIndex++;
-              MemoryDesc importMemory = mod->codeMeta().memories[index];
+              MemoryDesc importMemory = modMeta.codeMeta->memories[index];
               MemoryDesc exportMemory = instance.getMemory(exp.index);
               if (!MemoryDesc::matches(exportMemory, importMemory)) {
                 return d.fail("incompatible memory type for import");
@@ -5819,7 +5833,7 @@ enum class CoreInstanceExprKind : uint8_t {
               }
 
               uint32_t index = globalIndex++;
-              const GlobalDesc& importGlobal = mod->codeMeta().globals[index];
+              const GlobalDesc& importGlobal = modMeta.codeMeta->globals[index];
               const GlobalDesc& exportGlobal = instance.getGlobal(exp.index);
               if (!GlobalDesc::matches(exportGlobal, importGlobal)) {
                 return d.fail("incompatible global type for import");
@@ -5831,7 +5845,7 @@ enum class CoreInstanceExprKind : uint8_t {
               }
 
               uint32_t index = tagIndex++;
-              const TagDesc& importTag = mod->codeMeta().tags[index];
+              const TagDesc& importTag = modMeta.codeMeta->tags[index];
               const TagDesc& exportTag = instance.getTag(exp.index);
               if (!TagType::matches(*exportTag.type, *importTag.type)) {
                 return d.fail("incompatible tag type for import");
@@ -6619,19 +6633,18 @@ enum class ComponentExportFlagsRaw : uint8_t {
 
 [[nodiscard]] static bool DecodeComponentCoreModuleSection(
     Decoder& d, MutableComponent& c, const BytecodeSpan& moduleBytes,
-    const CompileArgs& args, JS::OptimizedEncodingListener* listener) {
+    const CompileArgs& args, PendingCoreModuleVector* pendingCoreModules) {
   if (c->coreModules().length() >= MaxComponentCoreModules) {
     return d.failf("too many core modules (max %d)", MaxComponentCoreModules);
   }
 
-  BytecodeSource moduleSource(moduleBytes.data(), moduleBytes.size());
-  SharedModule module =
-      CompileModule(args, BytecodeBufferOrSource(moduleSource), d.error(),
-                    d.warnings(), listener);
-  if (!module) {
+  PendingModuleCompile pending =
+      BeginCompileModule(args, moduleBytes, d.error(), d.warnings());
+  if (!pending.moduleMeta) {
     return false;
   }
-  if (!c->addCoreModule(module)) {
+  if (!c->reserveCoreModule(pending.moduleMeta) ||
+      !pendingCoreModules->append(std::move(pending))) {
     return false;
   }
 
@@ -6753,6 +6766,183 @@ enum class ComponentExportFlagsRaw : uint8_t {
   return true;
 }
 
+// Classifies a core module import bound to `instanceIndex`/`field` as either
+// a canon builtin this engine can inline into the importing module's call
+// sites (see CodeMetadata::componentImportHints), or an ordinary import
+// (`ComponentImportKind::None`) - which covers both genuine cross-module wasm
+// imports and canon operations this engine doesn't inline (resource.new/rep,
+// and resource.drop of a locally-defined resource).
+//
+// This mirrors the classification half of the runtime binding logic in
+// ComponentInstance::init (the ComponentItem::ItemKind::Defined case there);
+// the runtime pointer the inlined code needs (a LoweredNativeClosure* or a
+// ComponentInstance*) is written into the import's ComponentImportInstanceData
+// slot at instantiation, not decided here.
+//
+// For CanonLower specifically, this classification cannot know whether the
+// import's eventual callee (bound only once the component is instantiated)
+// will actually take GenerateCanonLowerNative's native-call fast path, or
+// fall back to the generic WasmComponentLoweredJS path - see
+// ResolveLoweredCoreFunc / SelectNativeOverload. That decision depends on the
+// concrete JS value the embedder supplies as the import, which isn't known
+// until instantiation. The hint is set regardless; the inlined call site
+// (see BaseCompiler::emitCallComponentCanonLower /
+// FunctionCompiler::callComponentCanonLower) guards on whether instantiation
+// actually found a native closure to inline against
+// (ComponentImportInstanceData's pointer being non-null), falling back to
+// the ordinary import call otherwise, so this is sound either way.
+[[nodiscard]] static bool ClassifyComponentImport(const Component& c,
+                                                  uint32_t instanceIndex,
+                                                  const CacheableName& field,
+                                                  ComponentImportHint* hint) {
+  *hint = ComponentImportHint();
+
+  const CoreInstanceDesc& instanceDesc = c.getCoreInstance(instanceIndex);
+  if (instanceDesc.desc().is<CoreInstanceDescFromModule>()) {
+    // A genuine cross-module wasm import; nothing to inline.
+    return true;
+  }
+
+  const ComponentInlineExports& inlineExports =
+      instanceDesc.desc().as<ComponentInlineExports>();
+  ComponentSortIndex actualItemSortIndex =
+      inlineExports.mustResolveExportToOriginal(field);
+  ComponentItem actualItem = c.resolveSortIndex(actualItemSortIndex);
+
+  // Resolve outer aliases first: by construction there are never chains of
+  // inline exports, only at most one level of outer alias (see
+  // ComponentInstance::init).
+  if (actualItem.isOuterAlias()) {
+    MOZ_RELEASE_ASSERT(actualItem.aliasInstanceIndex() == 0);
+    actualItemSortIndex = actualItem.outerAliasSortIndex();
+    actualItem = c.resolveSortIndex(actualItemSortIndex);
+  }
+
+  switch (actualItem.kind()) {
+    case ComponentItem::ItemKind::Defined: {
+      MOZ_RELEASE_ASSERT(actualItem.sort() == ComponentSort::CoreFunction);
+      const ComponentCoreFuncDesc& coreFuncDesc =
+          c.getLoweredCoreFunc(actualItemSortIndex.index);
+      if (coreFuncDesc.payload().is<uint32_t>()) {
+        uint32_t loweredFuncIndex = coreFuncDesc.payload().as<uint32_t>();
+        ComponentType funcTypeVal = c.getTypeForFunc(loweredFuncIndex);
+        const ComponentFuncType& funcType = funcTypeVal.asFunc();
+        bool hasResultOutParam = false;
+        if (funcType.resultType.isSome()) {
+          ValTypeVector flatResult;
+          if (!FlattenType(funcType.resultType.ref(), &flatResult)) {
+            return false;
+          }
+          hasResultOutParam = flatResult.length() > MaxFlatResults;
+        }
+        *hint = ComponentImportHint{ComponentImportKind::CanonLower,
+                                    hasResultOutParam};
+        return true;
+      }
+      const ComponentResourceBuiltin& builtin =
+          coreFuncDesc.payload().as<ComponentResourceBuiltin>();
+      if (builtin.kind() == ComponentResourceBuiltin::Kind::ResourceDrop &&
+          builtin.resourceType().kind() == ComponentTypeKind::SubResource) {
+        *hint = ComponentImportHint{ComponentImportKind::ResourceDrop};
+      }
+      return true;
+    }
+    case ComponentItem::ItemKind::Alias:
+      MOZ_RELEASE_ASSERT(actualItem.aliasKind() ==
+                         ComponentAliasKind::CoreExport);
+      return true;
+    default:
+      MOZ_CRASH();
+  }
+}
+
+// Computes each pending core module's ComponentImportHints from the fully
+// decoded component structure, then finishes compiling every module (see
+// wasm::FinishCompileModule) and backfills it into `c`'s CoreModule index
+// space via Component::setCoreModule.
+[[nodiscard]] static bool FinishComponentCoreModules(
+    MutableComponent& c, PendingCoreModuleVector& pendingCoreModules,
+    const CompileArgs& args, UniqueChars* error, UniqueCharsVector* warnings,
+    JS::OptimizedEncodingListener* listener) {
+  mozilla::Vector<ComponentImportHintVector, 0, SystemAllocPolicy>
+      hintsByModule;
+  if (!hintsByModule.resize(pendingCoreModules.length())) {
+    return false;
+  }
+
+  for (uint32_t instanceIndex = 0; instanceIndex < c->coreInstances().length();
+       instanceIndex++) {
+    const CoreInstanceDesc& instanceDesc = c->getCoreInstance(instanceIndex);
+    if (!instanceDesc.desc().is<CoreInstanceDescFromModule>()) {
+      continue;
+    }
+    const CoreInstanceDescFromModule& fromModule =
+        instanceDesc.desc().as<CoreInstanceDescFromModule>();
+
+    ComponentItem moduleItem = c->coreModules()[fromModule.moduleIndex];
+    MOZ_RELEASE_ASSERT(moduleItem.kind() == ComponentItem::ItemKind::Defined);
+    uint32_t definedModuleIndex = moduleItem.itemIndex();
+    const ModuleMetadata& modMeta =
+        *pendingCoreModules[definedModuleIndex].moduleMeta;
+
+    ComponentImportHintVector hints;
+    if (!hints.resize(modMeta.codeMeta->numFuncImports)) {
+      return false;
+    }
+
+    uint32_t funcImportIndex = 0;
+    for (const Import& imp : modMeta.imports) {
+      if (imp.kind != DefinitionKind::Function) {
+        continue;
+      }
+      uint32_t funcIndex = funcImportIndex++;
+
+      auto p = fromModule.args.lookup(imp.module.utf8Bytes());
+      MOZ_RELEASE_ASSERT(p);
+      uint32_t boundInstanceIndex = p->value();
+
+      ComponentImportHint hint;
+      if (!ClassifyComponentImport(*c, boundInstanceIndex, imp.field, &hint)) {
+        return false;
+      }
+      hints[funcIndex] = hint;
+    }
+
+    ComponentImportHintVector& moduleHints = hintsByModule[definedModuleIndex];
+    if (moduleHints.empty()) {
+      moduleHints = std::move(hints);
+    } else {
+      // The same compiled module can be instantiated more than once (with
+      // different `args` bindings) within one component; its code is shared
+      // across all of them, so a hint only holds if every instantiation
+      // agrees on it.
+      MOZ_RELEASE_ASSERT(moduleHints.length() == hints.length());
+      for (uint32_t i = 0; i < hints.length(); i++) {
+        if (moduleHints[i].kind != hints[i].kind ||
+            moduleHints[i].resultOutParam != hints[i].resultOutParam) {
+          moduleHints[i] = ComponentImportHint();
+        }
+      }
+    }
+  }
+
+  for (uint32_t i = 0; i < pendingCoreModules.length(); i++) {
+    PendingModuleCompile pending = std::move(pendingCoreModules[i]);
+    if (!hintsByModule[i].empty()) {
+      pending.moduleMeta->codeMeta->componentImportHints =
+          std::move(hintsByModule[i]);
+    }
+    SharedModule mod = FinishCompileModule(args, std::move(pending), error,
+                                           warnings, listener);
+    if (!mod) {
+      return false;
+    }
+    c->setCoreModule(i, std::move(mod));
+  }
+
+  return true;
+}
+
 bool wasm::DecodeComponent(Decoder& d, MutableComponent c,
                            const CompileArgs& args,
                            JS::OptimizedEncodingListener* listener) {
@@ -6762,6 +6952,7 @@ bool wasm::DecodeComponent(Decoder& d, MutableComponent c,
 
   StronglyUniqueNameSet importNameDedup;
   StronglyUniqueNameSet exportNameDedup;
+  PendingCoreModuleVector pendingCoreModules;
 
   while (!d.done()) {
     uint8_t sectionID;
@@ -6800,7 +6991,7 @@ bool wasm::DecodeComponent(Decoder& d, MutableComponent c,
 
         case uint8_t(ComponentSectionId::CoreModule): {
           if (!DecodeComponentCoreModuleSection(d, c, sectionBytes, args,
-                                                listener)) {
+                                                &pendingCoreModules)) {
             return false;
           }
         } break;
@@ -6845,6 +7036,11 @@ bool wasm::DecodeComponent(Decoder& d, MutableComponent c,
                        d.bytesRemain());
       }
     }
+  }
+
+  if (!FinishComponentCoreModules(c, pendingCoreModules, args, d.error(),
+                                  d.warnings(), listener)) {
+    return false;
   }
 
   return true;

@@ -363,8 +363,9 @@ mozilla::Maybe<ComponentSortIndex> CoreInstanceDesc::getExport(
   return desc_.match(
       [&](const CoreInstanceDescFromModule& fromModule)
           -> mozilla::Maybe<ComponentSortIndex> {
-        SharedModule mod = component_->getCoreModule(fromModule.moduleIndex);
-        mozilla::Maybe<const Export&> exp = mod->moduleMeta().getExport(name);
+        const ModuleMetadata& modMeta =
+            component_->getCoreModuleMetadata(fromModule.moduleIndex);
+        mozilla::Maybe<const Export&> exp = modMeta.getExport(name);
         if (exp.isNothing()) {
           return mozilla::Nothing();
         }
@@ -397,8 +398,9 @@ mozilla::Maybe<ComponentSortIndex> CoreInstanceDesc::getExport(
 const TypeDef& CoreInstanceDesc::getCoreFuncType(uint32_t coreFuncIndex) const {
   return desc_.match(
       [&](const CoreInstanceDescFromModule& fromModule) -> const TypeDef& {
-        SharedModule mod = component_->getCoreModule(fromModule.moduleIndex);
-        return mod->codeMeta().getFuncTypeDef(coreFuncIndex);
+        const ModuleMetadata& modMeta =
+            component_->getCoreModuleMetadata(fromModule.moduleIndex);
+        return modMeta.codeMeta->getFuncTypeDef(coreFuncIndex);
       },
       [&](const ComponentInlineExports& inlineExports) -> const TypeDef& {
         ComponentSortIndex originalFunc = inlineExports.resolveOriginal(
@@ -410,8 +412,9 @@ const TypeDef& CoreInstanceDesc::getCoreFuncType(uint32_t coreFuncIndex) const {
 const TableDesc& CoreInstanceDesc::getTable(uint32_t tableIndex) const {
   return desc_.match(
       [&](const CoreInstanceDescFromModule& fromModule) -> const TableDesc& {
-        SharedModule mod = component_->getCoreModule(fromModule.moduleIndex);
-        return mod->codeMeta().tables[tableIndex];
+        const ModuleMetadata& modMeta =
+            component_->getCoreModuleMetadata(fromModule.moduleIndex);
+        return modMeta.codeMeta->tables[tableIndex];
       },
       [&](const ComponentInlineExports& inlineExports) -> const TableDesc& {
         ComponentSortIndex originalTable = inlineExports.resolveOriginal(
@@ -423,8 +426,9 @@ const TableDesc& CoreInstanceDesc::getTable(uint32_t tableIndex) const {
 const MemoryDesc& CoreInstanceDesc::getMemory(uint32_t memoryIndex) const {
   return desc_.match(
       [&](const CoreInstanceDescFromModule& fromModule) -> const MemoryDesc& {
-        SharedModule mod = component_->getCoreModule(fromModule.moduleIndex);
-        return mod->codeMeta().memories[memoryIndex];
+        const ModuleMetadata& modMeta =
+            component_->getCoreModuleMetadata(fromModule.moduleIndex);
+        return modMeta.codeMeta->memories[memoryIndex];
       },
       [&](const ComponentInlineExports& inlineExports) -> const MemoryDesc& {
         ComponentSortIndex originalMemory = inlineExports.resolveOriginal(
@@ -436,8 +440,9 @@ const MemoryDesc& CoreInstanceDesc::getMemory(uint32_t memoryIndex) const {
 const GlobalDesc& CoreInstanceDesc::getGlobal(uint32_t globalIndex) const {
   return desc_.match(
       [&](const CoreInstanceDescFromModule& fromModule) -> const GlobalDesc& {
-        SharedModule mod = component_->getCoreModule(fromModule.moduleIndex);
-        return mod->codeMeta().globals[globalIndex];
+        const ModuleMetadata& modMeta =
+            component_->getCoreModuleMetadata(fromModule.moduleIndex);
+        return modMeta.codeMeta->globals[globalIndex];
       },
       [&](const ComponentInlineExports& inlineExports) -> const GlobalDesc& {
         ComponentSortIndex originalGlobal = inlineExports.resolveOriginal(
@@ -449,8 +454,9 @@ const GlobalDesc& CoreInstanceDesc::getGlobal(uint32_t globalIndex) const {
 const TagDesc& CoreInstanceDesc::getTag(uint32_t tagIndex) const {
   return desc_.match(
       [&](const CoreInstanceDescFromModule& fromModule) -> const TagDesc& {
-        SharedModule mod = component_->getCoreModule(fromModule.moduleIndex);
-        return mod->codeMeta().tags[tagIndex];
+        const ModuleMetadata& modMeta =
+            component_->getCoreModuleMetadata(fromModule.moduleIndex);
+        return modMeta.codeMeta->tags[tagIndex];
       },
       [&](const ComponentInlineExports& inlineExports) -> const TagDesc& {
         ComponentSortIndex originalTag = inlineExports.resolveOriginal(
@@ -3108,6 +3114,29 @@ SharedModule Component::getCoreModule(uint32_t modIndex) const {
   }
 }
 
+const ModuleMetadata& Component::getCoreModuleMetadata(
+    uint32_t modIndex) const {
+  ComponentItem item = coreModules_[modIndex];
+  MOZ_ASSERT(item.sort() == ComponentSort::CoreModule);
+  switch (item.kind()) {
+    case ComponentItem::ItemKind::Defined:
+      return *definedCoreModuleMeta_[item.itemIndex()];
+    case ComponentItem::ItemKind::Import:
+      // TODO(wasm-cm): Fix when core module types are supported
+      MOZ_CRASH("should be impossible for now");
+    case ComponentItem::ItemKind::Export: {
+      const ComponentExport& exp = exports_[item.itemIndex()];
+      MOZ_ASSERT(exp.externDesc().sort() == ComponentSort::CoreModule);
+      return *definedCoreModuleMeta_[exp.externDesc().asCoreModule()];
+    } break;
+    case ComponentItem::ItemKind::Alias:
+      // TODO(wasm-cm): Fix when nested components are supported
+      MOZ_CRASH("should be impossible for now");
+    default:
+      MOZ_CRASH();
+  }
+}
+
 const CoreInstanceDesc& Component::getCoreInstance(
     uint32_t instanceIndex) const {
   ComponentItem item = coreInstances_[instanceIndex];
@@ -3797,10 +3826,21 @@ static JSFunction* BuildLoweredJSCoreFunc(
         hasResultOutParam ? int32_t(wasmNumParams - 1) : -1;
     closure->numResultSlots =
         hasResultOutParam ? 0 : coreWasmFuncType.results().length();
-    if (!closure->paramsScratch.resize(closure->numParams) ||
-        !closure->resultsScratch.resize(closure->numResultSlots)) {
-      ReportOutOfMemory(cx);
-      return false;
+    if (closure->numParams > 0) {
+      closure->paramsScratch =
+          mozilla::MakeUnique<JS::WasmScalarVal[]>(closure->numParams);
+      if (!closure->paramsScratch) {
+        ReportOutOfMemory(cx);
+        return false;
+      }
+    }
+    if (closure->numResultSlots > 0) {
+      closure->resultsScratch =
+          mozilla::MakeUnique<JS::WasmScalarVal[]>(closure->numResultSlots);
+      if (!closure->resultsScratch) {
+        ReportOutOfMemory(cx);
+        return false;
+      }
     }
 
     bool baselineUnavailable = false;
@@ -3833,6 +3873,18 @@ static JSFunction* BuildLoweredJSCoreFunc(
     return -1;
   }
   return 0;
+}
+
+/* static */ int32_t Instance::componentCanonLowerCall(Instance* instance,
+                                                       int64_t closure,
+                                                       int32_t resultMemBase) {
+  auto* nativeClosure =
+      reinterpret_cast<LoweredNativeClosure*>(uintptr_t(closure));
+  bool ok = nativeClosure->entry(&nativeClosure->adapter, &nativeClosure->ctx,
+                                 nativeClosure->paramsScratch.get(),
+                                 uint32_t(resultMemBase),
+                                 nativeClosure->resultsScratch.get());
+  return ok ? 0 : -1;
 }
 
 // JIT-compiles a wasm stub with `funcTypeDef`'s shape (the imported
@@ -4445,8 +4497,28 @@ bool ComponentInstance::init(JSContext* cx, HandleObject importObj) {
         instanceDesc.desc().as<CoreInstanceDescFromModule>();
     SharedModule mod = component_->getCoreModule(desc.moduleIndex);
 
+    // Parallel to the module's own func-import index space (see
+    // CodeMetadata::componentImportHints): captures the runtime pointer a
+    // ComponentImportKind-classified import's inlined call site will load
+    // from ComponentImportInstanceData - a LoweredNativeClosure* for
+    // CanonLower, this ComponentInstance for ResourceDrop. Left null for
+    // every import None applies to. Written into the new core instance's
+    // instance data once it exists, below.
+    mozilla::Vector<void*, 0, SystemAllocPolicy> componentImportPtrs;
+    if (!mod->codeMeta().componentImportHints.empty() &&
+        !componentImportPtrs.resize(mod->codeMeta().numFuncImports)) {
+      ReportOutOfMemory(cx);
+      return false;
+    }
+    uint32_t funcImportIndex = 0;
+
     ImportValues imports;
     for (const Import& imp : mod->moduleMeta().imports) {
+      uint32_t thisFuncImportIndex = funcImportIndex;
+      if (imp.kind == DefinitionKind::Function) {
+        funcImportIndex++;
+      }
+
       auto p = desc.args.lookup(imp.module.utf8Bytes());
       MOZ_RELEASE_ASSERT(p);
       uint32_t instanceIndex = p->value();
@@ -4491,6 +4563,20 @@ bool ComponentInstance::init(JSContext* cx, HandleObject importObj) {
                                           &exportVal)) {
                 return false;
               }
+              if (!componentImportPtrs.empty()) {
+                MOZ_ASSERT(mod->codeMeta()
+                               .componentImportHint(thisFuncImportIndex)
+                               .kind == ComponentImportKind::CanonLower);
+                // May be null: whether this import's actual callee is
+                // native-eligible is a runtime fact ResolveLoweredCoreFunc
+                // just resolved (see SelectNativeOverload), not something
+                // the CanonLower hint's classification could know ahead of
+                // time. A null pointer here is exactly what tells the
+                // inlined call site (see emitCallComponentCanonLower) to
+                // fall back to the ordinary import call instead.
+                componentImportPtrs[thisFuncImportIndex] =
+                    loweredNativeClosure(actualItemSortIndex.index);
+              }
             } else if (const ComponentResourceBuiltin& builtin =
                            coreFuncDesc.payload()
                                .as<ComponentResourceBuiltin>();
@@ -4516,6 +4602,18 @@ bool ComponentInstance::init(JSContext* cx, HandleObject importObj) {
                   return false;
                 }
                 exportVal.setObject(*dropFun);
+              }
+              if (!componentImportPtrs.empty()) {
+                MOZ_ASSERT(mod->codeMeta()
+                               .componentImportHint(thisFuncImportIndex)
+                               .kind == ComponentImportKind::ResourceDrop);
+                // Always available, regardless of `baselineUnavailable`: the
+                // inlined call site calls Instance::componentResourceDrop
+                // directly (see emitCallComponentResourceDrop), it never
+                // goes through the GenerateResourceDropFunc stub this
+                // pointer would otherwise only be needed for.
+                componentImportPtrs[thisFuncImportIndex] =
+                    &componentInstanceObj->instance();
               }
             } else {
               // TODO(wasm-cm): resource.new/rep, and resource.drop for a
@@ -4606,6 +4704,14 @@ bool ComponentInstance::init(JSContext* cx, HandleObject importObj) {
       return false;
     }
     coreInstances_[i] = instanceObj;
+
+    for (uint32_t j = 0; j < componentImportPtrs.length(); j++) {
+      if (!componentImportPtrs[j]) {
+        continue;
+      }
+      instanceObj->instance().componentImportInstanceData(j).ptr =
+          componentImportPtrs[j];
+    }
   }
 
   // Only now that every core instance exists can a native-call closure's

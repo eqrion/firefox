@@ -151,6 +151,20 @@ bool CodeMetadata::prepareForCompile(CompileMode mode) {
     return false;
   }
 
+  // Allocate one ComponentImportInstanceData per function import, but only for
+  // core modules of a component whose compiler resolved imports to canon
+  // builtins. Ordinary modules leave componentImportHints empty and pay
+  // nothing here.
+  if (!componentImportHints.empty()) {
+    MOZ_ASSERT(componentImportHints.length() == numFuncImports);
+    if (!allocateInstanceDataBytesN(sizeof(ComponentImportInstanceData),
+                                    alignof(ComponentImportInstanceData),
+                                    numFuncImports,
+                                    &componentImportsOffsetStart)) {
+      return false;
+    }
+  }
+
   // Allocate space for every global that requires it
   for (GlobalDesc& global : globals) {
     if (global.isConstant()) {

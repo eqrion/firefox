@@ -144,6 +144,16 @@ struct FuncImportInstanceData {
   bool isFunctionCallBind;
 };
 
+// ComponentImportInstanceData holds the runtime-varying pointer that inlined
+// component import code needs, for a core module import the component compiler
+// resolved to a canon builtin (see CodeMetadata::componentImportHints). It is
+// a LoweredNativeClosure* for a `canon lower` import, or the ComponentInstance*
+// for a `resource.drop` import. Populated at instantiation; read directly from
+// JIT code. Only allocated when the module has component import hints.
+struct ComponentImportInstanceData {
+  void* ptr;
+};
+
 struct MemoryInstanceData {
   // Pointer to the memory object.
   GCPtr<WasmMemoryObject*> memory;

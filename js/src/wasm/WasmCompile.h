@@ -64,6 +64,35 @@ SharedModuleOrComponent CompileBuffer(
     const CompileArgs& args, const BytecodeBufferOrSource& bytecode,
     UniqueChars* error, UniqueCharsVector* warnings,
     JS::OptimizedEncodingListener* listener = nullptr);
+
+// The result of BeginCompileModule: a module whose environment (imports,
+// types, etc.) has been decoded, but which is not yet prepared for compile
+// (CodeMetadata::isPreparedForCompile() is false) and has no code compiled.
+// `moduleMeta` is null if BeginCompileModule failed.
+struct PendingModuleCompile {
+  MutableModuleMetadata moduleMeta;
+  BytecodeSpan wholeBytecode;
+  size_t resumeOffset = 0;
+};
+
+// Splits CompileModule into two phases so that wasm component compilation can
+// inspect and adjust a core module's CodeMetadata - attaching
+// ComponentImportHint values once the component's structure is fully known -
+// after the module's environment is decoded but before
+// CodeMetadata::prepareForCompile() fixes the instance data layout and code
+// is compiled. `wholeBytecode` must be a single contiguous buffer (unlike
+// CompileModule, this does not support the streaming-style pre-split
+// BytecodeSource).
+PendingModuleCompile BeginCompileModule(const CompileArgs& args,
+                                        BytecodeSpan wholeBytecode,
+                                        UniqueChars* error,
+                                        UniqueCharsVector* warnings);
+
+// Finishes compiling a module previously started with BeginCompileModule.
+SharedModule FinishCompileModule(
+    const CompileArgs& args, PendingModuleCompile&& pending, UniqueChars* error,
+    UniqueCharsVector* warnings,
+    JS::OptimizedEncodingListener* listener = nullptr);
 #endif
 
 // Attempt to compile the second tier of the given wasm::Module.

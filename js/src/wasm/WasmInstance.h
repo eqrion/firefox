@@ -53,6 +53,7 @@ struct CodeTailMetadata;
 struct FuncDefInstanceData;
 class FuncImport;
 struct FuncImportInstanceData;
+struct ComponentImportInstanceData;
 struct FuncExportInstanceData;
 struct MemoryDesc;
 struct MemoryInstanceData;
@@ -287,6 +288,13 @@ class alignas(16) Instance {
                        uintptr_t highestByteVisitedInPrevFrame);
   void updateFrameForMovingGC(const wasm::WasmFrameIter& wfi, uint8_t* nextPC,
                               Nursery& nursery);
+
+  // Written by wasm component instantiation once this instance's
+  // ComponentImportKind-classified imports (see
+  // CodeMetadata::componentImportHints) are resolved, and read by their
+  // inlined call sites - see emitCallComponentResourceDrop /
+  // emitCallComponentCanonLower.
+  ComponentImportInstanceData& componentImportInstanceData(uint32_t funcIndex);
 
   static constexpr size_t offsetOfMemory0Base() {
     return offsetof(Instance, memory0Base_);
@@ -639,6 +647,15 @@ class alignas(16) Instance {
   static int32_t componentResourceDrop(Instance* instance,
                                        int64_t rawComponentInstance,
                                        int32_t index);
+
+  // Implemented in WasmComponent.cpp. Ion-only trampoline for inlining
+  // `canon lower` at an import's call site (see
+  // FunctionCompiler::callComponentCanonLower): does the indirect call
+  // through `closure`'s entry point that Ion has no MIR-level mechanism to
+  // emit directly. `closure` is a raw LoweredNativeClosure* loaded at
+  // runtime from the import's ComponentImportInstanceData slot.
+  static int32_t componentCanonLowerCall(Instance* instance, int64_t closure,
+                                         int32_t resultMemBase);
 
   static int32_t stringTest(Instance* instance, void* stringArg);
   static void* stringCast(Instance* instance, void* stringArg);

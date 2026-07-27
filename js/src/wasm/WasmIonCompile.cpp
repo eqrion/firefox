@@ -3356,6 +3356,254 @@ class FunctionCompiler {
     MOZ_CRASH();
   }
 
+#ifdef ENABLE_WASM_COMPONENTS
+  // Loads the runtime pointer a ComponentImportHint-classified import stashed
+  // in its ComponentImportInstanceData slot at instantiation, as an Int64
+  // MIR value (the slot itself is only pointer-width; a 32-bit platform's
+  // pointer must be zero-extended, since e.g. ComponentResourceDrop's builtin
+  // signature declares this argument as a full Int64 regardless of platform
+  // - see GenerateResourceDropFunc's matching compile-time-constant encoding).
+  [[nodiscard]] MDefinition* loadComponentImportPtrAsI64(uint32_t funcIndex) {
+    uint32_t offset = Instance::offsetInData(
+        codeMeta().offsetOfComponentImportInstanceData(funcIndex) +
+        offsetof(ComponentImportInstanceData, ptr));
+    // Immutable from the moment instantiation writes it - no wasm code for
+    // this instance runs before that - so this load is freely reorderable.
+#  ifdef JS_PUNBOX64
+    auto* load = MWasmLoadInstance::New(alloc(), instancePointer_, offset,
+                                        MIRType::Int64, AliasSet::None());
+    curBlock_->add(load);
+    return load;
+#  else
+    auto* load = MWasmLoadInstance::New(alloc(), instancePointer_, offset,
+                                        MIRType::Int32, AliasSet::None());
+    curBlock_->add(load);
+    auto* ext = MExtendInt32ToInt64::New(alloc(), load, /*isUnsigned=*/true);
+    curBlock_->add(ext);
+    return ext;
+#  endif
+  }
+
+  // Inlines the call-site half of a ComponentImportKind::ResourceDrop import
+  // (see CodeMetadata::componentImportHint) directly into this import call,
+  // instead of calling out to the per-instantiation stub
+  // GenerateResourceDropFunc would otherwise compile: prepend the
+  // ComponentInstance* this instantiation bound for this import to `params`,
+  // then call the same ComponentResourceDrop builtin the stub would have
+  // called.
+  [[nodiscard]] bool callComponentResourceDrop(uint32_t funcIndex,
+                                               const DefVector& params) {
+    MOZ_ASSERT(!inDeadCode());
+    MOZ_ASSERT(params.length() == 1);
+
+    MDefinition* componentInstancePtr = loadComponentImportPtrAsI64(funcIndex);
+
+    DefVector builtinParams;
+    if (!builtinParams.append(componentInstancePtr) ||
+        !builtinParams.append(params[0])) {
+      return false;
+    }
+
+    const BuiltinModuleFunc& builtinModuleFunc = BuiltinModuleFuncs::getFromId(
+        BuiltinModuleFuncId::ComponentResourceDrop);
+    MOZ_ASSERT(!builtinModuleFunc.usesMemory());
+    return callBuiltinModuleFunc(builtinModuleFunc, builtinParams);
+  }
+
+  // Like loadComponentImportPtrAsI64, but as a native Pointer-typed value -
+  // used to address into the closure's own fields (paramsScratch/
+  // resultsScratch) rather than to pass to a builtin declaring an Int64 arg.
+  [[nodiscard]] MDefinition* loadComponentImportPtr(uint32_t funcIndex) {
+    uint32_t offset = Instance::offsetInData(
+        codeMeta().offsetOfComponentImportInstanceData(funcIndex) +
+        offsetof(ComponentImportInstanceData, ptr));
+    auto* load = MWasmLoadInstance::New(alloc(), instancePointer_, offset,
+                                        MIRType::Pointer, AliasSet::None());
+    curBlock_->add(load);
+    return load;
+  }
+
+  // Inlines the call-site half of a ComponentImportKind::CanonLower import
+  // (see CodeMetadata::componentImportHint) directly into this import call,
+  // instead of calling out to the per-instantiation stub
+  // GenerateCanonLowerNative would otherwise compile: marshal `params` into
+  // the LoweredNativeClosure* this instantiation bound for this import (see
+  // ComponentImportInstanceData), call through it via the
+  // ComponentCanonLowerCall trampoline (Ion has no MIR-level mechanism for an
+  // indirect call through a runtime-loaded native function pointer, unlike
+  // Baseline's emitCallComponentCanonLower), then unmarshal the results.
+  // Everything about the marshalling shape
+  // (numParams/resultOutParamIndex/numResultSlots) is a compile-time constant
+  // derived from this import's own declared type - see
+  // CodeMetadata::componentImportHint.
+  //
+  // Whether this specific import is bound to a value eligible for the native
+  // call fast path versus the generic WasmComponentLoweredJS fallback is a
+  // per-instantiation runtime fact (see ResolveLoweredCoreFunc /
+  // SelectNativeOverload), not something the compiler can know when it
+  // decides to hint CanonLower (see ClassifyComponentImport in
+  // WasmValidate.cpp). So this guards on whether instantiation actually
+  // found a native closure to inline against (ComponentImportInstanceData's
+  // pointer being non-null), falling back to the ordinary import call
+  // otherwise - using the same branchAndStartThen/switchToElse/joinIfElse
+  // machinery wasm's own `if`/`else` compiles to, so the two arms' results
+  // are joined via ordinary MIR phis with no manual register bookkeeping
+  // needed (contrast Baseline's hand-rolled masm-label version, which has
+  // no equivalent to lean on).
+  [[nodiscard]] bool callComponentCanonLower(uint32_t funcIndex,
+                                             bool resultOutParam,
+                                             uint32_t bytecodeOffset,
+                                             const DefVector& params) {
+    MOZ_ASSERT(!inDeadCode());
+
+    const FuncType& funcType = codeMeta().getFuncType(funcIndex);
+    uint32_t wasmNumParams = funcType.args().length();
+    uint32_t numParams = resultOutParam ? wasmNumParams - 1 : wasmNumParams;
+    int32_t resultOutParamIndex =
+        resultOutParam ? int32_t(wasmNumParams - 1) : -1;
+    uint32_t numResultSlots = resultOutParam ? 0 : funcType.results().length();
+    MOZ_ASSERT(params.length() == wasmNumParams);
+
+    MDefinition* closurePtr = loadComponentImportPtrAsI64(funcIndex);
+    MDefinition* isNative = compare(closurePtr, constantI64(int64_t(0)),
+                                    JSOp::Ne, MCompare::Compare_Int64);
+
+    MBasicBlock* fallbackBlock;
+    if (!branchAndStartThen(isNative, &fallbackBlock)) {
+      return false;
+    }
+
+    // ---- Native arm ----
+    DefVector nativeResults;
+    {
+      MDefinition* resultMemBase = resultOutParamIndex >= 0
+                                       ? params[resultOutParamIndex]
+                                       : constantI32(0);
+
+      auto* paramsBase = MWasmLoadField::New(
+          alloc(), loadComponentImportPtr(funcIndex), nullptr,
+          offsetof(LoweredNativeClosure, paramsScratch), mozilla::Nothing(),
+          MIRType::Pointer, MWideningOp::None, AliasSet::Load(AliasSet::Any));
+      if (!paramsBase) {
+        return false;
+      }
+      curBlock_->add(paramsBase);
+
+      for (uint32_t i = 0; i < numParams; i++) {
+        if (!mirGen().ensureBallast()) {
+          return false;
+        }
+        uint32_t off = uint32_t(i * sizeof(JS::WasmScalarVal)) +
+                       JS::WasmScalarVal::offsetOfPayload();
+        mozilla::DebugOnly<MIRType> storeType;
+        switch (funcType.args()[i].kind()) {
+          case ValType::I32:
+            storeType = MIRType::Int32;
+            break;
+          case ValType::I64:
+            storeType = MIRType::Int64;
+            break;
+          case ValType::F32:
+            storeType = MIRType::Float32;
+            break;
+          case ValType::F64:
+            storeType = MIRType::Double;
+            break;
+          default:
+            MOZ_CRASH("non-scalar param crossing the native call boundary");
+        }
+        MOZ_ASSERT(params[i]->type() == storeType);
+        auto* store = MWasmStoreField::New(
+            alloc(), paramsBase, nullptr, off, mozilla::Nothing(), params[i],
+            MNarrowingOp::None, AliasSet::Store(AliasSet::Any));
+        if (!store) {
+          return false;
+        }
+        curBlock_->add(store);
+      }
+
+      DefVector builtinParams;
+      if (!builtinParams.append(loadComponentImportPtrAsI64(funcIndex)) ||
+          !builtinParams.append(resultMemBase)) {
+        return false;
+      }
+      const BuiltinModuleFunc& builtinModuleFunc =
+          BuiltinModuleFuncs::getFromId(
+              BuiltinModuleFuncId::ComponentCanonLowerCall);
+      MOZ_ASSERT(!builtinModuleFunc.usesMemory());
+      if (!callBuiltinModuleFunc(builtinModuleFunc, builtinParams)) {
+        return false;
+      }
+
+      auto* resultsBase = MWasmLoadField::New(
+          alloc(), loadComponentImportPtr(funcIndex), nullptr,
+          offsetof(LoweredNativeClosure, resultsScratch), mozilla::Nothing(),
+          MIRType::Pointer, MWideningOp::None, AliasSet::Load(AliasSet::Any));
+      if (!resultsBase) {
+        return false;
+      }
+      curBlock_->add(resultsBase);
+
+      for (uint32_t j = 0; j < numResultSlots; j++) {
+        if (!mirGen().ensureBallast()) {
+          return false;
+        }
+        uint32_t off = uint32_t(j * sizeof(JS::WasmScalarVal)) +
+                       JS::WasmScalarVal::offsetOfPayload();
+        MIRType loadType;
+        switch (funcType.results()[j].kind()) {
+          case ValType::I32:
+            loadType = MIRType::Int32;
+            break;
+          case ValType::I64:
+            loadType = MIRType::Int64;
+            break;
+          case ValType::F32:
+            loadType = MIRType::Float32;
+            break;
+          case ValType::F64:
+            loadType = MIRType::Double;
+            break;
+          default:
+            MOZ_CRASH("non-scalar result crossing the native call boundary");
+        }
+        auto* load = MWasmLoadField::New(
+            alloc(), resultsBase, nullptr, off, mozilla::Nothing(), loadType,
+            MWideningOp::None, AliasSet::Load(AliasSet::Any));
+        if (!load || !nativeResults.append(load)) {
+          return false;
+        }
+        curBlock_->add(load);
+      }
+    }
+    if (!pushDefs(nativeResults)) {
+      return false;
+    }
+
+    if (!switchToElse(fallbackBlock, &fallbackBlock)) {
+      return false;
+    }
+
+    // ---- Fallback arm: ordinary import call, taken when this import
+    // wasn't bound to a native-eligible closure at instantiation.
+    DefVector fallbackResults;
+    if (!callImport(codeMeta().offsetOfFuncImportInstanceData(funcIndex),
+                    bytecodeOffset, funcType, params, &fallbackResults)) {
+      return false;
+    }
+    if (!pushDefs(fallbackResults)) {
+      return false;
+    }
+
+    DefVector results;
+    if (!joinIfElse(fallbackBlock, &results)) {
+      return false;
+    }
+    iter().setResults(results.length(), results);
+    return true;
+  }
+#endif  // ENABLE_WASM_COMPONENTS
+
   [[nodiscard]] bool callBuiltinModuleFunc(
       const BuiltinModuleFunc& builtinModuleFunc, const DefVector& params) {
     MOZ_ASSERT(!inDeadCode());
@@ -6455,6 +6703,20 @@ bool FunctionCompiler::emitCall() {
           BuiltinModuleFuncs::getFromId(knownFuncImport);
       return callBuiltinModuleFunc(builtinModuleFunc, args);
     }
+
+#ifdef ENABLE_WASM_COMPONENTS
+    ComponentImportHint componentHint =
+        codeMeta().componentImportHint(funcIndex);
+    switch (componentHint.kind) {
+      case ComponentImportKind::ResourceDrop:
+        return callComponentResourceDrop(funcIndex, args);
+      case ComponentImportKind::CanonLower:
+        return callComponentCanonLower(funcIndex, componentHint.resultOutParam,
+                                       bytecodeOffset, args);
+      case ComponentImportKind::None:
+        break;
+    }
+#endif
 
     uint32_t instanceDataOffset =
         codeMeta().offsetOfFuncImportInstanceData(funcIndex);
