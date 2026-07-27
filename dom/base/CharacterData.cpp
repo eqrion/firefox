@@ -12,6 +12,7 @@
 #include "mozAutoDocUpdate.h"
 #include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/Sprintf.h"
+#include "mozilla/Utf8.h"
 #include "mozilla/dom/BindContext.h"
 #include "mozilla/dom/DirectionalityUtils.h"
 #include "mozilla/dom/Document.h"
@@ -119,6 +120,28 @@ void CharacterData::SetTextContentInternal(
   return SetNodeValueInternal(aTextContent, aError, aMutationEffectOnScript);
 }
 
+void CharacterData::SetTextContentInternal(
+    const nsACString& aTextContent, nsIPrincipal* aSubjectPrincipal,
+    ErrorResult& aError, MutationEffectOnScript aMutationEffectOnScript) {
+  nsresult rv = SetTextInternal(aTextContent, true, aMutationEffectOnScript);
+  if (NS_FAILED(rv)) {
+    aError.Throw(rv);
+  }
+}
+
+void CharacterData::GetData(nsACString& aData) const {
+  aData.Truncate();
+  mBuffer.AppendTo(aData);
+}
+
+void CharacterData::SetData(const nsACString& aData, ErrorResult& rv) {
+  nsresult res =
+      SetTextInternal(aData, true, MutationEffectOnScript::DropTrustWorthiness);
+  if (NS_FAILED(res)) {
+    rv.Throw(res);
+  }
+}
+
 void CharacterData::GetData(nsAString& aData) const {
   if (mBuffer.Is2b()) {
     aData.Truncate();
@@ -208,6 +231,62 @@ void CharacterData::ReplaceDataInternal(
   }
 }
 
+class CharacterData::TextMutation final {
+ public:
+  // aNewLength is in UTF-16 code units, not bytes.
+  TextMutation(CharacterData& aNode, uint32_t aOffset, uint32_t aEndOffset,
+               uint32_t aNewLength, bool aNotify,
+               MutationEffectOnScript aMutationEffectOnScript,
+               CharacterDataChangeInfo::Details* aDetails)
+      : mNode(aNode),
+        mDocument(aNode.GetComposedDoc()),
+        mInfo{aOffset == aNode.mBuffer.GetLength(),
+              aOffset,
+              aEndOffset,
+              aNewLength,
+              aMutationEffectOnScript,
+              aDetails},
+        mUpdateBatch(mDocument, aNotify),
+        mNotify(aNotify) {
+    if (mNotify) {
+      MutationObservers::NotifyCharacterDataWillChange(&mNode, mInfo);
+    }
+    mDirAffectsAncestor =
+        mNode.IsText() &&
+        TextNodeWillChangeDirection(mNode.AsText(), &mOldDir, aOffset);
+  }
+
+  void DidChange() {
+    mNode.UnsetFlags(NS_CACHED_TEXT_IS_ONLY_WHITESPACE);
+
+    if (mDocument && mNode.mBuffer.IsBidi()) {
+      // If we found bidi characters while mutating mBuffer above, indicate
+      // that the document contains bidi characters.
+      mDocument->SetBidiEnabled();
+    }
+
+    if (mDirAffectsAncestor) {
+      // mDirAffectsAncestor being true implies that we have a text node, see
+      // above.
+      MOZ_ASSERT(mNode.IsText());
+      TextNodeChangedDirection(mNode.AsText(), mOldDir, mNotify);
+    }
+
+    if (mNotify) {
+      MutationObservers::NotifyCharacterDataChanged(&mNode, mInfo);
+    }
+  }
+
+ private:
+  CharacterData& mNode;
+  Document* const mDocument;
+  const CharacterDataChangeInfo mInfo;
+  mozAutoDocUpdate mUpdateBatch;
+  Directionality mOldDir = Directionality::Unset;
+  const bool mNotify;
+  bool mDirAffectsAncestor = false;
+};
+
 nsresult CharacterData::SetTextInternal(
     uint32_t aOffset, uint32_t aCount, const char16_t* aBuffer,
     uint32_t aLength, bool aNotify,
@@ -232,19 +311,8 @@ nsresult CharacterData::SetTextInternal(
     return NS_ERROR_OUT_OF_MEMORY;
   }
 
-  Document* document = GetComposedDoc();
-  mozAutoDocUpdate updateBatch(document, aNotify);
-
-  if (aNotify) {
-    CharacterDataChangeInfo info = {
-        aOffset == textLength,   aOffset, endOffset, aLength,
-        aMutationEffectOnScript, aDetails};
-    MutationObservers::NotifyCharacterDataWillChange(this, info);
-  }
-
-  auto oldDir = Directionality::Unset;
-  const bool dirAffectsAncestor =
-      IsText() && TextNodeWillChangeDirection(AsText(), &oldDir, aOffset);
+  TextMutation mutation(*this, aOffset, endOffset, aLength, aNotify,
+                        aMutationEffectOnScript, aDetails);
 
   if (aOffset == 0 && endOffset == textLength) {
     // Replacing whole text or old text was empty.
@@ -294,28 +362,35 @@ nsresult CharacterData::SetTextInternal(
     NS_ENSURE_TRUE(ok, NS_ERROR_OUT_OF_MEMORY);
   }
 
-  UnsetFlags(NS_CACHED_TEXT_IS_ONLY_WHITESPACE);
+  mutation.DidChange();
 
-  if (document && mBuffer.IsBidi()) {
-    // If we found bidi characters in mBuffer.SetTo() above, indicate that the
-    // document contains bidi characters.
-    document->SetBidiEnabled();
+  return NS_OK;
+}
+
+nsresult CharacterData::SetTextInternal(
+    const nsACString& aUtf8, bool aNotify,
+    MutationEffectOnScript aMutationEffectOnScript) {
+  MOZ_ASSERT(IsUtf8(aUtf8),
+             "caller must validate UTF-8 before calling this; see the wasm "
+             "component bridge's ReadWebIDLNativeUTF8String");
+
+  // Build the replacement without touching mBuffer, so the exact UTF-16
+  // length (which TextMutation's CharacterDataChangeInfo needs) is known
+  // before any mutation observer runs, and so OOM here can't leave us
+  // between a will-change and a did-change notification.
+  CharacterDataBuffer newBuffer;
+  if (!CharacterDataBuffer::BuildFromUtf8(
+          aUtf8, /* aForce2b = */ HasFlag(NS_MAYBE_MODIFIED_FREQUENTLY),
+          newBuffer)) {
+    return NS_ERROR_OUT_OF_MEMORY;
   }
 
-  if (dirAffectsAncestor) {
-    // dirAffectsAncestor being true implies that we have a text node, see
-    // above.
-    MOZ_ASSERT(IsText());
-    TextNodeChangedDirection(AsText(), oldDir, aNotify);
-  }
-
-  // Notify observers
-  if (aNotify) {
-    CharacterDataChangeInfo info = {
-        aOffset == textLength,   aOffset, endOffset, aLength,
-        aMutationEffectOnScript, aDetails};
-    MutationObservers::NotifyCharacterDataChanged(this, info);
-  }
+  const uint32_t oldLength = mBuffer.GetLength();
+  TextMutation mutation(*this, /* aOffset = */ 0, /* aEndOffset = */ oldLength,
+                        newBuffer.GetLength(), aNotify, aMutationEffectOnScript,
+                        /* aDetails = */ nullptr);
+  mBuffer.SwapWith(newBuffer);
+  mutation.DidChange();
 
   return NS_OK;
 }

@@ -40,6 +40,7 @@
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/UseCounter.h"
+#include "mozilla/Utf8.h"
 #include "mozilla/dom/CustomElementRegistry.h"
 #include "mozilla/dom/DOMException.h"
 #include "mozilla/dom/DocGroup.h"
@@ -4287,6 +4288,45 @@ bool WriteWebIDLNativeString(JS::WebIDLContext& aCtx,
                              const JS::WebIDLCoerceStep& aStep,
                              uint32_t aMemBase, const nsACString& value,
                              JS::WasmScalarVal* aResult) {
+  return JS::WriteCoercedString(aCtx, aStep, aMemBase, value.BeginReading(),
+                                value.Length(), aResult);
+}
+
+bool ReadWebIDLNativeUTF8String(JS::WebIDLContext& aCtx,
+                                const JS::WasmScalarVal* aCoreParams,
+                                const JS::WebIDLCoerceStep& aStep,
+                                uint32_t aMemBase, nsACString& out) {
+  if (aStep.srcEncoding != js::wasm::ComponentStringEncoding::Utf8) {
+    // Always Utf8 today - BuildCallAdapter's native-path callers hard-code
+    // it - but don't silently corrupt if that ever changes.
+    JS_ReportErrorASCII(aCtx.cx(),
+                        "WasmUtf8 native call only supports UTF-8 strings");
+    return false;
+  }
+  const char* bytes;
+  uint32_t len;
+  if (!ReadWebIDLNativeStringRange(aCtx, aCoreParams, aStep, aMemBase, &bytes,
+                                   &len)) {
+    return false;
+  }
+  if (mozilla::Utf8ValidUpTo(mozilla::Span(bytes, len)) != len) {
+    // The canonical ABI traps on ill-formed UTF-8 when lifting a string;
+    // do the same rather than handing arbitrary bytes to the DOM.
+    JS_ReportErrorASCII(aCtx.cx(), "invalid UTF-8 in component string");
+    return false;
+  }
+  out.Assign(bytes, len);
+  return true;
+}
+
+bool WriteWebIDLNativeUTF8String(JS::WebIDLContext& aCtx,
+                                 const JS::WebIDLCoerceStep& aStep,
+                                 uint32_t aMemBase, const nsACString& value,
+                                 JS::WasmScalarVal* aResult) {
+  // No validation needed: Gecko produced these bytes, and DOM strings that
+  // reach an nsACString UTF-8 getter are only ever built by
+  // CharacterDataBuffer/CopyUTF16toUTF8, which always emit well-formed
+  // UTF-8.
   return JS::WriteCoercedString(aCtx, aStep, aMemBase, value.BeginReading(),
                                 value.Length(), aResult);
 }

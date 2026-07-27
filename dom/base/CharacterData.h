@@ -109,6 +109,21 @@ class CharacterData : public nsIContent {
       ErrorResult& aError,
       MutationEffectOnScript aMutationEffectOnScript) final;
 
+  // UTF-8 fast path for leaf text nodes. Deliberately NOT final: unlike the
+  // nsAString overloads above, these go straight to mBuffer instead of
+  // through GetNodeValue()/SetNodeValueInternal(), so DocumentType (which
+  // overrides only Get/SetNodeValueInternal to make its textContent null
+  // and read-only) must override these UTF-8 overloads directly too - see
+  // DocumentType.h.
+  void GetTextContentInternal(nsACString& aTextContent, OOMReporter&) override {
+    GetData(aTextContent);
+  }
+
+  void SetTextContentInternal(
+      const nsACString& aTextContent, nsIPrincipal* aSubjectPrincipal,
+      ErrorResult& aError,
+      MutationEffectOnScript aMutationEffectOnScript) override;
+
   // Implementation for nsIContent
   nsresult BindToTree(BindContext&, nsINode& aParent) override;
 
@@ -133,6 +148,16 @@ class CharacterData : public nsIContent {
    */
   nsresult SetText(const nsAString& aStr, bool aNotify) {
     return SetText(aStr.BeginReading(), aStr.Length(), aNotify);
+  }
+
+  /**
+   * Set the text to the UTF-8-decoding of aUtf8. If aNotify is true then
+   * the document is notified of the content change. aUtf8 must already be
+   * valid UTF-8; this does not validate it.
+   */
+  nsresult SetText(const nsACString& aUtf8, bool aNotify) {
+    return SetTextInternal(aUtf8, aNotify,
+                           MutationEffectOnScript::KeepTrustWorthiness);
   }
 
   /**
@@ -167,6 +192,14 @@ class CharacterData : public nsIContent {
     return mBuffer.AppendTo(aResult, aFallible);
   }
 
+  /**
+   * Append the text content to aResult, UTF-8 encoded.
+   */
+  [[nodiscard]] bool AppendTextTo(nsACString& aResult,
+                                  const fallible_t& aFallible) const {
+    return mBuffer.AppendTo(aResult, aFallible);
+  }
+
   void SaveSubtreeState() final {}
 
 #ifdef MOZ_DOM_LIST
@@ -193,6 +226,14 @@ class CharacterData : public nsIContent {
   void SetData(const nsAString& aData, ErrorResult& rv) {
     SetDataInternal(aData, MutationEffectOnScript::DropTrustWorthiness, rv);
   }
+
+  // UTF-8 overloads of the above, picked by ordinary C++ overload
+  // resolution when [WasmUtf8] retypes the `data` attribute's native call
+  // entry to nsACString. `data` has no [LegacyNullToEmptyString] equivalent
+  // to worry about here: unlike textContent it isn't nullable, so aData is
+  // always a concrete (possibly empty) string.
+  void GetData(nsACString& aData) const;
+  void SetData(const nsACString& aData, ErrorResult& rv);
   virtual void SetDataInternal(const nsAString& aData,
                                MutationEffectOnScript aMutationEffectOnScript,
                                ErrorResult& rv);
@@ -254,6 +295,18 @@ class CharacterData : public nsIContent {
       CharacterDataChangeInfo::Details* aDetails = nullptr);
 
   /**
+   * UTF-8 counterpart of the above, restricted to a whole-buffer
+   * replacement (the only shape textContent/data setters need): there's no
+   * aOffset/aCount, and no aDetails, since normalize()/splitText() - the
+   * only callers that need those - stay on the char16_t path. aUtf8 must
+   * already be valid UTF-8; this does not validate it (see
+   * CharacterDataBuffer::BuildFromUtf8).
+   */
+  nsresult SetTextInternal(const nsACString& aUtf8, bool aNotify,
+                           MutationEffectOnScript aMutationEffectOnScript =
+                               MutationEffectOnScript::DropTrustWorthiness);
+
+  /**
    * Method to clone this node. This needs to be overriden by all derived
    * classes. If aCloneText is true the text content will be cloned too.
    *
@@ -271,6 +324,16 @@ class CharacterData : public nsIContent {
 
   bool CheckTextIsOnlyWhitespace(uint32_t aStartOffset,
                                  uint32_t aEndOffset) const;
+
+  // Shared "will change"/"did change" bookkeeping for a text mutation:
+  // opens a document update batch, notifies mutation observers, and tracks
+  // directionality state across the actual mBuffer mutation, which the
+  // caller performs between construction and DidChange(). DidChange() must
+  // be called iff the mutation actually happened; a caller that bails out
+  // (e.g. on OOM) before calling it leaves no observable trace of the
+  // will-change notification having fired. Defined in the .cpp file; as a
+  // nested class it still has access to CharacterData's private members.
+  class TextMutation;
 };
 
 }  // namespace mozilla::dom

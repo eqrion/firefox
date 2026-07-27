@@ -14,6 +14,7 @@
 
 #include "CharacterDataBufferImpl.h"
 #include "mozilla/CheckedInt.h"
+#include "mozilla/Latin1.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/SSE.h"
 #include "mozilla/ppc.h"
@@ -328,6 +329,141 @@ bool CharacterDataBuffer::SetTo(const char16_t* aBuffer, uint32_t aLength,
   mState.mInHeap = true;
   mState.mLength = aLength;
 
+  return true;
+}
+
+/* static */
+bool CharacterDataBuffer::BuildFromUtf8(Span<const char> aUtf8, bool aForce2b,
+                                        CharacterDataBuffer& aOut) {
+  MOZ_ASSERT(aOut.mState.mLength == 0 && !aOut.mState.mIs2b && !aOut.m1b,
+             "aOut must be a freshly constructed, empty buffer");
+
+  const size_t byteLen = aUtf8.Length();
+
+  // A UTF-8 sequence of N bytes decodes to at most N UTF-16 code units (the
+  // best ratio, 1:1, is ASCII; every other encoding uses more bytes per
+  // unit), so this bounds the resulting length exactly like
+  // NS_MAX_CHARACTER_DATA_BUFFER_LENGTH bounds aLength in SetTo() above.
+  if (MOZ_UNLIKELY(byteLen > NS_MAX_CHARACTER_DATA_BUFFER_LENGTH)) {
+    return false;
+  }
+  if (byteLen == 0) {
+    return true;  // aOut stays empty, matching SetTo()'s aLength == 0 case.
+  }
+
+  const char* buf = aUtf8.Elements();
+  const auto first = static_cast<unsigned char>(buf[0]);
+
+  if (!aForce2b) {
+    // Shared single-char string. Mirrors SetTo()'s aLength == 1 case, plus
+    // the 2-byte lead-byte case, which SetTo() gets for free since a
+    // char16_t already holds U+0080..U+00FF directly.
+    if (byteLen == 1 && first < 0x80) {
+      aOut.m1b = sSingleCharSharedString + first;
+      aOut.mState.mInHeap = false;
+      aOut.mState.mIs2b = false;
+      aOut.mState.mLength = 1;
+      return true;
+    }
+    if (byteLen == 2 && (first == 0xC2 || first == 0xC3) &&
+        (static_cast<unsigned char>(buf[1]) & 0xC0) == 0x80) {
+      const auto ch = static_cast<unsigned char>(
+          ((first & 0x1F) << 6) | (static_cast<unsigned char>(buf[1]) & 0x3F));
+      aOut.m1b = sSingleCharSharedString + ch;
+      aOut.mState.mInHeap = false;
+      aOut.mState.mIs2b = false;
+      aOut.mState.mLength = 1;
+      return true;
+    }
+
+    // Shared whitespace-run string. Mirrors the scan in SetTo() above: it
+    // only ever matches ' ', '\n' and '\t', all single ASCII bytes, so the
+    // scan is byte-exact on UTF-8 input, and a match implies the whole run
+    // is pure ASCII (so the UTF-16 length equals the byte length).
+    if (byteLen <= 1 + TEXTFRAG_WHITE_AFTER_NEWLINE + TEXTFRAG_MAX_NEWLINES &&
+        (first == ' ' || first == '\n' || first == '\t')) {
+      const char* cp = buf;
+      const char* const end = buf + byteLen;
+      if (first == ' ') {
+        ++cp;
+      }
+
+      const char* start = cp;
+      while (cp < end && *cp == '\n') {
+        ++cp;
+      }
+      const char* endNewLine = cp;
+
+      char space = cp < end && *cp == '\t' ? '\t' : ' ';
+      while (cp < end && *cp == space) {
+        ++cp;
+      }
+
+      if (cp == end && endNewLine - start <= TEXTFRAG_MAX_NEWLINES &&
+          cp - endNewLine <= TEXTFRAG_WHITE_AFTER_NEWLINE) {
+        char** strings = space == ' ' ? sSpaceSharedString : sTabSharedString;
+        aOut.m1b = strings[endNewLine - start];
+        if (first != ' ') {
+          ++aOut.m1b;
+        }
+        aOut.mState.mInHeap = false;
+        aOut.mState.mIs2b = false;
+        aOut.mState.mLength = byteLen;
+        return true;
+      }
+    }
+  }
+
+  // A byte offset into aUtf8: the length of its longest Latin1-only prefix
+  // (0 when aForce2b, so the bidi scan below covers the whole string).
+  const size_t latin1UpTo = aForce2b ? 0 : Utf8Latin1UpTo(aUtf8);
+
+  if (!aForce2b && latin1UpTo == byteLen) {
+    // The whole string is Latin1 (a superset of ASCII): store as 1b.
+    char* out = static_cast<char*>(malloc(byteLen));
+    if (!out) {
+      return false;
+    }
+    // Safe: LossyConvertUtf8toLatin1() only produces garbage for code points
+    // above U+00FF, and Utf8Latin1UpTo() just proved there are none.
+    const size_t written = LossyConvertUtf8toLatin1(aUtf8, Span(out, byteLen));
+    MOZ_ASSERT(written <= byteLen);
+    if (written != byteLen) {
+      // written < byteLen iff some 2-byte UTF-8 sequences (U+0080..U+00FF)
+      // collapsed to one byte each; hand back the slack. A shrinking
+      // realloc realistically cannot fail; keep the original allocation if
+      // it somehow does.
+      if (char* shrunk = static_cast<char*>(realloc(out, written))) {
+        out = shrunk;
+      }
+    }
+    aOut.m1b = out;
+    aOut.mState.mInHeap = true;
+    aOut.mState.mIs2b = false;
+    aOut.mState.mLength = written;
+    // Latin1 text has no RTL characters, so mIsBidi stays false here,
+    // matching SetTo() above, which only ever calls UpdateBidiFlag() on the
+    // 2b branch.
+    return true;
+  }
+
+  // General case: decode through UTF-16. Use nsString, not nsAutoString, so
+  // the result owns a real StringBuffer that SetTo() below can just AddRef
+  // instead of copying again.
+  nsString utf16;
+  if (!CopyUTF8toUTF16(aUtf8, utf16, fallible)) {
+    return false;
+  }
+  if (!aOut.SetTo(utf16, /* aUpdateBidi = */ false, /* aForce2b = */ true)) {
+    return false;
+  }
+
+  // Latin1 can't be RTL, so only the non-Latin1 suffix needs scanning.
+  // latin1UpTo is a byte offset, but Utf8Latin1UpTo() only ever stops on a
+  // scalar-value boundary, so slicing aUtf8 there is safe.
+  if (HasRTLCharsUtf8(aUtf8.From(latin1UpTo))) {
+    aOut.mState.mIsBidi = true;
+  }
   return true;
 }
 

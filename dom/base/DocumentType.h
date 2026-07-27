@@ -38,6 +38,18 @@ class DocumentType final : public CharacterData {
                             mozilla::ErrorResult& aError,
                             MutationEffectOnScript) override {}
 
+  // CharacterData's UTF-8 textContent overloads go straight to mBuffer
+  // instead of through Get/SetNodeValueInternal above (that's the point of
+  // the fast path), so they must be overridden here directly to keep
+  // textContent null and read-only, matching the char16_t overloads.
+  void GetTextContentInternal(nsACString& aTextContent, OOMReporter&) override {
+    aTextContent.SetIsVoid(true);
+  }
+  void SetTextContentInternal(const nsACString& aTextContent,
+                              nsIPrincipal* aSubjectPrincipal,
+                              mozilla::ErrorResult& aError,
+                              MutationEffectOnScript) override {}
+
   // nsIContent overrides
   virtual const CharacterDataBuffer* GetCharacterDataBuffer() const override;
 

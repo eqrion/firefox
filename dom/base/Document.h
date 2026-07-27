@@ -3524,6 +3524,13 @@ class Document : public nsINode,
   already_AddRefed<Element> CreateElement(
       const nsAString& aTagName, const ElementCreationOptionsOrString& aOptions,
       ErrorResult& rv);
+  // UTF-8 overload for [WasmUtf8]. Only aTagName is retyped by codegen (see
+  // the comment on Element::SetAttribute's UTF-8 overload); this converts
+  // and delegates, since element names are validated and interned as
+  // UTF-16 atoms.
+  already_AddRefed<Element> CreateElement(
+      const nsACString& aTagName,
+      const ElementCreationOptionsOrString& aOptions, ErrorResult& rv);
   already_AddRefed<Element> CreateElementNS(
       const nsAString& aNamespaceURI, const nsAString& aQualifiedName,
       const ElementCreationOptionsOrString& aOptions, ErrorResult& rv);

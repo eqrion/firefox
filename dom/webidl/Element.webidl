@@ -46,7 +46,7 @@ interface Element : Node {
   DOMString? getAttributeNS(DOMString? namespace, DOMString localName);
   [CEReactions, NeedsSubjectPrincipal=NonSystem, Throws]
   boolean toggleAttribute(DOMString name, optional boolean force);
-  [CEReactions, NeedsSubjectPrincipal=NonSystem, Throws]
+  [CEReactions, NeedsSubjectPrincipal=NonSystem, Throws, WasmUtf8]
   undefined setAttribute(DOMString name, (TrustedType or DOMString) value);
   [CEReactions, NeedsSubjectPrincipal=NonSystem, Throws]
   undefined setAttributeNS(DOMString? namespace, DOMString name, (TrustedType or DOMString) value);

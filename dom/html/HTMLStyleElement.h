@@ -39,6 +39,15 @@ class HTMLStyleElement final : public nsGenericHTMLElement,
       mozilla::ErrorResult& aError,
       MutationEffectOnScript aMutationEffectOnScript =
           MutationEffectOnScript::DropTrustWorthiness) override;
+  // Converting shim to the override above, so the fast UTF-8 path inherited
+  // from FragmentOrElement doesn't bypass sheet-update handling (see the
+  // comment on nsINode's UTF-8 declarations for why this must be
+  // (re)declared here).
+  virtual void SetTextContentInternal(
+      const nsACString& aTextContent, nsIPrincipal* aSubjectPrincipal,
+      mozilla::ErrorResult& aError,
+      MutationEffectOnScript aMutationEffectOnScript =
+          MutationEffectOnScript::DropTrustWorthiness) override;
   /**
    * Mark this style element with a devtools-specific principal that
    * skips Content Security Policy unsafe-inline checks. This triggering

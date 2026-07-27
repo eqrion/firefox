@@ -11,7 +11,7 @@
 
 [Exposed=Window]
 interface CharacterData : Node {
-  [Pure, SetterThrows]
+  [Pure, SetterThrows, WasmUtf8]
   attribute [LegacyNullToEmptyString] DOMString data;
   [Pure]
   readonly attribute unsigned long length;

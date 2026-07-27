@@ -12,6 +12,7 @@
 #include "mozAutoDocUpdate.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/StaticPrefs_dom.h"
+#include "mozilla/Utf8.h"
 #include "mozilla/dom/AttrBinding.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/Element.h"
@@ -229,6 +230,45 @@ void Attr::SetTextContentInternal(const nsAString& aTextContent,
                                   nsIPrincipal* aSubjectPrincipal,
                                   ErrorResult& aError, MutationEffectOnScript) {
   SetValueInternal(aTextContent, aError);
+}
+
+void Attr::SetTextContent(const nsACString& aTextContent,
+                          nsIPrincipal* aSubjectPrincipal,
+                          ErrorResult& aError) {
+  nsAutoString utf16;
+  if (aTextContent.IsVoid()) {
+    utf16.SetIsVoid(true);
+  } else {
+    MOZ_ASSERT(IsUtf8(aTextContent),
+               "caller must validate UTF-8 before calling this");
+    if (!CopyUTF8toUTF16(aTextContent, utf16, fallible)) {
+      aError.Throw(NS_ERROR_OUT_OF_MEMORY);
+      return;
+    }
+  }
+  // Unlike SetTextContentInternal() below, this goes through SetValue(),
+  // which runs the same Trusted Types check as the nsAString overload above.
+  SetValue(utf16, aSubjectPrincipal, aError);
+}
+
+void Attr::GetTextContentInternal(nsACString& aTextContent,
+                                  OOMReporter& aError) {
+  // Attr already overrides the nsAString overload of this name, which hides
+  // nsINode's nsACString converting-shim overload within Attr's scope (see
+  // Attr.h); forward to it explicitly to un-hide it. It calls back into
+  // Attr::GetTextContentInternal(nsAString&, ...) -> GetValue() virtually.
+  nsINode::GetTextContentInternal(aTextContent, aError);
+}
+
+void Attr::SetTextContentInternal(
+    const nsACString& aTextContent, nsIPrincipal* aSubjectPrincipal,
+    ErrorResult& aError, MutationEffectOnScript aMutationEffectOnScript) {
+  // Same reasoning as GetTextContentInternal() above: forward to un-hide.
+  // Calls back into Attr::SetTextContentInternal(nsAString&, ...) ->
+  // SetValueInternal(), i.e. the non-Trusted-Types path, matching the
+  // relationship between the nsAString overloads.
+  nsINode::SetTextContentInternal(aTextContent, aSubjectPrincipal, aError,
+                                  aMutationEffectOnScript);
 }
 
 void Attr::GetEventTargetParent(EventChainPreVisitor& aVisitor) {

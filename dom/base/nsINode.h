@@ -2310,6 +2310,27 @@ class nsINode : public mozilla::dom::EventTarget {
     SetTextContentInternal(aTextContent, nullptr, aError);
   }
 
+  // UTF-8 counterparts of the above, for callers (currently only the wasm
+  // component-model native call bridge) that already have or want UTF-8 and
+  // would otherwise pay for a UTF-16 round trip. These are ordinary
+  // overloads, not a separate API: they must always observe exactly the
+  // same document as their nsAString siblings (see
+  // AssertTextContentUtf8Matches, which enforces this in DEBUG builds).
+  void GetTextContent(nsACString& aTextContent, mozilla::OOMReporter& aError) {
+    GetTextContentInternal(aTextContent, aError);
+#ifdef DEBUG
+    AssertTextContentUtf8Matches(aTextContent);
+#endif
+  }
+  // Virtual, like the nsAString overload above: Attr overrides both public
+  // SetTextContent overloads to route through SetValue() (Trusted Types),
+  // rather than SetTextContentInternal()'s SetValueInternal() - see Attr.h.
+  MOZ_CAN_RUN_SCRIPT virtual void SetTextContent(
+      const nsACString& aTextContent, nsIPrincipal* aSubjectPrincipal,
+      mozilla::ErrorResult& aError) {
+    SetTextContentInternal(aTextContent, aSubjectPrincipal, aError);
+  }
+
   mozilla::dom::Element* QuerySelector(const nsACString& aSelector,
                                        mozilla::ErrorResult& aResult);
   already_AddRefed<mozilla::dom::NodeList> QuerySelectorAll(
@@ -3090,6 +3111,31 @@ class nsINode : public mozilla::dom::EventTarget {
       mozilla::ErrorResult& aError,
       MutationEffectOnScript aMutationEffectOnScript =
           MutationEffectOnScript::DropTrustWorthiness) {}
+
+  // UTF-8 overloads of the above. The nsINode versions are converting shims
+  // that just call the nsAString virtuals above, so every subclass is
+  // correct by default; only subclasses that want the fast path (i.e. don't
+  // need to transcode) override these too. Because C++ name-hides overloads
+  // per class, any subclass overriding one overload of
+  // Get/SetTextContentInternal must also (re)declare the other, even if
+  // only to forward to nsINode's - see FragmentOrElement, CharacterData,
+  // DocumentType, HTMLStyleElement, and Attr::SetTextContent.
+  virtual void GetTextContentInternal(nsACString& aTextContent,
+                                      mozilla::OOMReporter& aError);
+  virtual void SetTextContentInternal(
+      const nsACString& aTextContent, nsIPrincipal* aSubjectPrincipal,
+      mozilla::ErrorResult& aError,
+      MutationEffectOnScript aMutationEffectOnScript =
+          MutationEffectOnScript::DropTrustWorthiness);
+
+#ifdef DEBUG
+  // Asserts that aUtf8, just produced by the UTF-8 GetTextContent()
+  // overload, is exactly NS_ConvertUTF16toUTF8 of what the nsAString
+  // overload would have returned (including voidness). Catches a subclass
+  // that overrides one Get/SetTextContentInternal overload without the
+  // other - see the comment above.
+  void AssertTextContentUtf8Matches(const nsACString& aUtf8);
+#endif
 
   void EnsurePreInsertionValidity1(mozilla::ErrorResult& aError);
   void EnsurePreInsertionValidity2(bool aReplace, nsINode& aNewChild,

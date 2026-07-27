@@ -78,7 +78,7 @@ interface Document : Node {
   // These DOM methods cannot be accessed by UA Widget scripts
   // because the DOM element reflectors will be in the content scope,
   // instead of the desired UA Widget scope.
-  [CEReactions, NewObject, Throws, Func="IsNotUAWidget"]
+  [CEReactions, NewObject, Throws, Func="IsNotUAWidget", WasmUtf8]
   Element createElement(DOMString localName, optional (ElementCreationOptions or DOMString) options = {});
   [CEReactions, NewObject, Throws, Func="IsNotUAWidget"]
   Element createElementNS(DOMString? namespace, DOMString qualifiedName, optional (ElementCreationOptions or DOMString) options = {});

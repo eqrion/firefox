@@ -1385,6 +1385,19 @@ class Element : public FragmentOrElement {
     SetAttribute(aName, aValue, nullptr, aError);
   }
 
+  // UTF-8 overload for [WasmUtf8]. Only the name argument is retyped by
+  // codegen (the value stays the TrustedType union, so Trusted Types
+  // enforcement is untouched); this converts it and delegates. Attribute
+  // names are validated and atomized as UTF-16 (see
+  // InternalGetAttrNameFromQName()/AttrArray), so this doesn't skip a
+  // transcode the way the textContent overloads do - it's still a useful
+  // [WasmUtf8] site because it exercises an operation with a union-typed
+  // argument, unlike textContent's plain nullable string.
+  MOZ_CAN_RUN_SCRIPT void SetAttribute(
+      const nsACString& aName,
+      const TrustedHTMLOrTrustedScriptOrTrustedScriptURLOrString& aValue,
+      nsIPrincipal* aTriggeringPrincipal, ErrorResult& aError);
+
   /**
    * This method creates a principal that subsumes this element's NodePrincipal
    * and which has flags set for elevated permissions that devtools needs to

@@ -41,6 +41,15 @@ type in the tree yet to drive one from Gecko).
     is(TestFunctions.componentStaticAdd(3, 4, 5), 12,
        "componentStaticAdd(3 args) should add");
 
+    // [WasmUtf8] only changes the native-call-entry C++ signature; the
+    // ordinary JS-facing binding (exercised here) must behave identically
+    // to an unannotated DOMString method.
+    is(t.componentEchoUtf8("hello"), "hello",
+       "componentEchoUtf8 should round-trip ASCII");
+    is(t.componentEchoUtf8("café 日本 😀"),
+       "café 日本 😀",
+       "componentEchoUtf8 should round-trip non-ASCII/astral text");
+
     ok(t.checkWebIDLComponentCall(t),
        "Codegen-generated WebIDL operation type info should match the IDL");
 

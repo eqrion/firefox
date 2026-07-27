@@ -31,6 +31,7 @@ from WebIDL import (
     IDLDictionary,
     IDLEmptySequenceValue,
     IDLInterfaceMember,
+    IDLNullableType,
     IDLNullValue,
     IDLSequenceType,
     IDLType,
@@ -12106,6 +12107,21 @@ class WebIDLSyntheticSetterArg:
         return False
 
 
+class WasmUtf8Arg:
+    """Proxies an IDLArgument (or WebIDLSyntheticSetterArg), overriding only
+    `.type`. Used by CGMemberJITInfo.nativeCallSignatures() to retype a
+    [WasmUtf8] member's plain string arguments for the native-call entry
+    only - everything else about the argument (variadic, optional,
+    defaultValue, canHaveMissingValue()) is unaffected."""
+
+    def __init__(self, arg, type):
+        self._arg = arg
+        self.type = type
+
+    def __getattr__(self, name):
+        return getattr(self._arg, name)
+
+
 def webIDLEscapeCString(s):
     """Escapes `s` for embedding as a C++ string literal."""
     return s.replace("\\", "\\\\").replace('"', '\\"')
@@ -12203,6 +12219,41 @@ class CGMemberJITInfo(CGThing):
             "%s_native%d" % (self.memberSuffix(opType), index)
         )
 
+    def wasmUtf8Type(self, t):
+        """Returns the UTF8String-typed equivalent of `t`, for use in the
+        wasm native-call entry only, when `t` is a plain (possibly
+        nullable) DOMString/USVString. Returns `t` unchanged for
+        everything else - unions, sequences, interfaces, etc. - since only
+        a bare string type has an nsACString-based native overload for C++
+        overload resolution to pick."""
+        inner = t.inner if t.nullable() else t
+        if not (inner.isDOMString() or inner.isUSVString()):
+            return t
+        utf8 = BuiltinTypes[IDLBuiltinType.Types.utf8string]
+        return IDLNullableType(t.location, utf8) if t.nullable() else utf8
+
+    def nativeCallSignatures(self, signatures):
+        """The (returnType, args) signatures to use when building the
+        native-call entry, as opposed to the WebIDL-visible operation type
+        schema (which always uses `signatures` as-is, unmodified). Identical
+        to `signatures` unless [WasmUtf8] is set, in which case every plain
+        string argument/return type is retyped to UTF8String - see
+        wasmUtf8Type()."""
+        if self.member.getExtendedAttribute("WasmUtf8") is None:
+            return signatures
+        return [
+            (
+                None if returnType is None else self.wasmUtf8Type(returnType),
+                [
+                    arg
+                    if arg.variadic
+                    else WasmUtf8Arg(arg, self.wasmUtf8Type(arg.type))
+                    for arg in args
+                ],
+            )
+            for returnType, args in signatures
+        ]
+
     def nativeArgReadStmts(self, t, argVar, stepExpr):
         """Reads `stepExpr` into a native C++ local `argVar` for the WebIDL
         type `t`. Returns None if `t` isn't supported yet."""
@@ -12252,18 +12303,24 @@ class CGMemberJITInfo(CGThing):
                 step=stepExpr,
                 declType=declType,
             )
-        if t.isDOMString() or t.isUSVString() or t.isByteString():
-            declType = "nsCString" if t.isByteString() else "nsAutoString"
+        if t.isDOMString() or t.isUSVString() or t.isByteString() or t.isUTF8String():
+            if t.isByteString():
+                declType, reader = "nsCString", "ReadWebIDLNativeString"
+            elif t.isUTF8String():
+                declType, reader = "nsAutoCString", "ReadWebIDLNativeUTF8String"
+            else:
+                declType, reader = "nsAutoString", "ReadWebIDLNativeString"
             return fill(
                 """
                 ${declType} ${argVar};
-                if (!mozilla::dom::ReadWebIDLNativeString(ctx, coreParams, ${step}, 0, ${argVar})) {
+                if (!mozilla::dom::${reader}(ctx, coreParams, ${step}, 0, ${argVar})) {
                   return false;
                 }
                 """,
                 argVar=argVar,
                 step=stepExpr,
                 declType=declType,
+                reader=reader,
             )
         if t.isEnum():
             enumName = t.unroll().inner.identifier.name
@@ -12354,8 +12411,18 @@ class CGMemberJITInfo(CGThing):
         binding needs). Both are handled uniformly here; `step.kind`/
         `step.child` are public fields, so this dispatches on `step.kind`
         directly instead of needing new engine API."""
-        if inner.isDOMString() or inner.isUSVString() or inner.isByteString():
-            declType = "nsCString" if inner.isByteString() else "nsAutoString"
+        if (
+            inner.isDOMString()
+            or inner.isUSVString()
+            or inner.isByteString()
+            or inner.isUTF8String()
+        ):
+            if inner.isByteString():
+                declType, reader = "nsCString", "ReadWebIDLNativeString"
+            elif inner.isUTF8String():
+                declType, reader = "nsAutoCString", "ReadWebIDLNativeUTF8String"
+            else:
+                declType, reader = "nsAutoString", "ReadWebIDLNativeString"
             return fill(
                 """
                 ${declType} ${argVar};
@@ -12370,7 +12437,7 @@ class CGMemberJITInfo(CGThing):
                   webIDLInnerStep_${argVar} = ${step}.child.get();
                 }
                 if (webIDLPresent_${argVar}) {
-                  if (!mozilla::dom::ReadWebIDLNativeString(ctx, coreParams, *webIDLInnerStep_${argVar}, 0, ${argVar})) {
+                  if (!mozilla::dom::${reader}(ctx, coreParams, *webIDLInnerStep_${argVar}, 0, ${argVar})) {
                     return false;
                   }
                 } else {
@@ -12380,6 +12447,7 @@ class CGMemberJITInfo(CGThing):
                 argVar=argVar,
                 step=stepExpr,
                 declType=declType,
+                reader=reader,
             )
         if self.nativeInterfaceTypeName(inner) is not None:
             typeName = self.nativeInterfaceTypeName(inner)
@@ -12467,13 +12535,20 @@ class CGMemberJITInfo(CGThing):
             returnType.isDOMString()
             or returnType.isUSVString()
             or returnType.isByteString()
+            or returnType.isUTF8String()
         ):
+            writer = (
+                "WriteWebIDLNativeUTF8String"
+                if returnType.isUTF8String()
+                else "WriteWebIDLNativeString"
+            )
             return fill(
                 """
-                if (!mozilla::dom::WriteWebIDLNativeString(ctx, *adapter.resultStep, resultMemBase, ${resultVar}, resultsPtr)) {
+                if (!mozilla::dom::${writer}(ctx, *adapter.resultStep, resultMemBase, ${resultVar}, resultsPtr)) {
                   return false;
                 }
                 """,
+                writer=writer,
                 resultVar=resultVar,
             )
         if self.nativeInterfaceTypeName(returnType) is not None:
@@ -12509,7 +12584,17 @@ class CGMemberJITInfo(CGThing):
         value is always treated as present. So this must check
         `adapter.resultStep->kind` at runtime, same as the param-read
         direction checks it for WebIDLStepKind::Nullable there."""
-        if inner.isDOMString() or inner.isUSVString() or inner.isByteString():
+        if (
+            inner.isDOMString()
+            or inner.isUSVString()
+            or inner.isByteString()
+            or inner.isUTF8String()
+        ):
+            writer = (
+                "WriteWebIDLNativeUTF8String"
+                if inner.isUTF8String()
+                else "WriteWebIDLNativeString"
+            )
             return fill(
                 """
                 if (adapter.resultStep->kind == JS::WebIDLStepKind::Option) {
@@ -12518,14 +12603,15 @@ class CGMemberJITInfo(CGThing):
                     return false;
                   }
                   if (!${resultVar}.IsVoid()) {
-                    if (!mozilla::dom::WriteWebIDLNativeString(ctx, *adapter.resultStep->child, webIDLResultPtr, ${resultVar}, resultsPtr)) {
+                    if (!mozilla::dom::${writer}(ctx, *adapter.resultStep->child, webIDLResultPtr, ${resultVar}, resultsPtr)) {
                       return false;
                     }
                   }
-                } else if (!mozilla::dom::WriteWebIDLNativeString(ctx, *adapter.resultStep, resultMemBase, ${resultVar}, resultsPtr)) {
+                } else if (!mozilla::dom::${writer}(ctx, *adapter.resultStep, resultMemBase, ${resultVar}, resultsPtr)) {
                   return false;
                 }
                 """,
+                writer=writer,
                 resultVar=resultVar,
             )
         if self.nativeInterfaceTypeName(inner) is not None:
@@ -12621,6 +12707,8 @@ class CGMemberJITInfo(CGThing):
             return "Optional<nsAString> %s;\n" % argVar
         if t.isByteString():
             return "Optional<nsCString> %s;\n" % argVar
+        if t.isUTF8String():
+            return "Optional<nsACString> %s;\n" % argVar
         if t.isBoolean():
             cppType = "bool"
         elif t.isInteger() or t.isFloat():
@@ -12689,6 +12777,12 @@ class CGMemberJITInfo(CGThing):
         if self.descriptor.interface.isJSImplemented():
             return None
         if opType == "Method" and self.member.getExtendedAttribute("WebExtensionStub"):
+            return None
+        if self.member.getExtendedAttribute("BindingTemplate"):
+            # [BindingTemplate] generates a bespoke getter/setter body
+            # inline in the ordinary JS-facing binding rather than calling
+            # a plain GetFoo()/SetFoo() native method, so there's nothing
+            # for CGCallGenerator to call here.
             return None
 
         isStatic = self.member.isStatic()
@@ -13447,7 +13541,12 @@ class CGMemberJITInfo(CGThing):
             if self.shouldBuildNativeCallEntries():
                 entryNames = []
                 entryDefs = ""
-                for i, (returnType, args) in enumerate(signatures):
+                # Native-call entries may use [WasmUtf8]-retyped signatures;
+                # the schema built above from `signatures` never does, so
+                # component overload matching is unaffected. The two lists
+                # stay index-aligned - only element types differ.
+                nativeSignatures = self.nativeCallSignatures(signatures)
+                for i, (returnType, args) in enumerate(nativeSignatures):
                     entryName = self.nativeCallEntryFuncName(opType, i)
                     entryDef = self.buildNativeCallEntryFunction(
                         entryName, opType, returnType, args

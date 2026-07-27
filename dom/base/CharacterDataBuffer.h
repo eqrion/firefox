@@ -14,6 +14,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/EnumSet.h"
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/Span.h"
 #include "mozilla/StringBuffer.h"
 #include "mozilla/Utf16.h"
 #include "nsISupportsImpl.h"
@@ -123,6 +124,29 @@ class CharacterDataBuffer final {
   bool SetTo(const char16_t* aBuffer, uint32_t aLength, bool aUpdateBidi,
              bool aForce2b);
 
+  /**
+   * Change the contents of this buffer to be the result of decoding aUtf8
+   * as UTF-8. aUtf8 must already be valid UTF-8 - this does not validate.
+   * If aForce2b is true, the text will be stored as char16_t as is.
+   *
+   * Unlike SetTo(), this does not mutate aOut on failure: aOut is left
+   * exactly as it was (i.e. still empty, since it must be a fresh buffer),
+   * so a caller can use this to build a replacement before touching any
+   * observable state, and only commit to it once it's known to have
+   * succeeded.
+   */
+  [[nodiscard]] static bool BuildFromUtf8(mozilla::Span<const char> aUtf8,
+                                          bool aForce2b,
+                                          CharacterDataBuffer& aOut);
+
+  /**
+   * Swap the contents of this buffer with aOther's.
+   */
+  void SwapWith(CharacterDataBuffer& aOther) {
+    std::swap(mBufferBits, aOther.mBufferBits);
+    std::swap(mAllBits, aOther.mAllBits);
+  }
+
   bool SetTo(const nsString& aString, bool aUpdateBidi, bool aForce2b) {
     if (MOZ_UNLIKELY(aString.Length() > NS_MAX_CHARACTER_DATA_BUFFER_LENGTH)) {
       return false;
@@ -176,6 +200,30 @@ class CharacterDataBuffer final {
     }
     return AppendASCIItoUTF16(Substring(m1b, mState.mLength), aString,
                               aFallible);
+  }
+
+  /**
+   * Append the contents of this data buffer to aString, UTF-8 encoded.
+   */
+  void AppendTo(nsACString& aString) const {
+    if (!AppendTo(aString, fallible)) {
+      aString.AllocFailed(aString.Length() + GetLength());
+    }
+  }
+
+  /**
+   * Append the contents of this data buffer to aString, UTF-8 encoded.
+   * @return false if an out of memory condition is detected, true otherwise
+   */
+  [[nodiscard]] bool AppendTo(nsACString& aString,
+                              const fallible_t& aFallible) const {
+    if (mState.mIs2b) {
+      return AppendUTF16toUTF8(Span(Get2b(), mState.mLength), aString,
+                               aFallible);
+    }
+    // m1b is Latin1, not UTF-8: AppendLatin1toUTF8 does the transcode.
+    return AppendLatin1toUTF8(nsDependentCSubstring(m1b, mState.mLength),
+                              aString, aFallible);
   }
 
   /**
@@ -565,6 +613,9 @@ class CharacterDataBuffer final {
     // may contain characters between 0x80 - 0xFF.  So, copying the value to
     // char16_t might depend on how the compiler to treat the values.
     const char* m1b;  // This is const since it can point to shared data
+    // Untyped alias of the above, so SwapWith() can exchange the union's
+    // active member without knowing (or caring) which one it is.
+    void* mBufferBits;
   };
 
   union {

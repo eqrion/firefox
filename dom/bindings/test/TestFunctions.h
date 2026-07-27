@@ -132,6 +132,7 @@ class TestFunctions : public NonRefcountedDOMObject {
                                     int32_t aB);
   static int32_t ComponentStaticAdd(GlobalObject& aGlobal, int32_t aA,
                                     int32_t aB, int32_t aC);
+  void ComponentEchoUtf8(const nsACString& aS, nsACString& aRetval);
   bool CheckWebIDLComponentCall(JSContext* aCx, JS::Handle<JSObject*> aSelfObj,
                                 ErrorResult& aRv);
 

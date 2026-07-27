@@ -101,6 +101,15 @@ class FragmentOrElement : public nsIContent {
       mozilla::ErrorResult& aError,
       MutationEffectOnScript aMutationEffectOnScript) override;
 
+  // UTF-8 fast path for the demo. Must be (re)declared alongside the
+  // nsAString overloads above - see the comment on nsINode's declarations.
+  virtual void GetTextContentInternal(nsACString& aTextContent,
+                                      mozilla::OOMReporter& aError) override;
+  virtual void SetTextContentInternal(
+      const nsACString& aTextContent, nsIPrincipal* aSubjectPrincipal,
+      mozilla::ErrorResult& aError,
+      MutationEffectOnScript aMutationEffectOnScript) override;
+
   // nsIContent interface methods
   const CharacterDataBuffer* GetCharacterDataBuffer() const override;
   uint32_t TextLength() const override;

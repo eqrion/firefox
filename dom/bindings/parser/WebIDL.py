@@ -6074,6 +6074,19 @@ class IDLAttribute(IDLInterfaceMember):
                 raise WebIDLError(
                     "[CEReactions] must take no arguments", [attr.location]
                 )
+        elif identifier == "WasmUtf8":
+            if not attr.noArguments():
+                raise WebIDLError(
+                    "[WasmUtf8] must take no arguments", [attr.location]
+                )
+            unrolled = self.type.unroll()
+            if not unrolled.isDOMString() and not unrolled.isUSVString():
+                raise WebIDLError(
+                    "[WasmUtf8] only makes sense on a DOMString or USVString "
+                    "attribute; %s has no plain string to specialize"
+                    % self.type,
+                    [attr.location, self.location],
+                )
         elif (
             identifier == "Pref"
             or identifier == "Deprecated"
@@ -7166,6 +7179,28 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
                 raise WebIDLError(
                     "The return type of the default toJSON "
                     "operation must be 'object'",
+                    [attr.location, self.location],
+                )
+        elif identifier == "WasmUtf8":
+            if not attr.noArguments():
+                raise WebIDLError(
+                    "[WasmUtf8] must take no arguments", [attr.location]
+                )
+
+            def isPlainString(t):
+                unrolled = t.unroll()
+                return unrolled.isDOMString() or unrolled.isUSVString()
+
+            hasPlainString = False
+            for returnType, arguments in self.signatures():
+                if returnType is not None and isPlainString(returnType):
+                    hasPlainString = True
+                if any(isPlainString(arg.type) for arg in arguments):
+                    hasPlainString = True
+            if not hasPlainString:
+                raise WebIDLError(
+                    "[WasmUtf8] only makes sense on an operation with a "
+                    "plain DOMString or USVString argument or return value",
                     [attr.location, self.location],
                 )
         elif (

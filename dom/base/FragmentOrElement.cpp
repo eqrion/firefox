@@ -1256,6 +1256,34 @@ void FragmentOrElement::SetTextContentInternal(
                                               aMutationEffectOnScript);
 }
 
+void FragmentOrElement::GetTextContentInternal(nsACString& aTextContent,
+                                               OOMReporter& aError) {
+  if (!nsContentUtils::GetNodeTextContent(this, true, aTextContent, fallible)) {
+    aError.ReportOOM();
+  }
+}
+
+void FragmentOrElement::SetTextContentInternal(
+    const nsACString& aTextContent, nsIPrincipal* aSubjectPrincipal,
+    ErrorResult& aError, MutationEffectOnScript aMutationEffectOnScript) {
+  bool tryReuse = false;
+  if (!aTextContent.IsEmpty()) {
+    if (nsIContent* firstChild = GetFirstChild()) {
+      tryReuse = firstChild->NodeType() == TEXT_NODE &&
+                 !firstChild->GetNextSibling() &&
+                 firstChild->OwnedOnlyByTheDOMAndFrameTrees() &&
+#ifdef ACCESSIBILITY
+                 !GetAccService() &&
+#endif
+                 !OwnerDoc()->MayHaveDOMMutationObservers() &&
+                 !MaybeNeedsToNotifyDevToolsOfNodeRemovalsInOwnerDoc();
+    }
+  }
+
+  aError = nsContentUtils::SetNodeTextContent(this, aTextContent, tryReuse,
+                                              aMutationEffectOnScript);
+}
+
 void FragmentOrElement::DestroyContent() {
   // Drop any servo data. We do this before the RemovedFromDocument call below
   // so that it doesn't need to try to keep the style state sane when shuffling

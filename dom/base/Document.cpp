@@ -132,6 +132,7 @@
 #include "mozilla/TextEditor.h"
 #include "mozilla/URLDecorationStripper.h"
 #include "mozilla/URLExtraData.h"
+#include "mozilla/Utf8.h"
 #include "mozilla/css/ImageLoader.h"
 #include "mozilla/css/Loader.h"
 #include "mozilla/css/Rule.h"
@@ -9317,6 +9318,14 @@ already_AddRefed<Element> Document::CreateElement(
   }
 
   return elem.forget();
+}
+
+already_AddRefed<Element> Document::CreateElement(
+    const nsACString& aTagName, const ElementCreationOptionsOrString& aOptions,
+    ErrorResult& rv) {
+  MOZ_ASSERT(IsUtf8(aTagName),
+             "caller must validate UTF-8 before calling this");
+  return CreateElement(NS_ConvertUTF8toUTF16(aTagName), aOptions, rv);
 }
 
 /* https://dom.spec.whatwg.org/#dom-document-createelementns */

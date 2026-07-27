@@ -7364,8 +7364,11 @@ already_AddRefed<Document> nsContentUtils::CreateInertHTMLDocument(
 }
 
 /* static */
-nsresult nsContentUtils::SetNodeTextContent(
-    nsIContent* aContent, const nsAString& aValue, bool aTryReuse,
+// Templated on the source string type so the nsAString and nsACString
+// (UTF-8) entry points below share one implementation instead of drifting.
+template <typename StringT>
+static nsresult SetNodeTextContentImpl(
+    nsIContent* aContent, const StringT& aValue, bool aTryReuse,
     MutationEffectOnScript aMutationEffectOnScript) {
   // Optimize the common case of there being no observers
   if (MOZ_UNLIKELY(
@@ -7442,8 +7445,25 @@ nsresult nsContentUtils::SetNodeTextContent(
   return rv.StealNSResult();
 }
 
+nsresult nsContentUtils::SetNodeTextContent(
+    nsIContent* aContent, const nsAString& aValue, bool aTryReuse,
+    MutationEffectOnScript aMutationEffectOnScript) {
+  return SetNodeTextContentImpl(aContent, aValue, aTryReuse,
+                                aMutationEffectOnScript);
+}
+
+nsresult nsContentUtils::SetNodeTextContent(
+    nsIContent* aContent, const nsACString& aValue, bool aTryReuse,
+    MutationEffectOnScript aMutationEffectOnScript) {
+  return SetNodeTextContentImpl(aContent, aValue, aTryReuse,
+                                aMutationEffectOnScript);
+}
+
+// Templated on the destination string type so the nsAString and nsACString
+// (UTF-8) entry points below share one implementation instead of drifting.
+template <typename StringT>
 static bool AppendNodeTextContentsRecurse(const nsINode* aNode,
-                                          nsAString& aResult,
+                                          StringT& aResult,
                                           const fallible_t& aFallible) {
   for (nsIContent* child = aNode->GetFirstChild(); child;
        child = child->GetNextSibling()) {
@@ -7463,10 +7483,10 @@ static bool AppendNodeTextContentsRecurse(const nsINode* aNode,
   return true;
 }
 
-/* static */
-bool nsContentUtils::AppendNodeTextContent(const nsINode* aNode, bool aDeep,
-                                           nsAString& aResult,
-                                           const fallible_t& aFallible) {
+template <typename StringT>
+static bool AppendNodeTextContentImpl(const nsINode* aNode, bool aDeep,
+                                      StringT& aResult,
+                                      const fallible_t& aFallible) {
   if (const Text* text = aNode->GetAsText()) {
     return text->AppendTextTo(aResult, aFallible);
   }
@@ -7484,6 +7504,20 @@ bool nsContentUtils::AppendNodeTextContent(const nsINode* aNode, bool aDeep,
     }
   }
   return true;
+}
+
+/* static */
+bool nsContentUtils::AppendNodeTextContent(const nsINode* aNode, bool aDeep,
+                                           nsAString& aResult,
+                                           const fallible_t& aFallible) {
+  return AppendNodeTextContentImpl(aNode, aDeep, aResult, aFallible);
+}
+
+/* static */
+bool nsContentUtils::AppendNodeTextContent(const nsINode* aNode, bool aDeep,
+                                           nsACString& aResult,
+                                           const fallible_t& aFallible) {
+  return AppendNodeTextContentImpl(aNode, aDeep, aResult, aFallible);
 }
 
 bool nsContentUtils::HasNonEmptyTextContent(
@@ -9414,6 +9448,13 @@ mozilla::LogModule* nsContentUtils::DOMDumpLog() { return sDOMDumpLog; }
 
 bool nsContentUtils::GetNodeTextContent(const nsINode* aNode, bool aDeep,
                                         nsAString& aResult,
+                                        const fallible_t& aFallible) {
+  aResult.Truncate();
+  return AppendNodeTextContent(aNode, aDeep, aResult, aFallible);
+}
+
+bool nsContentUtils::GetNodeTextContent(const nsINode* aNode, bool aDeep,
+                                        nsACString& aResult,
                                         const fallible_t& aFallible) {
   aResult.Truncate();
   return AppendNodeTextContent(aNode, aDeep, aResult, aFallible);

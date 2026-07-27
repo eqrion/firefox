@@ -49,6 +49,21 @@ class Attr final : public nsINode {
                                       nsIPrincipal* aSubjectPrincipal,
                                       ErrorResult& aError,
                                       MutationEffectOnScript) override;
+
+  // UTF-8 overloads of the four methods above. All four must be
+  // (re)declared here even though only SetTextContent's behavior actually
+  // differs (routes through SetValue()'s Trusted Types check, like its
+  // nsAString sibling) - see the comment on nsINode's declarations for why
+  // overriding any one overload of a name requires overriding all of them.
+  MOZ_CAN_RUN_SCRIPT void SetTextContent(const nsACString& aTextContent,
+                                         nsIPrincipal* aSubjectPrincipal,
+                                         mozilla::ErrorResult& aError) override;
+  virtual void GetTextContentInternal(nsACString& aTextContent,
+                                      OOMReporter& aError) override;
+  virtual void SetTextContentInternal(const nsACString& aTextContent,
+                                      nsIPrincipal* aSubjectPrincipal,
+                                      ErrorResult& aError,
+                                      MutationEffectOnScript) override;
   MOZ_CAN_RUN_SCRIPT void SetNodeValue(const nsAString& aNodeValue,
                                        mozilla::ErrorResult& aError) override;
   virtual void GetNodeValueInternal(nsAString& aNodeValue) override;

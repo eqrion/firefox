@@ -536,4 +536,160 @@ TEST(CharacterDataBufferTest, SafeAPIsChar1b)
   EXPECT_EQ(characterDataBuffer.SafeCharAt(100), u'\0');
 }
 
+struct Utf8Case {
+  const char* mUtf8;
+  bool mExpectIs2b;
+  // -1 means "same as the UTF-8 byte length" (i.e. pure ASCII).
+  int32_t mExpectLength = -1;
+  bool mExpectBidi = false;
+
+  uint32_t ExpectedLength() const {
+    return mExpectLength >= 0 ? static_cast<uint32_t>(mExpectLength)
+                              : strlen(mUtf8);
+  }
+
+  friend std::ostream& operator<<(std::ostream& aStream,
+                                  const Utf8Case& aCase) {
+    return aStream << "BuildFromUtf8(\"" << aCase.mUtf8 << "\")";
+  }
+};
+
+static void CheckBuildFromUtf8(const Utf8Case& aCase, bool aForce2b) {
+  CharacterDataBuffer buffer;
+  Span<const char> utf8 = MakeStringSpan(aCase.mUtf8);
+  ASSERT_TRUE(CharacterDataBuffer::BuildFromUtf8(utf8, aForce2b, buffer))
+  << aCase;
+
+  EXPECT_EQ(buffer.GetLength(), aCase.ExpectedLength()) << aCase;
+  EXPECT_EQ(buffer.IsBidi(), aCase.mExpectBidi) << aCase;
+  if (aForce2b) {
+    EXPECT_EQ(buffer.Is2b(), utf8.Length() > 0) << aCase;
+  } else {
+    EXPECT_EQ(buffer.Is2b(), aCase.mExpectIs2b) << aCase;
+  }
+
+  // Round-trip through both AppendTo() overloads.
+  nsAutoString utf16;
+  ASSERT_TRUE(buffer.AppendTo(utf16, fallible))
+  << aCase;
+  EXPECT_TRUE(
+      NS_ConvertUTF16toUTF8(utf16).Equals(nsDependentCString(aCase.mUtf8)))
+      << aCase;
+
+  nsAutoCString utf8Out;
+  ASSERT_TRUE(buffer.AppendTo(utf8Out, fallible))
+  << aCase;
+  EXPECT_TRUE(utf8Out.Equals(nsDependentCString(aCase.mUtf8))) << aCase;
+}
+
+TEST(CharacterDataBufferTest, BuildFromUtf8)
+{
+  for (const auto& testCase : {
+           Utf8Case{"", false, 0}, Utf8Case{"a", false},
+           Utf8Case{"\xC3\xA9", false, 1},  // "é", shared single-char
+           Utf8Case{" ", false},            // shared whitespace
+           Utf8Case{"\n\n  ", false}, Utf8Case{" \n\t\t", false},
+           Utf8Case{"caf\xC3\xA9", false, 4},  // "café", mixed Latin1
+           Utf8Case{"\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E", true,
+                    3},                            // "日本語"
+           Utf8Case{"\xF0\x9F\x98\x80", true, 2},  // an emoji (surrogate pair)
+           Utf8Case{"\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D", true, 4,
+                    true},                         // "שלום", Hebrew, bidi
+           Utf8Case{"ab\xD7\xA9", true, 3, true},  // ASCII + Hebrew
+           Utf8Case{"caf\xC3\xA9"
+                    "caf\xC3\xA9",
+                    false, 8},  // Latin1, no bidi
+       }) {
+    CheckBuildFromUtf8(testCase, /* aForce2b = */ false);
+    CheckBuildFromUtf8(testCase, /* aForce2b = */ true);
+  }
+}
+
+TEST(CharacterDataBufferTest, BuildFromUtf8WhitespaceRunBoundary)
+{
+  // TEXTFRAG_WHITE_AFTER_NEWLINE (50) + 1 leading space + TEXTFRAG_MAX_NEWLINES
+  // (7) is the largest run still eligible for the shared whitespace string;
+  // one byte more must fall back to a heap allocation.
+  nsAutoCString atBoundary;
+  atBoundary.Append(' ');
+  for (int i = 0; i < 7; ++i) {
+    atBoundary.Append('\n');
+  }
+  for (int i = 0; i < 50; ++i) {
+    atBoundary.Append(' ');
+  }
+  ASSERT_EQ(atBoundary.Length(), 58u);
+
+  CharacterDataBuffer buffer;
+  ASSERT_TRUE(CharacterDataBuffer::BuildFromUtf8(atBoundary, false, buffer));
+  EXPECT_FALSE(buffer.Is2b());
+  EXPECT_EQ(buffer.GetLength(), atBoundary.Length());
+
+  nsAutoCString overBoundary(atBoundary);
+  overBoundary.Append(' ');
+  ASSERT_EQ(overBoundary.Length(), 59u);
+
+  CharacterDataBuffer buffer2;
+  ASSERT_TRUE(CharacterDataBuffer::BuildFromUtf8(overBoundary, false, buffer2));
+  EXPECT_FALSE(buffer2.Is2b());
+  EXPECT_EQ(buffer2.GetLength(), overBoundary.Length());
+
+  nsAutoCString utf8Out;
+  ASSERT_TRUE(buffer2.AppendTo(utf8Out, fallible));
+  EXPECT_TRUE(utf8Out.Equals(overBoundary));
+}
+
+TEST(CharacterDataBufferTest, BuildFromUtf8EmptyBuffer)
+{
+  CharacterDataBuffer buffer;
+  ASSERT_TRUE(
+      CharacterDataBuffer::BuildFromUtf8(Span<const char>(), false, buffer));
+  EXPECT_EQ(buffer.GetLength(), 0u);
+  EXPECT_FALSE(buffer.Is2b());
+  EXPECT_FALSE(buffer.IsBidi());
+}
+
+TEST(CharacterDataBufferTest, BuildFromUtf8MatchesSetToUtf16)
+{
+  // Parity fuzz: BuildFromUtf8() must produce a buffer indistinguishable
+  // from SetTo() on the same content, for both possible aForce2b values.
+  const char16_t* kStrings[] = {
+      u"", u"a", u"é", u"café", u"日本語", u"\U0001F600", u"שלום", u"abש",
+  };
+  for (const char16_t* str : kStrings) {
+    nsDependentString utf16(str);
+    NS_ConvertUTF16toUTF8 utf8(utf16);
+    for (bool force2b : {false, true}) {
+      CharacterDataBuffer viaUtf16;
+      ASSERT_TRUE(viaUtf16.SetTo(utf16.BeginReading(), utf16.Length(),
+                                 /* aUpdateBidi = */ true, force2b));
+
+      CharacterDataBuffer viaUtf8;
+      ASSERT_TRUE(CharacterDataBuffer::BuildFromUtf8(utf8, force2b, viaUtf8));
+
+      EXPECT_EQ(viaUtf16.GetLength(), viaUtf8.GetLength())
+          << NS_ConvertUTF16toUTF8(utf16).get() << " force2b=" << force2b;
+      EXPECT_EQ(viaUtf16.Is2b(), viaUtf8.Is2b())
+          << NS_ConvertUTF16toUTF8(utf16).get() << " force2b=" << force2b;
+      EXPECT_EQ(viaUtf16.IsBidi(), viaUtf8.IsBidi())
+          << NS_ConvertUTF16toUTF8(utf16).get() << " force2b=" << force2b;
+      EXPECT_TRUE(viaUtf16.BufferEquals(viaUtf8))
+          << NS_ConvertUTF16toUTF8(utf16).get() << " force2b=" << force2b;
+    }
+  }
+}
+
+TEST(CharacterDataBufferTest, AsUtf8AppendToLoneSurrogate)
+{
+  // A lone surrogate is ill-formed UTF-16; AppendTo(nsACString&) must
+  // replace it with U+FFFD rather than producing ill-formed UTF-8.
+  const char16_t loneSurrogate[] = {0xD800, 'x', 0};
+  CharacterDataBuffer buffer;
+  ASSERT_TRUE(buffer.SetTo(loneSurrogate, 2, /* aUpdateBidi = */ false,
+                           /* aForce2b = */ true));
+  nsAutoCString utf8Out;
+  ASSERT_TRUE(buffer.AppendTo(utf8Out, fallible));
+  EXPECT_TRUE(utf8Out.Equals("\xEF\xBF\xBDx"_ns));
+}
+
 };  // namespace mozilla::dom

@@ -3607,6 +3607,23 @@ bool WriteWebIDLNativeString(JS::WebIDLContext& aCtx,
                              uint32_t aMemBase, const nsACString& value,
                              JS::WasmScalarVal* aResult);
 
+// [WasmUtf8] counterparts of the two functions above, for a WebIDL
+// UTF8String (nsACString) native call argument/result. Unlike the
+// nsACString overloads above - which are the ByteString path, an
+// unvalidated raw byte copy - these validate that the component handed us
+// well-formed UTF-8 on read (the canonical ABI traps on ill-formed UTF-8
+// when lifting a string; we do the same rather than handing arbitrary
+// bytes to the DOM), and never transcode a write, since Gecko produced the
+// bytes and they're well-formed UTF-8 by construction.
+bool ReadWebIDLNativeUTF8String(JS::WebIDLContext& aCtx,
+                                const JS::WasmScalarVal* aCoreParams,
+                                const JS::WebIDLCoerceStep& aStep,
+                                uint32_t aMemBase, nsACString& out);
+bool WriteWebIDLNativeUTF8String(JS::WebIDLContext& aCtx,
+                                 const JS::WebIDLCoerceStep& aStep,
+                                 uint32_t aMemBase, const nsACString& value,
+                                 JS::WasmScalarVal* aResult);
+
 #endif  // ENABLE_WASM_COMPONENTS
 
 }  // namespace dom

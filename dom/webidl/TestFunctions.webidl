@@ -157,6 +157,9 @@ interface TestFunctions {
   static long componentStaticAdd(long a, long b);
   static long componentStaticAdd(long a, long b, long c);
 
+  [WasmUtf8]
+  DOMString componentEchoUtf8(DOMString s);
+
   [Throws]
   boolean checkWebIDLComponentCall(object selfObj);
 };

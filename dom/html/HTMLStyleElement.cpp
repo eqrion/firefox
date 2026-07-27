@@ -4,6 +4,7 @@
 #include "mozilla/dom/HTMLStyleElement.h"
 
 #include "mozilla/StyleSheet.h"
+#include "mozilla/Utf8.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/FetchPriority.h"
 #include "mozilla/dom/HTMLStyleElementBinding.h"
@@ -178,6 +179,24 @@ void HTMLStyleElement::SetTextContentInternal(const nsAString& aTextContent,
     mTriggeringPrincipal = aScriptedPrincipal;
     (void)EnableUpdatesAndUpdateStyleSheet(nullptr);
   }
+}
+
+void HTMLStyleElement::SetTextContentInternal(
+    const nsACString& aTextContent, nsIPrincipal* aScriptedPrincipal,
+    ErrorResult& aError, MutationEffectOnScript aMutationEffectOnScript) {
+  nsAutoString utf16;
+  if (aTextContent.IsVoid()) {
+    utf16.SetIsVoid(true);
+  } else {
+    MOZ_ASSERT(IsUtf8(aTextContent),
+               "caller must validate UTF-8 before calling this");
+    if (!CopyUTF8toUTF16(aTextContent, utf16, fallible)) {
+      aError.Throw(NS_ERROR_OUT_OF_MEMORY);
+      return;
+    }
+  }
+  SetTextContentInternal(utf16, aScriptedPrincipal, aError,
+                         aMutationEffectOnScript);
 }
 
 void HTMLStyleElement::SetDevtoolsAsTriggeringPrincipal() {

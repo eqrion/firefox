@@ -68,6 +68,7 @@
 #include "mozilla/TextEvents.h"
 #include "mozilla/Try.h"
 #include "mozilla/UseCounter.h"
+#include "mozilla/Utf8.h"
 #include "mozilla/dom/AnimatableBinding.h"
 #include "mozilla/dom/Animation.h"
 #include "mozilla/dom/Attr.h"
@@ -1975,6 +1976,15 @@ void Element::SetAttribute(
   // a different value, perhaps a nullptr. To be safe, just call the version of
   // Element::SetAttribute accepting a string value.
   SetAttribute(aName, *compliantString, aTriggeringPrincipal, aError);
+}
+
+void Element::SetAttribute(
+    const nsACString& aName,
+    const TrustedHTMLOrTrustedScriptOrTrustedScriptURLOrString& aValue,
+    nsIPrincipal* aTriggeringPrincipal, ErrorResult& aError) {
+  MOZ_ASSERT(IsUtf8(aName), "caller must validate UTF-8 before calling this");
+  SetAttribute(NS_ConvertUTF8toUTF16(aName), aValue, aTriggeringPrincipal,
+               aError);
 }
 
 void Element::SetAttributeNS(

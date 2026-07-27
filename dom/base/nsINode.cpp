@@ -38,6 +38,7 @@
 #include "mozilla/TextControlState.h"
 #include "mozilla/TextEditor.h"
 #include "mozilla/TimeStamp.h"
+#include "mozilla/Utf8.h"
 #include "mozilla/dom/AncestorIterator.h"
 #include "mozilla/dom/Attr.h"
 #include "mozilla/dom/BindContext.h"
@@ -1190,6 +1191,66 @@ void nsINode::GetTextContentInternal(nsAString& aTextContent,
                                      OOMReporter& aError) {
   SetDOMStringToNull(aTextContent);
 }
+
+void nsINode::GetTextContentInternal(nsACString& aTextContent,
+                                     OOMReporter& aError) {
+  // Converting shim: correct for any subclass by construction, just not
+  // fast. Subclasses that want the fast path override this overload too
+  // (see the declaration in nsINode.h for why both overloads must be
+  // (re)declared together).
+  nsAutoString utf16;
+  GetTextContentInternal(utf16, aError);
+  if (utf16.IsVoid()) {
+    aTextContent.SetIsVoid(true);
+    return;
+  }
+  if (!CopyUTF16toUTF8(utf16, aTextContent, fallible)) {
+    aError.ReportOOM();
+  }
+}
+
+void nsINode::SetTextContentInternal(
+    const nsACString& aTextContent, nsIPrincipal* aSubjectPrincipal,
+    ErrorResult& aError, MutationEffectOnScript aMutationEffectOnScript) {
+  nsAutoString utf16;
+  if (aTextContent.IsVoid()) {
+    utf16.SetIsVoid(true);
+  } else {
+    MOZ_ASSERT(IsUtf8(aTextContent),
+               "caller must validate UTF-8 before calling "
+               "SetTextContent(nsACString&); see the wasm component bridge's "
+               "ReadWebIDLNativeUTF8String");
+    if (!CopyUTF8toUTF16(aTextContent, utf16, fallible)) {
+      aError.Throw(NS_ERROR_OUT_OF_MEMORY);
+      return;
+    }
+  }
+  SetTextContentInternal(utf16, aSubjectPrincipal, aError,
+                         aMutationEffectOnScript);
+}
+
+#ifdef DEBUG
+void nsINode::AssertTextContentUtf8Matches(const nsACString& aUtf8) {
+  IgnoredErrorResult rv;
+  nsAutoString utf16;
+  GetTextContentInternal(utf16, rv);
+  if (utf16.IsVoid()) {
+    MOZ_ASSERT(aUtf8.IsVoid(),
+               "UTF-8 textContent getter returned non-void where the "
+               "UTF-16 getter returned null");
+    return;
+  }
+  MOZ_ASSERT(!aUtf8.IsVoid(),
+             "UTF-8 textContent getter returned null where the UTF-16 "
+             "getter returned a string");
+  MOZ_ASSERT(
+      NS_ConvertUTF16toUTF8(utf16).Equals(aUtf8),
+      "UTF-8 textContent getter diverged from the UTF-16 getter; a "
+      "subclass probably overrides one Get/SetTextContentInternal overload "
+      "(or GetNodeValueInternal) without the matching one - see the "
+      "override table in nsINode.h");
+}
+#endif
 
 DocumentOrShadowRoot* nsINode::GetContainingDocumentOrShadowRoot() const {
   if (IsInUncomposedDoc()) {

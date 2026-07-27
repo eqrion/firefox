@@ -60,7 +60,7 @@ interface Node : EventTarget {
   [CEReactions, SetterThrows, Pure]
            attribute DOMString? nodeValue;
   [CEReactions, SetterThrows, GetterCanOOM,
-   SetterNeedsSubjectPrincipal=NonSystem, Pure]
+   SetterNeedsSubjectPrincipal=NonSystem, Pure, WasmUtf8]
            attribute DOMString? textContent;
   // These DOM methods cannot be accessed by UA Widget scripts
   // because the DOM element reflectors will be in the content scope,

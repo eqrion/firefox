@@ -110,6 +110,16 @@ inline bool HasRTLChars(mozilla::Span<const char16_t> aBuffer) {
   return encoding_mem_is_utf16_bidi(aBuffer.Elements(), aBuffer.Length());
 }
 
+/**
+ * Give a UTF-8 text buffer
+ * @return true if the string contains right-to-left characters. Also
+ * returns true for ill-formed UTF-8, so callers that haven't already
+ * validated the buffer will get a conservatively-set (but safe) result.
+ */
+inline bool HasRTLCharsUtf8(mozilla::Span<const char> aBuffer) {
+  return encoding_mem_is_utf8_bidi(aBuffer.Elements(), aBuffer.Length());
+}
+
 // These values are shared with Preferences dialog
 //  ------------------
 //  If Pref values are to be changed

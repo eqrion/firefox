@@ -328,6 +328,11 @@ int32_t TestFunctions::ComponentStaticAdd(GlobalObject& aGlobal, int32_t aA,
   return aA + aB + aC;
 }
 
+void TestFunctions::ComponentEchoUtf8(const nsACString& aS,
+                                      nsACString& aRetval) {
+  aRetval = aS;
+}
+
 // Verifies that JS::GetWebIDLOperationTypes recovers the expected shapes
 // for the componentAdd/componentAddDefaulted/componentAcceptsSelf/
 // componentStaticAdd fixtures above: overload resolution, an optional
@@ -470,6 +475,34 @@ bool TestFunctions::CheckWebIDLComponentCall(JSContext* aCx,
       aRv.ThrowTypeError("componentStaticAdd: wrong return type");
       return false;
     }
+  }
+
+  // [WasmUtf8] retypes componentEchoUtf8's native-call-entry C++ signature
+  // (DOMString -> nsACString) but must leave the WebIDL-visible operation
+  // type schema alone, so component overload matching is unaffected - the
+  // param/return type recovered here must still read as plain DOMString,
+  // never some UTF8String-specific kind (there isn't one; see
+  // JS::WebIDLTypeKind).
+  JS::Rooted<JSObject*> echoUtf8(aCx);
+  if (!getMethod("componentEchoUtf8", &echoUtf8)) {
+    return false;
+  }
+  JS::WebIDLOperationTypeVector echoOverloads;
+  if (!JS::GetWebIDLOperationTypes(aCx, echoUtf8, echoOverloads)) {
+    return false;
+  }
+  if (echoOverloads.length() != 1 || echoOverloads[0].params.length() != 1) {
+    aRv.ThrowTypeError("componentEchoUtf8: wrong shape");
+    return false;
+  }
+  if (echoOverloads[0].params[0].type.kind() != JS::WebIDLTypeKind::DOMString) {
+    aRv.ThrowTypeError("componentEchoUtf8: wrong param type");
+    return false;
+  }
+  if (!echoOverloads[0].returnType ||
+      echoOverloads[0].returnType->kind() != JS::WebIDLTypeKind::DOMString) {
+    aRv.ThrowTypeError("componentEchoUtf8: wrong return type");
+    return false;
   }
 
   return true;

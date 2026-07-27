@@ -2116,6 +2116,15 @@ class nsContentUtils {
           MutationEffectOnScript::DropTrustWorthiness);
 
   /**
+   * UTF-8 counterpart of the above. aValue must already be valid UTF-8;
+   * this does not validate it.
+   */
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY static nsresult SetNodeTextContent(
+      nsIContent* aContent, const nsACString& aValue, bool aTryReuse,
+      MutationEffectOnScript aMutationEffectOnScript =
+          MutationEffectOnScript::DropTrustWorthiness);
+
+  /**
    * Get the textual contents of a node. This is a concatenation of all
    * textnodes that are direct or (depending on aDeep) indirect children
    * of the node.
@@ -2136,6 +2145,13 @@ class nsContentUtils {
                                                nsAString& aResult,
                                                const mozilla::fallible_t&);
 
+  /**
+   * UTF-8 counterpart of the above.
+   */
+  [[nodiscard]] static bool GetNodeTextContent(const nsINode* aNode, bool aDeep,
+                                               nsACString& aResult,
+                                               const mozilla::fallible_t&);
+
   static void GetNodeTextContent(const nsINode* aNode, bool aDeep,
                                  nsAString& aResult);
 
@@ -2144,6 +2160,13 @@ class nsContentUtils {
    */
   static bool AppendNodeTextContent(const nsINode* aNode, bool aDeep,
                                     nsAString& aResult,
+                                    const mozilla::fallible_t&);
+
+  /**
+   * UTF-8 counterpart of the above.
+   */
+  static bool AppendNodeTextContent(const nsINode* aNode, bool aDeep,
+                                    nsACString& aResult,
                                     const mozilla::fallible_t&);
 
   /**
