@@ -763,26 +763,6 @@ using JS::WebIDLStringKind;
                               JS::HandleValue postReturn,
                               const JS::CallArgs& args);
 
-// Implements `canon lower`: wraps `callee` (an arbitrary JS function,
-// possibly WebIDL-typed) as a function taking/returning raw core wasm values
-// (`args`), the mirror image of LiftedCall. `opType` describes `callee`'s own
-// declared signature; use DefaultWebIDLOperationType when `callee` carries
-// no WebIDL type of its own. Any own/borrow handle is resolved through
-// `abiCtx.handles()`. If `bindThisReceiver` is set and `callee` isn't
-// WebIDL-typed (so falls back off the native fast path below), the first
-// flat param (a `[method]` import's `borrow<self>`) is bound as `callee`'s
-// `this` instead of being passed positionally; a WebIDL-typed callee instead
-// declares `self` as an ordinary leading interface param on its own
-// advertised overload.
-// A `[constructor]` import resolves to the interface object itself, which must
-// be invoked as a construct - a WebIDL constructor throws when merely called.
-[[nodiscard]] bool LoweredCall(JSContext* cx, JS::HandleObject callee,
-                               const ComponentFuncType& funcType,
-                               const JS::WebIDLOperationType& opType,
-                               JS::WebIDLContext& abiCtx,
-                               const JS::CallArgs& args,
-                               ComponentNameKind nameKind);
-
 // A hash policy for StronglyUniqueNameSet that hashes items based on their
 // trimmed, lowercased versions, but matches based on the full strongly-unique
 // rules.
@@ -1602,13 +1582,17 @@ class NativeCallArgTypes {
   jit::MIRType operator[](size_t i) const { return kTypes[i]; }
 };
 
+class ComponentInstance;
+
 // All the state a `canon lower` core func needs to call straight into a
-// selected `JS::WebIDLNativeCall` overload, built once at instantiation
-// time (see ComponentInstance::init) instead of per call. Owned by
-// ComponentInstance via a UniquePtr, so its address is stable even if the
-// owning vector is ever reallocated - a JIT-generated stub
-// (GenerateCanonLowerNative) bakes a raw pointer to it directly into
-// compiled code.
+// `JS::WebIDLNativeCall` entry, built once at instantiation time (see
+// ComponentInstance::init) instead of per call - either a native overload
+// selected for the callee (see SelectNativeOverload), or the generic entry
+// (see LoweredNativeCall in WasmComponent.cpp) that drives an arbitrary JS
+// callee through the same adapter machinery. Owned by ComponentInstance via
+// a UniquePtr, so its address is stable even if the owning vector is ever
+// reallocated - a JIT-generated stub (GenerateCanonLowerNative) bakes a raw
+// pointer to it directly into compiled code.
 struct LoweredNativeClosure {
   JS::WebIDLNativeCall entry = nullptr;
   CallAdapter adapter;
@@ -1635,6 +1619,25 @@ struct LoweredNativeClosure {
   // result must be written at, per the canonical ABI's caller-allocated
   // out-param convention. -1 if this overload's result fits flat.
   int32_t resultOutParamIndex = -1;
+
+  // Only read by the generic entry (LoweredNativeCall): the owning instance
+  // and the lowered func's index into its component func space, needed to
+  // recover the actual callee/name-kind/func-type a native overload instead
+  // gets to bake into `entry`/`adapter` ahead of time. `instance` is a
+  // back-pointer, not an owning edge - this closure is itself owned
+  // (transitively, via ComponentInstance::loweredNativeClosures_) by the
+  // instance it points to, so it cannot outlive it.
+  ComponentInstance* instance = nullptr;
+  uint32_t loweredFuncIndex = 0;
+
+  // Recovers the owning closure from the `ctx` pointer a JS::WebIDLNativeCall
+  // is called with - the ABI has no room for a callee/instance argument, so
+  // the generic entry (the only one that needs this) gets back to its own
+  // closure this way instead.
+  static LoweredNativeClosure* fromCtx(JS::WebIDLContext* ctx) {
+    return reinterpret_cast<LoweredNativeClosure*>(
+        reinterpret_cast<uint8_t*>(ctx) - offsetof(LoweredNativeClosure, ctx));
+  }
 
   void trace(JSTracer* trc) { ctx.trace(trc); }
 };
@@ -1683,10 +1686,10 @@ class ComponentInstance {
   using LoweredNativeClosureVector =
       mozilla::Vector<mozilla::UniquePtr<LoweredNativeClosure>, 0,
                       SystemAllocPolicy>;
-  // Sparse, 1:1 with Component::coreFuncs(): non-null only for a `canon
-  // lower` core func resolved to a native-call stub (rather than
-  // WasmComponentLoweredJS) at instantiation time. Resized once, up front,
-  // in `init`.
+  // Sparse, 1:1 with Component::coreFuncs(): non-null for every `canon
+  // lower` core func (every one gets a closure, whether or not its callee
+  // has a native overload - see ResolveLoweredCoreFunc), null for every
+  // other kind of core func. Resized once, up front, in `init`.
   LoweredNativeClosureVector loweredNativeClosures_;
 
   // The resource handle table for this instance, shared by every `canon

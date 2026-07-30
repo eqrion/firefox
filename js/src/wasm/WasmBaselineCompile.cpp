@@ -10524,37 +10524,28 @@ bool BaseCompiler::emitCallBuiltinModuleFunc() {
 }
 
 #ifdef ENABLE_WASM_COMPONENTS
-// Calls straight into the JS::WebIDLNativeCall selected ahead of time for
-// this `canon lower` core func (see wasm::GenerateCanonLowerNative), instead
-// of going through the wasm import call machinery at all: pop this
-// function's own params into the closure's paramsScratch buffer, make a
-// system-ABI call to the closure's own entry point, then push the results it
-// wrote into resultsScratch. This is the whole point of compiling this
-// function separately per closure instead of sharing one generic stub: every
-// pointer/count baked in below is a compile-time constant read straight off
-// the closure, which by now (this stub only ever compiles after
-// ComponentInstance::init has fully populated it) is fully built.
-bool BaseCompiler::emitCallCanonLowerNative() {
-  uint64_t closurePtrBits;
-  BaseNothingVector unused_params{};
-  if (!iter_.readCallCanonLowerNative(func_.index, &closurePtrBits,
-                                      &unused_params)) {
-    return false;
-  }
-
-  if (deadCode_) {
-    return true;
-  }
-
-  auto* closure =
-      reinterpret_cast<wasm::LoweredNativeClosure*>(uintptr_t(closurePtrBits));
-  const FuncType& funcType = codeMeta_.getFuncType(func_.index);
-
+// Shared by emitCallCanonLowerNative (a compile-time-known closure, baked as
+// immediates - see wasm::GenerateCanonLowerNative) and
+// emitCallComponentCanonLower (a closure loaded fresh from
+// `importFuncIndex`'s ComponentImportInstanceData slot, since the compiled
+// module is shared across every instantiation): pop this call's own params
+// into the closure's paramsScratch buffer, make a system-ABI call straight
+// into its JS::WebIDLNativeCall entry, then push the results it wrote into
+// resultsScratch. Exactly one of `immClosure`/`importFuncIndex` is
+// meaningful at a time: `immClosure` non-null selects the compile-time-known
+// form (every field read straight off the host-side closure object);
+// null selects the load-from-instance-data form, using `importFuncIndex`.
+bool BaseCompiler::emitCanonLowerNativeCall(const FuncType& funcType,
+                                            uint32_t numParams,
+                                            int32_t resultOutParamIndex,
+                                            uint32_t numResultSlots,
+                                            LoweredNativeClosure* immClosure,
+                                            uint32_t importFuncIndex) {
   // The last wasm param is the linear-memory offset for a spilled result,
   // when this overload's result doesn't fit flat; otherwise resultMemBase is
-  // always 0. Popped first: LocalGets pushed params in order, so it's on top.
+  // always 0. Popped first: params were pushed in order, so it's on top.
   RegI32 resultMemBase;
-  if (closure->resultOutParamIndex >= 0) {
+  if (resultOutParamIndex >= 0) {
     resultMemBase = popI32();
   } else {
     resultMemBase = needI32();
@@ -10562,9 +10553,18 @@ bool BaseCompiler::emitCallCanonLowerNative() {
   }
 
   RegPtr paramsBase = needPtr();
-  masm.movePtr(ImmPtr(closure->paramsScratch.get(), ImmPtr::NoCheckToken()),
-               paramsBase);
-  for (int32_t i = int32_t(closure->numParams) - 1; i >= 0; i--) {
+  if (immClosure) {
+    masm.movePtr(
+        ImmPtr(immClosure->paramsScratch.get(), ImmPtr::NoCheckToken()),
+        paramsBase);
+  } else {
+    RegPtr closureReg = loadComponentImportPtr(importFuncIndex);
+    masm.loadPtr(
+        Address(closureReg, offsetof(LoweredNativeClosure, paramsScratch)),
+        paramsBase);
+    freePtr(closureReg);
+  }
+  for (int32_t i = int32_t(numParams) - 1; i >= 0; i--) {
     size_t off = size_t(i) * sizeof(JS::WasmScalarVal);
     Address payloadAddr(paramsBase, off + JS::WasmScalarVal::offsetOfPayload());
     switch (funcType.args()[i].kind()) {
@@ -10605,11 +10605,27 @@ bool BaseCompiler::emitCallCanonLowerNative() {
   ValType wordType = ValType::fromMIRType(TargetWordMIRType());
 
   RegPtr adapterPtr = needPtr();
-  masm.movePtr(ImmPtr(&closure->adapter, ImmPtr::NoCheckToken()), adapterPtr);
+  if (immClosure) {
+    masm.movePtr(ImmPtr(&immClosure->adapter, ImmPtr::NoCheckToken()),
+                 adapterPtr);
+  } else {
+    RegPtr closureReg = loadComponentImportPtr(importFuncIndex);
+    masm.computeEffectiveAddress(
+        Address(closureReg, offsetof(LoweredNativeClosure, adapter)),
+        adapterPtr);
+    freePtr(closureReg);
+  }
   pushPtr(adapterPtr);
 
   RegPtr ctxPtr = needPtr();
-  masm.movePtr(ImmPtr(&closure->ctx, ImmPtr::NoCheckToken()), ctxPtr);
+  if (immClosure) {
+    masm.movePtr(ImmPtr(&immClosure->ctx, ImmPtr::NoCheckToken()), ctxPtr);
+  } else {
+    RegPtr closureReg = loadComponentImportPtr(importFuncIndex);
+    masm.computeEffectiveAddress(
+        Address(closureReg, offsetof(LoweredNativeClosure, ctx)), ctxPtr);
+    freePtr(closureReg);
+  }
   pushPtr(ctxPtr);
 
   pushPtr(paramsBase);
@@ -10617,8 +10633,17 @@ bool BaseCompiler::emitCallCanonLowerNative() {
   pushI32(resultMemBase);
 
   RegPtr resultsBase = needPtr();
-  masm.movePtr(ImmPtr(closure->resultsScratch.get(), ImmPtr::NoCheckToken()),
-               resultsBase);
+  if (immClosure) {
+    masm.movePtr(
+        ImmPtr(immClosure->resultsScratch.get(), ImmPtr::NoCheckToken()),
+        resultsBase);
+  } else {
+    RegPtr closureReg = loadComponentImportPtr(importFuncIndex);
+    masm.loadPtr(
+        Address(closureReg, offsetof(LoweredNativeClosure, resultsScratch)),
+        resultsBase);
+    freePtr(closureReg);
+  }
   pushPtr(resultsBase);
 
   // Must run after every push above (sync() flushes whatever is currently
@@ -10637,15 +10662,15 @@ bool BaseCompiler::emitCallCanonLowerNative() {
 
   static constexpr uint32_t NumArgs = 5;
   NativeCallArgTypes argTypes;
-  FunctionCall baselineCall(ABIKind::System, RestoreState::None);
-  beginCall(baselineCall);
-  startCallArgs(StackArgAreaSizeUnaligned(argTypes, baselineCall.abiKind),
-                &baselineCall);
-  passArg(wordType, peek(4), &baselineCall);      // adapter
-  passArg(wordType, peek(3), &baselineCall);      // ctx
-  passArg(wordType, peek(2), &baselineCall);      // params
-  passArg(ValType::I32, peek(1), &baselineCall);  // resultMemBase
-  passArg(wordType, peek(0), &baselineCall);      // results
+  FunctionCall nativeCall(ABIKind::System, RestoreState::None);
+  beginCall(nativeCall);
+  startCallArgs(StackArgAreaSizeUnaligned(argTypes, nativeCall.abiKind),
+                &nativeCall);
+  passArg(wordType, peek(4), &nativeCall);      // adapter
+  passArg(wordType, peek(3), &nativeCall);      // ctx
+  passArg(wordType, peek(2), &nativeCall);      // params
+  passArg(ValType::I32, peek(1), &nativeCall);  // resultMemBase
+  passArg(wordType, peek(0), &nativeCall);      // results
 
   // Not a plain needPtr(): by this point the 5 ABI argument registers are
   // already loaded (passArg writes directly into whatever hardware
@@ -10656,24 +10681,35 @@ bool BaseCompiler::emitCallCanonLowerNative() {
   // codebase's existing answer for "a scratch register guaranteed to not be
   // an argument-passing register" - wasmCallRef uses the same one for
   // exactly this reason.
-  masm.movePtr(ImmPtr(JS_FUNC_TO_DATA_PTR(void*, closure->entry),
-                      ImmPtr::NoCheckToken()),
-               ABINonArgReg0);
+  if (immClosure) {
+    masm.movePtr(ImmPtr(JS_FUNC_TO_DATA_PTR(void*, immClosure->entry),
+                        ImmPtr::NoCheckToken()),
+                 ABINonArgReg0);
+  } else {
+    Address closurePtrAddr(
+        InstanceReg,
+        Instance::offsetInData(
+            codeMeta_.offsetOfComponentImportInstanceData(importFuncIndex) +
+            offsetof(ComponentImportInstanceData, ptr)));
+    masm.loadPtr(closurePtrAddr, ABINonArgReg0);
+    masm.loadPtr(Address(ABINonArgReg0, offsetof(LoweredNativeClosure, entry)),
+                 ABINonArgReg0);
+  }
 
   CodeOffset callOffset = masm.call(
       CallSiteDesc(bytecodeOffset(), CallSiteKind::Symbolic), ABINonArgReg0);
-  if (!createStackMap("emitCallCanonLowerNative-call", callOffset)) {
+  if (!createStackMap("emitCanonLowerNativeCall-call", callOffset)) {
     return false;
   }
   CodeOffset trapOffset = masm.wasmTrapOnFailedInstanceCall(
       ReturnReg, wasm::FailureMode::FailOnFalseI32, wasm::Trap::ThrowReported,
       trapSiteDesc());
   if (trapOffset.bound() &&
-      !createStackMap("emitCallCanonLowerNative-trap", trapOffset)) {
+      !createStackMap("emitCanonLowerNativeCall-trap", trapOffset)) {
     return false;
   }
 
-  endCall(baselineCall, stackConsumed(NumArgs));
+  endCall(nativeCall, stackConsumed(NumArgs));
   popValueStackBy(NumArgs);
 
   {
@@ -10684,9 +10720,18 @@ bool BaseCompiler::emitCallCanonLowerNative() {
   }
 
   RegPtr resultsBase2 = needPtr();
-  masm.movePtr(ImmPtr(closure->resultsScratch.get(), ImmPtr::NoCheckToken()),
-               resultsBase2);
-  for (uint32_t j = 0; j < closure->numResultSlots; j++) {
+  if (immClosure) {
+    masm.movePtr(
+        ImmPtr(immClosure->resultsScratch.get(), ImmPtr::NoCheckToken()),
+        resultsBase2);
+  } else {
+    RegPtr closureReg = loadComponentImportPtr(importFuncIndex);
+    masm.loadPtr(
+        Address(closureReg, offsetof(LoweredNativeClosure, resultsScratch)),
+        resultsBase2);
+    freePtr(closureReg);
+  }
+  for (uint32_t j = 0; j < numResultSlots; j++) {
     size_t off = size_t(j) * sizeof(JS::WasmScalarVal);
     Address payloadAddr(resultsBase2,
                         off + JS::WasmScalarVal::offsetOfPayload());
@@ -10722,6 +10767,27 @@ bool BaseCompiler::emitCallCanonLowerNative() {
   freePtr(resultsBase2);
 
   return true;
+}
+
+bool BaseCompiler::emitCallCanonLowerNative() {
+  uint64_t closurePtrBits;
+  BaseNothingVector unused_params{};
+  if (!iter_.readCallCanonLowerNative(func_.index, &closurePtrBits,
+                                      &unused_params)) {
+    return false;
+  }
+
+  if (deadCode_) {
+    return true;
+  }
+
+  auto* closure =
+      reinterpret_cast<wasm::LoweredNativeClosure*>(uintptr_t(closurePtrBits));
+  const FuncType& funcType = codeMeta_.getFuncType(func_.index);
+  return emitCanonLowerNativeCall(funcType, closure->numParams,
+                                  closure->resultOutParamIndex,
+                                  closure->numResultSlots, closure,
+                                  /*importFuncIndex=*/0);
 }
 
 RegPtr BaseCompiler::loadComponentImportPtr(uint32_t funcIndex) {
@@ -10768,27 +10834,13 @@ bool BaseCompiler::emitCallComponentResourceDrop(uint32_t funcIndex) {
 // wherever the stub would have baked it in as an immediate. Everything else
 // about the marshalling shape (numParams/resultOutParamIndex/numResultSlots)
 // is a compile-time constant derived from this import's own declared type -
-// see CodeMetadata::componentImportHint.
-// Whether this specific import is bound to a value eligible for the native
-// call fast path (GenerateCanonLowerNative), versus the generic
-// WasmComponentLoweredJS fallback, is a per-instantiation runtime fact -
-// see ResolveLoweredCoreFunc / SelectNativeOverload - not something the
-// compiler can know when it decides to hint CanonLower (see
-// ClassifyComponentImport in WasmValidate.cpp). So the compiled code below
-// must handle either: a runtime guard picks between an inlined native-ABI
-// call and the ordinary import call, based on whether instantiation found a
-// LoweredNativeClosure to inline against.
-//
-// This hand-rolled two-arm branch (rather than the wasm `if`/`else`
-// machinery emitIf/emitElse/endIfThenElse use) relies on: sync() up front,
-// so both arms can safely `peek()` (non-destructive) the very same wasm
-// args from fixed, stable locations without disturbing each other;
-// popValueStackBy(wasmNumParams) exactly once, after the join, since
-// whichever arm's machine code actually runs at runtime has by then already
-// consumed the args itself; and both arms leaving their result, if any, in
-// the same standard ABI result register(s) (reserved/freed in lockstep by
-// each arm, then re-reserved once by the shared join code) so a single
-// pushResults() after the join is correct regardless of which arm ran.
+// see CodeMetadata::componentImportHint. ResolveLoweredCoreFunc installs a
+// closure for every CanonLower-hinted import at instantiation - whether or
+// not its callee has a usable native overload (see SelectNativeOverload), an
+// ineligible one's closure just calls the generic entry instead of a
+// specialized one - so this can call straight through
+// ComponentImportInstanceData's pointer unconditionally, with no fallback
+// arm.
 bool BaseCompiler::emitCallComponentCanonLower(uint32_t funcIndex,
                                                bool resultOutParam) {
   const FuncType& funcType = codeMeta_.getFuncType(funcIndex);
@@ -10797,269 +10849,9 @@ bool BaseCompiler::emitCallComponentCanonLower(uint32_t funcIndex,
   int32_t resultOutParamIndex =
       resultOutParam ? int32_t(wasmNumParams - 1) : -1;
   uint32_t numResultSlots = resultOutParam ? 0 : funcType.results().length();
-  ResultType resultType(ResultType::Vector(funcType.results()));
-
-  sync();
-
-  Label nativeLabel, joinLabel;
-  {
-    RegPtr ptrReg = loadComponentImportPtr(funcIndex);
-    masm.branchPtr(Assembler::NotEqual, ptrReg, ImmWord(0), &nativeLabel);
-    freePtr(ptrReg);
-  }
-
-  // ---- Fallback arm: taken when this import wasn't bound to a
-  // native-eligible closure at instantiation. Mirrors emitCall's plain
-  // import path exactly.
-  {
-    size_t stackArgBytes = stackConsumed(wasmNumParams);
-    StackResultsLoc results;
-    if (!pushStackResultsForWasmCall(resultType, RegPtr(ABINonArgReg0),
-                                     &results)) {
-      return false;
-    }
-    FunctionCall fallbackCall(ABIKind::Wasm, RestoreState::All);
-    beginCall(fallbackCall);
-    if (!emitCallArgs(funcType.args(), NormalCallResults(results),
-                      &fallbackCall, CalleeOnStack::False)) {
-      return false;
-    }
-    CodeOffset raOffset = callImport(
-        codeMeta_.offsetOfFuncImportInstanceData(funcIndex), fallbackCall);
-    if (!createStackMap("emitCallComponentCanonLower-fallback", raOffset)) {
-      return false;
-    }
-    popStackResultsAfterWasmCall(results, stackArgBytes);
-    endCall(fallbackCall, stackArgBytes);
-    captureCallResultRegisters(resultType);
-    freeResultRegisters(resultType);
-  }
-  masm.jump(&joinLabel);
-
-  // ---- Native arm: inline GenerateCanonLowerNative's stub body, loading
-  // the LoweredNativeClosure* this instantiation bound for this import
-  // (rather than baking it in as an immediate, as the stub would).
-  masm.bind(&nativeLabel);
-  {
-    // Reserved up front (rather than only after the "call", as the fallback
-    // arm above does) so that none of this arm's own scratch allocations
-    // below can be handed the same register before it's populated.
-    needResultRegisters(resultType);
-
-    RegI32 resultMemBase;
-    if (resultOutParamIndex >= 0) {
-      resultMemBase = needI32();
-      loadI32(peek(0), resultMemBase);
-    } else {
-      resultMemBase = needI32();
-      moveImm32(0, resultMemBase);
-    }
-
-    RegPtr paramsBase;
-    {
-      RegPtr closureReg = loadComponentImportPtr(funcIndex);
-      paramsBase = needPtr();
-      masm.loadPtr(
-          Address(closureReg, offsetof(LoweredNativeClosure, paramsScratch)),
-          paramsBase);
-      freePtr(closureReg);
-    }
-    for (int32_t i = int32_t(numParams) - 1; i >= 0; i--) {
-      size_t off = size_t(i) * sizeof(JS::WasmScalarVal);
-      Address payloadAddr(paramsBase,
-                          off + JS::WasmScalarVal::offsetOfPayload());
-      // Depth is relative to wasmNumParams (not numParams): resultMemBase,
-      // when present, is still logically on the stack on top of these args
-      // (only peeked above, never popped), so it occupies depth 0 and every
-      // component param sits one level deeper than a "just numParams"
-      // formula would put it.
-      const Stk& arg = peek(wasmNumParams - 1 - i);
-      switch (funcType.args()[i].kind()) {
-        case ValType::I32: {
-          RegI32 v = needI32();
-          loadI32(arg, v);
-          masm.store32(v, payloadAddr);
-          freeI32(v);
-          break;
-        }
-        case ValType::I64: {
-          RegI64 v = needI64();
-          loadI64(arg, v);
-          masm.store64(v, payloadAddr);
-          freeI64(v);
-          break;
-        }
-        case ValType::F32: {
-          RegF32 v = needF32();
-          loadF32(arg, v);
-          masm.storeFloat32(v, payloadAddr);
-          freeF32(v);
-          break;
-        }
-        case ValType::F64: {
-          RegF64 v = needF64();
-          loadF64(arg, v);
-          masm.storeDouble(v, payloadAddr);
-          freeF64(v);
-          break;
-        }
-        default:
-          MOZ_CRASH("non-scalar param crossing the native call boundary");
-      }
-    }
-
-    ValType wordType = ValType::fromMIRType(TargetWordMIRType());
-
-    RegPtr adapterPtr;
-    {
-      RegPtr closureReg = loadComponentImportPtr(funcIndex);
-      adapterPtr = needPtr();
-      masm.computeEffectiveAddress(
-          Address(closureReg, offsetof(LoweredNativeClosure, adapter)),
-          adapterPtr);
-      freePtr(closureReg);
-    }
-    pushPtr(adapterPtr);
-
-    RegPtr ctxPtr;
-    {
-      RegPtr closureReg = loadComponentImportPtr(funcIndex);
-      ctxPtr = needPtr();
-      masm.computeEffectiveAddress(
-          Address(closureReg, offsetof(LoweredNativeClosure, ctx)), ctxPtr);
-      freePtr(closureReg);
-    }
-    pushPtr(ctxPtr);
-
-    pushPtr(paramsBase);
-
-    pushI32(resultMemBase);
-
-    RegPtr resultsBase;
-    {
-      RegPtr closureReg = loadComponentImportPtr(funcIndex);
-      resultsBase = needPtr();
-      masm.loadPtr(
-          Address(closureReg, offsetof(LoweredNativeClosure, resultsScratch)),
-          resultsBase);
-      freePtr(closureReg);
-    }
-    pushPtr(resultsBase);
-
-    // Must run after every push above (sync() flushes whatever is currently
-    // on the value stack to memory, which is what createStackMap requires
-    // of it - anything still in Register-kind form at that point is an
-    // error).
-    sync();
-
-    {
-      RegPtr scratch1 = needPtr();
-      RegPtr scratch2 = needPtr();
-      wasm::LoadActivation(masm, InstanceReg, scratch1);
-      wasm::SetExitFP(masm, ExitReason::Fixed::ImportInterp, scratch1,
-                      scratch2);
-      freePtr(scratch2);
-      freePtr(scratch1);
-    }
-
-    static constexpr uint32_t NumArgs = 5;
-    NativeCallArgTypes argTypes;
-    FunctionCall nativeCall(ABIKind::System, RestoreState::None);
-    beginCall(nativeCall);
-    startCallArgs(StackArgAreaSizeUnaligned(argTypes, nativeCall.abiKind),
-                  &nativeCall);
-    passArg(wordType, peek(4), &nativeCall);      // adapter
-    passArg(wordType, peek(3), &nativeCall);      // ctx
-    passArg(wordType, peek(2), &nativeCall);      // params
-    passArg(ValType::I32, peek(1), &nativeCall);  // resultMemBase
-    passArg(wordType, peek(0), &nativeCall);      // results
-
-    // Reload the closure pointer fresh, directly into ABINonArgReg0, rather
-    // than trying to keep an earlier load alive across the passArg sequence
-    // above (which writes directly into ABI argument registers/stack slots,
-    // bypassing the general register allocator): ABINonArgReg0 is this
-    // codebase's existing answer for "a scratch register guaranteed to not
-    // be an argument-passing register" - wasmCallRef uses the same one for
-    // exactly this reason.
-    Address closurePtrAddr(
-        InstanceReg,
-        Instance::offsetInData(
-            codeMeta_.offsetOfComponentImportInstanceData(funcIndex) +
-            offsetof(ComponentImportInstanceData, ptr)));
-    masm.loadPtr(closurePtrAddr, ABINonArgReg0);
-    masm.loadPtr(Address(ABINonArgReg0, offsetof(LoweredNativeClosure, entry)),
-                 ABINonArgReg0);
-
-    CodeOffset callOffset = masm.call(
-        CallSiteDesc(bytecodeOffset(), CallSiteKind::Symbolic), ABINonArgReg0);
-    if (!createStackMap("emitCallComponentCanonLower-call", callOffset)) {
-      return false;
-    }
-    CodeOffset trapOffset = masm.wasmTrapOnFailedInstanceCall(
-        ReturnReg, wasm::FailureMode::FailOnFalseI32, wasm::Trap::ThrowReported,
-        trapSiteDesc());
-    if (trapOffset.bound() &&
-        !createStackMap("emitCallComponentCanonLower-trap", trapOffset)) {
-      return false;
-    }
-
-    endCall(nativeCall, stackConsumed(NumArgs));
-    popValueStackBy(NumArgs);
-
-    {
-      RegPtr scratch1 = needPtr();
-      wasm::LoadActivation(masm, InstanceReg, scratch1);
-      wasm::ClearExitFP(masm, scratch1);
-      freePtr(scratch1);
-    }
-
-    RegPtr resultsBase2;
-    {
-      RegPtr closureReg = loadComponentImportPtr(funcIndex);
-      resultsBase2 = needPtr();
-      masm.loadPtr(
-          Address(closureReg, offsetof(LoweredNativeClosure, resultsScratch)),
-          resultsBase2);
-      freePtr(closureReg);
-    }
-    // Move each flattened result directly into the standard ABI result
-    // register(s) the fallback arm's call would naturally leave them in -
-    // this arm computes them explicitly instead, since there's no real call
-    // here to do it for us.
-    ABIResultIter resIter(resultType);
-    for (uint32_t j = 0; j < numResultSlots; j++, resIter.next()) {
-      MOZ_ASSERT(!resIter.done());
-      const ABIResult& result = resIter.cur();
-      MOZ_ASSERT(result.inRegister());
-      size_t off = size_t(j) * sizeof(JS::WasmScalarVal);
-      Address payloadAddr(resultsBase2,
-                          off + JS::WasmScalarVal::offsetOfPayload());
-      switch (funcType.results()[j].kind()) {
-        case ValType::I32:
-          masm.load32(payloadAddr, RegI32(result.gpr()));
-          break;
-        case ValType::I64:
-          masm.load64(payloadAddr, RegI64(result.gpr64()));
-          break;
-        case ValType::F32:
-          masm.loadFloat32(payloadAddr, RegF32(result.fpr()));
-          break;
-        case ValType::F64:
-          masm.loadDouble(payloadAddr, RegF64(result.fpr()));
-          break;
-        default:
-          MOZ_CRASH("non-scalar result crossing the native call boundary");
-      }
-    }
-    freePtr(resultsBase2);
-
-    freeResultRegisters(resultType);
-  }
-
-  masm.bind(&joinLabel);
-  popValueStackBy(wasmNumParams);
-  captureCallResultRegisters(resultType);
-  return pushResults(resultType, fr.stackResultsBase(0));
+  return emitCanonLowerNativeCall(funcType, numParams, resultOutParamIndex,
+                                  numResultSlots, /*immClosure=*/nullptr,
+                                  funcIndex);
 }
 #endif  // ENABLE_WASM_COMPONENTS
 

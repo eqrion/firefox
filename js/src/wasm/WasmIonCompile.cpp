@@ -3126,8 +3126,8 @@ class FunctionCompiler {
   // result, only the ok/fail bool the trap consumes.
   [[nodiscard]]
   bool nativeFuncPtrCall(CallCompileState* callState, MDefinition* calleePtr,
-                        FailureMode failureMode, Trap failureTrap,
-                        uint32_t bytecodeOffset) {
+                         FailureMode failureMode, Trap failureTrap,
+                         uint32_t bytecodeOffset) {
     if (inDeadCode()) {
       return true;
     }
@@ -3478,21 +3478,13 @@ class FunctionCompiler {
   // unmarshal the results. Everything about the marshalling shape
   // (numParams/resultOutParamIndex/numResultSlots) is a compile-time constant
   // derived from this import's own declared type - see
-  // CodeMetadata::componentImportHint.
-  //
-  // Whether this specific import is bound to a value eligible for the native
-  // call fast path versus the generic WasmComponentLoweredJS fallback is a
-  // per-instantiation runtime fact (see ResolveLoweredCoreFunc /
-  // SelectNativeOverload), not something the compiler can know when it
-  // decides to hint CanonLower (see ClassifyComponentImport in
-  // WasmValidate.cpp). So this guards on whether instantiation actually
-  // found a native closure to inline against (ComponentImportInstanceData's
-  // pointer being non-null), falling back to the ordinary import call
-  // otherwise - using the same branchAndStartThen/switchToElse/joinIfElse
-  // machinery wasm's own `if`/`else` compiles to, so the two arms' results
-  // are joined via ordinary MIR phis with no manual register bookkeeping
-  // needed (contrast Baseline's hand-rolled masm-label version, which has
-  // no equivalent to lean on).
+  // CodeMetadata::componentImportHint. ResolveLoweredCoreFunc installs a
+  // closure for every CanonLower-hinted import at instantiation - whether or
+  // not its callee has a usable native overload (see SelectNativeOverload),
+  // an ineligible one's closure just calls the generic entry instead of a
+  // specialized one - so this can call straight through
+  // ComponentImportInstanceData's pointer unconditionally, with no fallback
+  // arm.
   [[nodiscard]] bool callComponentCanonLower(uint32_t funcIndex,
                                              bool resultOutParam,
                                              uint32_t bytecodeOffset,
@@ -3507,162 +3499,127 @@ class FunctionCompiler {
     uint32_t numResultSlots = resultOutParam ? 0 : funcType.results().length();
     MOZ_ASSERT(params.length() == wasmNumParams);
 
-    MDefinition* closurePtr = loadComponentImportPtrAsI64(funcIndex);
-    MDefinition* isNative = compare(closurePtr, constantI64(int64_t(0)),
-                                    JSOp::Ne, MCompare::Compare_Int64);
+    MDefinition* resultMemBase =
+        resultOutParamIndex >= 0 ? params[resultOutParamIndex] : constantI32(0);
 
-    MBasicBlock* fallbackBlock;
-    if (!branchAndStartThen(isNative, &fallbackBlock)) {
+    MDefinition* closure = loadComponentImportPtr(funcIndex);
+
+    auto* paramsBase = MWasmLoadField::New(
+        alloc(), closure, nullptr,
+        offsetof(LoweredNativeClosure, paramsScratch), mozilla::Nothing(),
+        MIRType::Pointer, MWideningOp::None, AliasSet::Load(AliasSet::Any));
+    if (!paramsBase) {
+      return false;
+    }
+    curBlock_->add(paramsBase);
+
+    for (uint32_t i = 0; i < numParams; i++) {
+      if (!mirGen().ensureBallast()) {
+        return false;
+      }
+      uint32_t off = uint32_t(i * sizeof(JS::WasmScalarVal)) +
+                     JS::WasmScalarVal::offsetOfPayload();
+      mozilla::DebugOnly<MIRType> storeType;
+      switch (funcType.args()[i].kind()) {
+        case ValType::I32:
+          storeType = MIRType::Int32;
+          break;
+        case ValType::I64:
+          storeType = MIRType::Int64;
+          break;
+        case ValType::F32:
+          storeType = MIRType::Float32;
+          break;
+        case ValType::F64:
+          storeType = MIRType::Double;
+          break;
+        default:
+          MOZ_CRASH("non-scalar param crossing the native call boundary");
+      }
+      MOZ_ASSERT(params[i]->type() == storeType);
+      auto* store = MWasmStoreField::New(
+          alloc(), paramsBase, nullptr, off, mozilla::Nothing(), params[i],
+          MNarrowingOp::None, AliasSet::Store(AliasSet::Any));
+      if (!store) {
+        return false;
+      }
+      curBlock_->add(store);
+    }
+
+    auto* resultsBase = MWasmLoadField::New(
+        alloc(), closure, nullptr,
+        offsetof(LoweredNativeClosure, resultsScratch), mozilla::Nothing(),
+        MIRType::Pointer, MWideningOp::None, AliasSet::Load(AliasSet::Any));
+    if (!resultsBase) {
+      return false;
+    }
+    curBlock_->add(resultsBase);
+
+    auto* entryPtr = MWasmLoadField::New(
+        alloc(), closure, nullptr, offsetof(LoweredNativeClosure, entry),
+        mozilla::Nothing(), MIRType::Pointer, MWideningOp::None,
+        AliasSet::Load(AliasSet::Any));
+    if (!entryPtr) {
+      return false;
+    }
+    curBlock_->add(entryPtr);
+
+    auto* adapterPtr = MWasmDerivedPointer::New(
+        alloc(), closure, offsetof(LoweredNativeClosure, adapter));
+    curBlock_->add(adapterPtr);
+
+    auto* ctxPtr = MWasmDerivedPointer::New(
+        alloc(), closure, offsetof(LoweredNativeClosure, ctx));
+    curBlock_->add(ctxPtr);
+
+    CallCompileState callState(ABIKind::System);
+    if (!passCallArg(adapterPtr, MIRType::Pointer, &callState) ||
+        !passCallArg(ctxPtr, MIRType::Pointer, &callState) ||
+        !passCallArg(paramsBase, MIRType::Pointer, &callState) ||
+        !passCallArg(resultMemBase, MIRType::Int32, &callState) ||
+        !passCallArg(resultsBase, MIRType::Pointer, &callState) ||
+        !finishCallArgs(&callState)) {
       return false;
     }
 
-    // ---- Native arm ----
-    DefVector nativeResults;
-    {
-      MDefinition* resultMemBase = resultOutParamIndex >= 0
-                                       ? params[resultOutParamIndex]
-                                       : constantI32(0);
-
-      MDefinition* closure = loadComponentImportPtr(funcIndex);
-
-      auto* paramsBase = MWasmLoadField::New(
-          alloc(), closure, nullptr,
-          offsetof(LoweredNativeClosure, paramsScratch), mozilla::Nothing(),
-          MIRType::Pointer, MWideningOp::None, AliasSet::Load(AliasSet::Any));
-      if (!paramsBase) {
-        return false;
-      }
-      curBlock_->add(paramsBase);
-
-      for (uint32_t i = 0; i < numParams; i++) {
-        if (!mirGen().ensureBallast()) {
-          return false;
-        }
-        uint32_t off = uint32_t(i * sizeof(JS::WasmScalarVal)) +
-                       JS::WasmScalarVal::offsetOfPayload();
-        mozilla::DebugOnly<MIRType> storeType;
-        switch (funcType.args()[i].kind()) {
-          case ValType::I32:
-            storeType = MIRType::Int32;
-            break;
-          case ValType::I64:
-            storeType = MIRType::Int64;
-            break;
-          case ValType::F32:
-            storeType = MIRType::Float32;
-            break;
-          case ValType::F64:
-            storeType = MIRType::Double;
-            break;
-          default:
-            MOZ_CRASH("non-scalar param crossing the native call boundary");
-        }
-        MOZ_ASSERT(params[i]->type() == storeType);
-        auto* store = MWasmStoreField::New(
-            alloc(), paramsBase, nullptr, off, mozilla::Nothing(), params[i],
-            MNarrowingOp::None, AliasSet::Store(AliasSet::Any));
-        if (!store) {
-          return false;
-        }
-        curBlock_->add(store);
-      }
-
-      auto* resultsBase = MWasmLoadField::New(
-          alloc(), closure, nullptr,
-          offsetof(LoweredNativeClosure, resultsScratch), mozilla::Nothing(),
-          MIRType::Pointer, MWideningOp::None, AliasSet::Load(AliasSet::Any));
-      if (!resultsBase) {
-        return false;
-      }
-      curBlock_->add(resultsBase);
-
-      auto* entryPtr = MWasmLoadField::New(
-          alloc(), closure, nullptr, offsetof(LoweredNativeClosure, entry),
-          mozilla::Nothing(), MIRType::Pointer, MWideningOp::None,
-          AliasSet::Load(AliasSet::Any));
-      if (!entryPtr) {
-        return false;
-      }
-      curBlock_->add(entryPtr);
-
-      auto* adapterPtr = MWasmDerivedPointer::New(
-          alloc(), closure, offsetof(LoweredNativeClosure, adapter));
-      curBlock_->add(adapterPtr);
-
-      auto* ctxPtr = MWasmDerivedPointer::New(
-          alloc(), closure, offsetof(LoweredNativeClosure, ctx));
-      curBlock_->add(ctxPtr);
-
-      CallCompileState callState(ABIKind::System);
-      if (!passCallArg(adapterPtr, MIRType::Pointer, &callState) ||
-          !passCallArg(ctxPtr, MIRType::Pointer, &callState) ||
-          !passCallArg(paramsBase, MIRType::Pointer, &callState) ||
-          !passCallArg(resultMemBase, MIRType::Int32, &callState) ||
-          !passCallArg(resultsBase, MIRType::Pointer, &callState) ||
-          !finishCallArgs(&callState)) {
-        return false;
-      }
-
-      if (!nativeFuncPtrCall(&callState, entryPtr, FailureMode::FailOnFalseI32,
-                             Trap::ThrowReported, bytecodeOffset)) {
-        return false;
-      }
-
-      for (uint32_t j = 0; j < numResultSlots; j++) {
-        if (!mirGen().ensureBallast()) {
-          return false;
-        }
-        uint32_t off = uint32_t(j * sizeof(JS::WasmScalarVal)) +
-                       JS::WasmScalarVal::offsetOfPayload();
-        MIRType loadType;
-        switch (funcType.results()[j].kind()) {
-          case ValType::I32:
-            loadType = MIRType::Int32;
-            break;
-          case ValType::I64:
-            loadType = MIRType::Int64;
-            break;
-          case ValType::F32:
-            loadType = MIRType::Float32;
-            break;
-          case ValType::F64:
-            loadType = MIRType::Double;
-            break;
-          default:
-            MOZ_CRASH("non-scalar result crossing the native call boundary");
-        }
-        auto* load = MWasmLoadField::New(
-            alloc(), resultsBase, nullptr, off, mozilla::Nothing(), loadType,
-            MWideningOp::None, AliasSet::Load(AliasSet::Any));
-        if (!load || !nativeResults.append(load)) {
-          return false;
-        }
-        curBlock_->add(load);
-      }
-    }
-    if (!pushDefs(nativeResults)) {
-      return false;
-    }
-
-    if (!switchToElse(fallbackBlock, &fallbackBlock)) {
-      return false;
-    }
-
-    // ---- Fallback arm: ordinary import call, taken when this import
-    // wasn't bound to a native-eligible closure at instantiation.
-    DefVector fallbackResults;
-    if (!callImport(codeMeta().offsetOfFuncImportInstanceData(funcIndex),
-                    bytecodeOffset, funcType, params, &fallbackResults)) {
-      return false;
-    }
-    if (!pushDefs(fallbackResults)) {
+    if (!nativeFuncPtrCall(&callState, entryPtr, FailureMode::FailOnFalseI32,
+                           Trap::ThrowReported, bytecodeOffset)) {
       return false;
     }
 
     DefVector results;
-    if (!joinIfElse(fallbackBlock, &results)) {
-      return false;
+    for (uint32_t j = 0; j < numResultSlots; j++) {
+      if (!mirGen().ensureBallast()) {
+        return false;
+      }
+      uint32_t off = uint32_t(j * sizeof(JS::WasmScalarVal)) +
+                     JS::WasmScalarVal::offsetOfPayload();
+      MIRType loadType;
+      switch (funcType.results()[j].kind()) {
+        case ValType::I32:
+          loadType = MIRType::Int32;
+          break;
+        case ValType::I64:
+          loadType = MIRType::Int64;
+          break;
+        case ValType::F32:
+          loadType = MIRType::Float32;
+          break;
+        case ValType::F64:
+          loadType = MIRType::Double;
+          break;
+        default:
+          MOZ_CRASH("non-scalar result crossing the native call boundary");
+      }
+      auto* load = MWasmLoadField::New(
+          alloc(), resultsBase, nullptr, off, mozilla::Nothing(), loadType,
+          MWideningOp::None, AliasSet::Load(AliasSet::Any));
+      if (!load || !results.append(load)) {
+        return false;
+      }
+      curBlock_->add(load);
     }
+
     iter().setResults(results.length(), results);
     return true;
   }

@@ -10598,10 +10598,12 @@ void CodeGenerator::visitWasmCall(LWasmCall* lir) {
       wasm::LoadActivation(masm, InstanceReg, ABINonArgReg1);
       wasm::ClearExitFP(masm, ABINonArgReg1);
 
-      // The native ABI preserves the instance and pinned registers, and a
-      // JS::WebIDLNativeCall never grows wasm memory.
+      // The native ABI preserves the instance, but a JS::WebIDLNativeCall
+      // may run arbitrary JS (the generic entry backing a canon.lower import
+      // with no native overload calls straight into the imported callee),
+      // which can grow memory, so the pinned registers must be reloaded.
       reloadInstance = false;
-      reloadPinnedRegs = false;
+      reloadPinnedRegs = true;
       switchRealm = false;
       break;
     }

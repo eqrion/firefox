@@ -32,6 +32,10 @@ namespace wasm {
 
 struct StackMap;
 
+#ifdef ENABLE_WASM_COMPONENTS
+struct LoweredNativeClosure;
+#endif
+
 // Container for a piece of out-of-line code, the slow path that supports an
 // operation.
 class OutOfLineCode;
@@ -1884,6 +1888,21 @@ struct BaseCompiler final {
 #endif
   [[nodiscard]] bool emitCallBuiltinModuleFunc();
 #ifdef ENABLE_WASM_COMPONENTS
+  // Shared by emitCallCanonLowerNative (a compile-time-known closure, baked
+  // as immediates) and emitCallComponentCanonLower (a closure loaded fresh
+  // from `importFuncIndex`'s ComponentImportInstanceData slot, since the
+  // compiled module is shared across every instantiation): marshals this
+  // call's own wasm args into the closure's paramsScratch, calls straight
+  // through its `entry`, then unmarshals the results back onto the value
+  // stack. Exactly one of `immClosure`/`importFuncIndex` is meaningful:
+  // `immClosure` non-null selects the compile-time-known form; null selects
+  // the load-from-instance-data form, using `importFuncIndex`.
+  [[nodiscard]] bool emitCanonLowerNativeCall(const FuncType& funcType,
+                                              uint32_t numParams,
+                                              int32_t resultOutParamIndex,
+                                              uint32_t numResultSlots,
+                                              LoweredNativeClosure* immClosure,
+                                              uint32_t importFuncIndex);
   [[nodiscard]] bool emitCallCanonLowerNative();
   // Loads the runtime pointer a ComponentImportHint-classified import stashed
   // in its ComponentImportInstanceData slot at instantiation (a

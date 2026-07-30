@@ -3671,6 +3671,38 @@ ComponentFuncImportNameForLog(const Component& component, uint32_t funcIndex) {
       component.imports()[item.itemIndex()].name().utf8Bytes());
 }
 
+// Defined alongside their other call sites, further below.
+static bool RawCoreValuesToVals(JSContext* cx, JS::HandleValueArray rawArgs,
+                                const ComponentTypeVector& types,
+                                uint32_t maxFlat, RootedValVector& out);
+static bool AppendScalarValsAsVals(
+    mozilla::Span<const JS::WasmScalarVal> scalars,
+    mozilla::Span<const ValType> types, RootedValVector* out);
+
+// JS::WebIDLNativeCall's boundary uses JS::WasmScalarVal, not wasm::Val;
+// converts where a wasm::Val is still genuinely needed on this side.
+static JS::WasmScalarVal ValToScalarVal(const Val& v) {
+  switch (v.type().kind()) {
+    case ValType::Kind::I32:
+      return JS::WasmScalarVal::fromI32(v.i32());
+    case ValType::Kind::I64:
+      return JS::WasmScalarVal::fromI64(v.i64());
+    case ValType::Kind::F32:
+      return JS::WasmScalarVal::fromF32(v.f32());
+    case ValType::Kind::F64:
+      return JS::WasmScalarVal::fromF64(v.f64());
+    default:
+      MOZ_CRASH(
+          "non-scalar core value crossing the WebIDL native call boundary");
+  }
+}
+
+// A thin JS-value bridge over the closure's own JS::WebIDLNativeCall entry -
+// every `canon lower` core func has a LoweredNativeClosure by the time this
+// runs (see ResolveLoweredCoreFunc), whether or not its callee turned out to
+// have a native overload; this is only reached from a call this instance's
+// core code couldn't inline (e.g. call_indirect) or, per
+// GenerateCanonLowerNative, on a platform with no baseline compiler.
 static bool WasmComponentLoweredJS(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
   RootedObject state(cx,
@@ -3684,61 +3716,55 @@ static bool WasmComponentLoweredJS(JSContext* cx, unsigned argc, Value* vp) {
           .toInt32());
 
   ComponentInstance& instance = instanceObj->instance();
-  const ComponentCoreFuncDesc& desc =
-      instance.component()->getLoweredCoreFunc(coreFuncIndex);
-  // Resource builtins (canon resource.new/drop/rep) get their own dummy
-  // path in ComponentInstance::init for now; this closure only ever gets
-  // built for the `lowered` (canon lower) variant.
-  MOZ_RELEASE_ASSERT(desc.payload().is<uint32_t>());
-  uint32_t loweredFuncIndex = desc.payload().as<uint32_t>();
+  LoweredNativeClosure* closure = instance.loweredNativeClosure(coreFuncIndex);
+  MOZ_ASSERT(closure);
 
-  // if (mozilla::Maybe<mozilla::Span<const char>> importName =
-  //         ComponentFuncImportNameForLog(*instance.component(),
-  //                                       loweredFuncIndex)) {
-  //   JS_LOG(wasmComponents, Info, "canon lower call: func %u (import %.*s)",
-  //          loweredFuncIndex, int(importName->Length()),
-  //          importName->Elements());
-  // } else {
-  //   JS_LOG(wasmComponents, Info, "canon lower call: func %u",
-  //   loweredFuncIndex);
-  // }
-
-  RootedObject callee(cx, instance.componentFunc(loweredFuncIndex));
-  ComponentNameKind nameKind = instance.componentFuncNameKind(loweredFuncIndex);
   ComponentType funcTypeVal =
-      instance.component()->getTypeForFunc(loweredFuncIndex);
+      instance.component()->getTypeForFunc(closure->loweredFuncIndex);
   const ComponentFuncType& funcType = funcTypeVal.asFunc();
-  const ComponentCanonOpts& opts = desc.canonOpts();
 
-  Rooted<WasmMemoryObject*> memory(cx);
-  if (opts.memoryIndex) {
-    if (!instance.resolveCoreMemory(*opts.memoryIndex, &memory)) {
-      return false;
-    }
+  RootedValVector coreParams(cx);
+  if (!RawCoreValuesToVals(cx, JS::HandleValueArray(args), funcType.paramTypes,
+                           MaxFlatParams, coreParams)) {
+    return false;
   }
-  RootedObject realloc(cx);
-  if (opts.reallocIndex) {
-    if (!instance.resolveCoreFunc(*opts.reallocIndex, &realloc)) {
-      return false;
-    }
+  MOZ_ASSERT(coreParams.length() == closure->numParams);
+  for (uint32_t i = 0; i < closure->numParams; i++) {
+    closure->paramsScratch[i] = ValToScalarVal(coreParams[i].get());
   }
 
-  // `callee` (an arbitrary component func: an import, or another lift) has
-  // no WebIDL type of its own here, so use the "read the component function
-  // import" fallback of a variadic `any` operation type.
-  JS::WebIDLOperationType opType;
-  if (!DefaultWebIDLOperationType(cx, funcType.resultType.isSome(), &opType)) {
+  uint32_t resultMemBase = 0;
+  if (closure->resultOutParamIndex >= 0) {
+    RootedVal v(cx);
+    if (!Val::fromJSValue(cx, ValType::i32(), args[args.length() - 1], &v)) {
+      return false;
+    }
+    resultMemBase = v.get().i32();
+  }
+
+  if (!closure->entry(&closure->adapter, &closure->ctx,
+                      closure->paramsScratch.get(), resultMemBase,
+                      closure->resultsScratch.get())) {
     return false;
   }
 
-  uint8_t* memoryBase = nullptr;
-  if (memory) {
-    MOZ_RELEASE_ASSERT(!memory->isShared() && !memory->movingGrowable());
-    memoryBase = memory->buffer().dataPointerEither().unwrap();
+  if (closure->numResultSlots == 0) {
+    args.rval().setUndefined();
+    return true;
   }
-  JS::WebIDLContext abiCtx(cx, memory, memoryBase, realloc,
-                           &instance.handles());
-  return LoweredCall(cx, callee, funcType, opType, abiCtx, args, nameKind);
+  ValTypeVector flatResultTypes;
+  if (!FlattenType(funcType.resultType.ref(), &flatResultTypes)) {
+    return false;
+  }
+  RootedValVector coreResults(cx);
+  mozilla::Span<const JS::WasmScalarVal> resultSlots(
+      closure->resultsScratch.get(), closure->numResultSlots);
+  mozilla::Span<const ValType> resultTypes(flatResultTypes.begin(),
+                                           closure->numResultSlots);
+  if (!AppendScalarValsAsVals(resultSlots, resultTypes, &coreResults)) {
+    return false;
+  }
+  return coreResults[0].get().toJSValue(cx, args.rval());
 }
 
 static JSFunction* BuildLoweredJSCoreFunc(
@@ -3767,12 +3793,24 @@ static JSFunction* BuildLoweredJSCoreFunc(
     JSContext* cx, JS::HandleFunction callee, const ComponentFuncType& funcType,
     bool* eligible, JS::WebIDLNativeCall* outEntry, CallAdapter* outAdapter);
 
-// Resolves a `canon lower` core func's import to either a JIT-compiled
-// native-call stub (if its callee has a usable native overload - see
-// SelectNativeOverload) or a WasmComponentLoweredJS closure, and stores the
-// result (a JSFunction) in `exportVal`. Called from ComponentInstance::init,
-// once per lowered core func, instead of redoing this decision on every
-// call.
+// The generic JS::WebIDLNativeCall entry - defined alongside its own former
+// call site (WasmComponentLoweredJS's predecessor), further below.
+static bool LoweredNativeCall(const JS::WebIDLCallAdapter* adapter,
+                              JS::WebIDLContext* ctx,
+                              const JS::WasmScalarVal* params,
+                              uint32_t resultMemBase,
+                              JS::WasmScalarVal* results);
+
+// Resolves a `canon lower` core func's import into a LoweredNativeClosure and
+// stores its JSFunction form in `exportVal`. Called from
+// ComponentInstance::init, once per lowered core func, instead of redoing
+// this decision on every call.
+//
+// Every core func gets a closure, whether or not its callee has a usable
+// native overload (see SelectNativeOverload): an eligible callee's closure
+// calls straight into the selected overload; an ineligible one's calls
+// LoweredNativeCall, the generic entry that drives an arbitrary JS callee
+// through the same adapter machinery a native overload would.
 [[nodiscard]] static bool ResolveLoweredCoreFunc(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     uint32_t coreFuncIndex, MutableHandleValue exportVal) {
@@ -3808,60 +3846,74 @@ static JSFunction* BuildLoweredJSCoreFunc(
     }
   }
 
+  mozilla::UniquePtr<LoweredNativeClosure> closure =
+      mozilla::MakeUnique<LoweredNativeClosure>();
+  if (!closure) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  closure->ctx.init(cx, &instance.handles());
   if (eligible) {
-    mozilla::UniquePtr<LoweredNativeClosure> closure =
-        mozilla::MakeUnique<LoweredNativeClosure>();
-    if (!closure) {
+    closure->entry = entry;
+    closure->adapter = std::move(adapter);
+  } else {
+    closure->entry = LoweredNativeCall;
+    closure->instance = &instance;
+    closure->loweredFuncIndex = loweredFuncIndex;
+    // `callee` (an arbitrary component func: an import, or another lift) has
+    // no WebIDL type of its own here, so use the "read the component
+    // function import" fallback of a variadic `any` operation type.
+    JS::WebIDLOperationType opType;
+    if (!DefaultWebIDLOperationType(cx, funcType.resultType.isSome(),
+                                    &opType) ||
+        !BuildCallAdapter(cx, funcType, opType, ComponentStringEncoding::Utf8,
+                          &closure->adapter)) {
+      return false;
+    }
+  }
+
+  bool hasResultOutParam = false;
+  if (funcType.resultType.isSome()) {
+    ValTypeVector flatResult;
+    if (!FlattenType(funcType.resultType.ref(), &flatResult)) {
+      return false;
+    }
+    hasResultOutParam = flatResult.length() > MaxFlatResults;
+  }
+  const TypeDef& coreFuncTypeDef =
+      instance.component()->getTypeForCoreFunc(coreFuncIndex);
+  const FuncType& coreWasmFuncType = coreFuncTypeDef.funcType();
+  uint32_t wasmNumParams = coreWasmFuncType.args().length();
+  closure->numParams = hasResultOutParam ? wasmNumParams - 1 : wasmNumParams;
+  closure->resultOutParamIndex =
+      hasResultOutParam ? int32_t(wasmNumParams - 1) : -1;
+  closure->numResultSlots =
+      hasResultOutParam ? 0 : coreWasmFuncType.results().length();
+  if (closure->numParams > 0) {
+    closure->paramsScratch =
+        mozilla::MakeUnique<JS::WasmScalarVal[]>(closure->numParams);
+    if (!closure->paramsScratch) {
       ReportOutOfMemory(cx);
       return false;
     }
-    closure->entry = entry;
-    closure->adapter = std::move(adapter);
-    closure->ctx.init(cx, &instance.handles());
-
-    bool hasResultOutParam = false;
-    if (funcType.resultType.isSome()) {
-      ValTypeVector flatResult;
-      if (!FlattenType(funcType.resultType.ref(), &flatResult)) {
-        return false;
-      }
-      hasResultOutParam = flatResult.length() > MaxFlatResults;
-    }
-    const TypeDef& coreFuncTypeDef =
-        instance.component()->getTypeForCoreFunc(coreFuncIndex);
-    const FuncType& coreWasmFuncType = coreFuncTypeDef.funcType();
-    uint32_t wasmNumParams = coreWasmFuncType.args().length();
-    closure->numParams = hasResultOutParam ? wasmNumParams - 1 : wasmNumParams;
-    closure->resultOutParamIndex =
-        hasResultOutParam ? int32_t(wasmNumParams - 1) : -1;
-    closure->numResultSlots =
-        hasResultOutParam ? 0 : coreWasmFuncType.results().length();
-    if (closure->numParams > 0) {
-      closure->paramsScratch =
-          mozilla::MakeUnique<JS::WasmScalarVal[]>(closure->numParams);
-      if (!closure->paramsScratch) {
-        ReportOutOfMemory(cx);
-        return false;
-      }
-    }
-    if (closure->numResultSlots > 0) {
-      closure->resultsScratch =
-          mozilla::MakeUnique<JS::WasmScalarVal[]>(closure->numResultSlots);
-      if (!closure->resultsScratch) {
-        ReportOutOfMemory(cx);
-        return false;
-      }
-    }
-
-    bool baselineUnavailable = false;
-    if (!GenerateCanonLowerNative(cx, &coreFuncTypeDef, closure.get(),
-                                  &baselineUnavailable, exportVal)) {
+  }
+  if (closure->numResultSlots > 0) {
+    closure->resultsScratch =
+        mozilla::MakeUnique<JS::WasmScalarVal[]>(closure->numResultSlots);
+    if (!closure->resultsScratch) {
+      ReportOutOfMemory(cx);
       return false;
     }
-    if (!baselineUnavailable) {
-      instance.setLoweredNativeClosure(coreFuncIndex, std::move(closure));
-      return true;
-    }
+  }
+
+  bool baselineUnavailable = false;
+  if (!GenerateCanonLowerNative(cx, &coreFuncTypeDef, closure.get(),
+                                &baselineUnavailable, exportVal)) {
+    return false;
+  }
+  instance.setLoweredNativeClosure(coreFuncIndex, std::move(closure));
+  if (!baselineUnavailable) {
+    return true;
   }
 
   JSFunction* loweredFun =
@@ -4576,15 +4628,16 @@ bool ComponentInstance::init(JSContext* cx, HandleObject importObj) {
                 MOZ_ASSERT(mod->codeMeta()
                                .componentImportHint(thisFuncImportIndex)
                                .kind == ComponentImportKind::CanonLower);
-                // May be null: whether this import's actual callee is
-                // native-eligible is a runtime fact ResolveLoweredCoreFunc
-                // just resolved (see SelectNativeOverload), not something
-                // the CanonLower hint's classification could know ahead of
-                // time. A null pointer here is exactly what tells the
-                // inlined call site (see emitCallComponentCanonLower) to
-                // fall back to the ordinary import call instead.
+                // Always non-null: ResolveLoweredCoreFunc installs a
+                // LoweredNativeClosure for every `canon lower` core func,
+                // whether or not its actual callee turned out native-
+                // eligible (see SelectNativeOverload) - an ineligible one's
+                // closure calls the generic entry instead. The inlined call
+                // site (see emitCallComponentCanonLower) can therefore call
+                // straight through it unconditionally.
                 componentImportPtrs[thisFuncImportIndex] =
                     loweredNativeClosure(actualItemSortIndex.index);
+                MOZ_ASSERT(componentImportPtrs[thisFuncImportIndex]);
               }
             } else if (const ComponentResourceBuiltin& builtin =
                            coreFuncDesc.payload()
@@ -4723,10 +4776,11 @@ bool ComponentInstance::init(JSContext* cx, HandleObject importObj) {
     }
   }
 
-  // Only now that every core instance exists can a native-call closure's
-  // memory/realloc be resolved to their live core exports - do that in one
-  // last pass over whichever lowered core funcs ResolveLoweredCoreFunc
-  // (called from the core-instance loop above) decided were native-eligible.
+  // Only now that every core instance exists can a closure's memory/realloc
+  // be resolved to their live core exports - do that in one last pass over
+  // every `canon lower` core func's closure (see ResolveLoweredCoreFunc,
+  // called from the core-instance loop above); still skips a null entry,
+  // which means this core func is a resource builtin instead.
   for (uint32_t coreFuncIndex = 0;
        coreFuncIndex < loweredNativeClosures_.length(); coreFuncIndex++) {
     LoweredNativeClosure* closure = loweredNativeClosure(coreFuncIndex);
@@ -7366,38 +7420,6 @@ static int64_t SignExtendRaw(uint64_t raw, uint8_t bits, bool isSigned) {
   return (raw & signBit) ? int64_t(raw | ~mask) : int64_t(raw);
 }
 
-// JS::WebIDLNativeCall's boundary uses JS::WasmScalarVal, not wasm::Val;
-// these helpers convert where a wasm::Val vector is still genuinely needed
-// on this side.
-
-static bool AppendValsAsScalarVals(HandleValVector vals,
-                                   JS::WasmScalarValVector* out) {
-  if (!out->reserve(out->length() + vals.length())) {
-    return false;
-  }
-  for (size_t i = 0; i < vals.length(); i++) {
-    const Val& v = vals[i].get();
-    switch (v.type().kind()) {
-      case ValType::Kind::I32:
-        out->infallibleAppend(JS::WasmScalarVal::fromI32(v.i32()));
-        break;
-      case ValType::Kind::I64:
-        out->infallibleAppend(JS::WasmScalarVal::fromI64(v.i64()));
-        break;
-      case ValType::Kind::F32:
-        out->infallibleAppend(JS::WasmScalarVal::fromF32(v.f32()));
-        break;
-      case ValType::Kind::F64:
-        out->infallibleAppend(JS::WasmScalarVal::fromF64(v.f64()));
-        break;
-      default:
-        MOZ_CRASH(
-            "non-scalar core value crossing the WebIDL native call boundary");
-    }
-  }
-  return true;
-}
-
 // `types` gives the core wasm type of each entry in `scalars` (index-aligned)
 // - a WasmScalarVal never records its own type, so the caller must know it
 // statically, from the same flattening that produced `scalars` in the first
@@ -7957,29 +7979,21 @@ static bool BuildJSArgsFromAdapter(JSContext* cx,
                                    const ComponentFuncType& funcType,
                                    const CallAdapter& adapter,
                                    WebIDLContext& abi,
-                                   HandleValVector coreParams,
+                                   const JS::WasmScalarVal* coreParams,
                                    JS::RootedValueVector& outArgs) {
   MOZ_ASSERT(!adapter.isTrap);
-  JS::WasmScalarValVector scalarParams;
-  if (!AppendValsAsScalarVals(coreParams, &scalarParams)) {
-    ReportOutOfMemory(cx);
-    return false;
-  }
   ValTypeVector flatParamTypes;
   if (!FlattenTypes(funcType.paramTypes, &flatParamTypes)) {
     ReportOutOfMemory(cx);
     return false;
   }
-  CoerceWalkContext wc{cx, abi, scalarParams.begin(), flatParamTypes};
+  CoerceWalkContext wc{cx, abi, coreParams, flatParamTypes};
 
+  // Never bounds-checked against an actual param count: like every other
+  // WebIDLNativeCall entry, `coreParams` is trusted to hold exactly as many
+  // slots as this adapter's build-time flattening expects.
   bool paramsSpilled = flatParamTypes.length() > MaxFlatParams;
-  uint32_t spilledBase = 0;
-  if (paramsSpilled) {
-    if (coreParams.length() < 1) {
-      return ReportComponentTrap(cx, "missing spilled-params pointer");
-    }
-    spilledBase = coreParams[0].get().i32();
-  }
+  uint32_t spilledBase = paramsSpilled ? coreParams[0].i32() : 0;
 
   RootedValue argVal(cx);
   for (const ParamStep& p : adapter.paramSteps) {
@@ -9102,7 +9116,7 @@ static bool LowerJSReturnValue(JSContext* cx, HandleValue jsResult,
 }
 
 // Builds a `result<T,E>`-typed component value for the result<T,E> throwing
-// convention in LoweredCall below.
+// convention in LoweredNativeCall below.
 static bool MakeResultComponentValue(JSContext* cx,
                                      const ComponentType& resultType, bool isOk,
                                      mozilla::Maybe<ComponentValue>&& payload,
@@ -9270,50 +9284,48 @@ bool js::wasm::LiftedCall(JSContext* cx, JS::HandleObject coreCallee,
   return true;
 }
 
-bool js::wasm::LoweredCall(JSContext* cx, JS::HandleObject callee,
-                           const ComponentFuncType& funcType,
-                           const JS::WebIDLOperationType& opType,
-                           JS::WebIDLContext& abiCtx, const JS::CallArgs& args,
-                           ComponentNameKind nameKind) {
+// The generic JS::WebIDLNativeCall entry: rather than a native overload
+// specialized for one callee's declared signature, drives an arbitrary JS
+// callee (which may not even be WebIDL-typed at all) through the same
+// adapter machinery, one JS::Value at a time. Recovers the closure that was
+// called through - and with it the actual callee, name-kind tag and
+// component func type a native overload instead gets to bake into
+// `entry`/`adapter` ahead of time - via LoweredNativeClosure::fromCtx.
+static bool LoweredNativeCall(const JS::WebIDLCallAdapter* adapterPtr,
+                              JS::WebIDLContext* ctx,
+                              const JS::WasmScalarVal* params,
+                              uint32_t resultMemBase,
+                              JS::WasmScalarVal* results) {
+  LoweredNativeClosure* closure = LoweredNativeClosure::fromCtx(ctx);
+  JSContext* cx = ctx->cx();
+  const CallAdapter& adapter = *adapterPtr;
+
+  ComponentInstance* instance = closure->instance;
+  uint32_t loweredFuncIndex = closure->loweredFuncIndex;
+  RootedObject callee(cx, instance->componentFunc(loweredFuncIndex));
+  ComponentNameKind nameKind =
+      instance->componentFuncNameKind(loweredFuncIndex);
+  ComponentType funcTypeVal =
+      instance->component()->getTypeForFunc(loweredFuncIndex);
+  const ComponentFuncType& funcType = funcTypeVal.asFunc();
+
   bool bindThisReceiver = nameKind == ComponentNameKind::Method;
   bool isConstructor = nameKind == ComponentNameKind::Constructor;
-  RootedValVector coreParams(cx);
-  if (!RawCoreValuesToVals(cx, JS::HandleValueArray(args), funcType.paramTypes,
-                           MaxFlatParams, coreParams)) {
-    return false;
-  }
 
-  // A result that doesn't fit in a single flat core value is passed as a
-  // trailing out-param the core caller allocated (see FlattenFuncType's
-  // Lower comment); RawCoreValuesToVals above only consumed what
-  // funcType.paramTypes needs, leaving it as the last raw arg here.
-  mozilla::Maybe<uint32_t> resultOutPtr;
-  if (funcType.resultType.isSome()) {
-    ValTypeVector flatResult;
-    if (!FlattenType(funcType.resultType.ref(), &flatResult)) {
-      return false;
-    }
-    if (flatResult.length() > MaxFlatResults) {
-      RootedVal v(cx);
-      if (!Val::fromJSValue(cx, ValType::i32(), args[args.length() - 1], &v)) {
-        return false;
-      }
-      resultOutPtr = mozilla::Some(v.get().i32());
-    }
-  }
-
-  CallAdapter adapter;
-  if (!BuildCallAdapter(cx, funcType, opType, ComponentStringEncoding::Utf8,
-                        &adapter)) {
-    return false;
-  }
   if (adapter.isTrap) {
     return ReportComponentTrap(cx, "statically doomed binding");
   }
 
+  // `callee` (an arbitrary component func: an import, or another lift) has
+  // no WebIDL type of its own here, so use the "read the component function
+  // import" fallback of a variadic `any` operation type.
+  JS::WebIDLOperationType opType;
+  if (!DefaultWebIDLOperationType(cx, funcType.resultType.isSome(), &opType)) {
+    return false;
+  }
+
   JS::RootedValueVector jsArgs(cx);
-  if (!BuildJSArgsFromAdapter(cx, funcType, adapter, abiCtx, coreParams,
-                              jsArgs)) {
+  if (!BuildJSArgsFromAdapter(cx, funcType, adapter, *ctx, params, jsArgs)) {
     return false;
   }
 
@@ -9335,6 +9347,15 @@ bool js::wasm::LoweredCall(JSContext* cx, JS::HandleObject callee,
       bindThisReceiver
           ? JS::HandleValueArray::subarray(jsArgs, 1, jsArgs.length() - 1)
           : JS::HandleValueArray(jsArgs);
+
+  // A result that doesn't fit in a single flat core value is passed as a
+  // trailing out-param the core caller allocated (see FlattenFuncType's
+  // Lower comment); `resultMemBase` is that pointer, computed by the caller
+  // from the same per-instantiation fact (closure->resultOutParamIndex) that
+  // decides whether it means anything here.
+  mozilla::Maybe<uint32_t> resultOutPtr = closure->resultOutParamIndex >= 0
+                                              ? mozilla::Some(resultMemBase)
+                                              : mozilla::Nothing();
 
   // A plain (non-throwing) scalar/string/resource/list/record/option/variant
   // return fuses through WalkResultStepFromJS; anything else falls back to the
@@ -9363,26 +9384,20 @@ bool js::wasm::LoweredCall(JSContext* cx, JS::HandleObject callee,
       return false;
     }
     RootedValVector coreResults(cx);
-    if (!WalkResultStepFromJS(cx, abiCtx, *adapter.resultStep,
-                              *opType.returnType, flatResultTypes, jsResult,
-                              coreResults, resultOutPtr.valueOr(0))) {
+    if (!WalkResultStepFromJS(cx, *ctx, *adapter.resultStep, *opType.returnType,
+                              flatResultTypes, jsResult, coreResults,
+                              resultOutPtr.valueOr(0))) {
       return false;
     }
-    JS::RootedValueVector rawResults(cx);
-    if (!ValsToRawCoreValues(cx, coreResults, rawResults)) {
-      return false;
-    }
-    if (rawResults.length() > 0) {
-      args.rval().set(rawResults[0]);
-    } else {
-      args.rval().setUndefined();
+    if (coreResults.length() > 0) {
+      results[0] = ValToScalarVal(coreResults[0].get());
     }
     return true;
   }
 
   // The stepwise fallback: applies the result<T,E> throwing convention (a
   // plain JS throw becomes error(e); a normal return, ok(v)), then lowers
-  // the return value into args.rval().
+  // the return value into `results`.
   mozilla::Maybe<ComponentType> resultOkType, resultErrType;
   bool isResultReturn =
       funcType.resultType.isSome() &&
@@ -9404,7 +9419,7 @@ bool js::wasm::LoweredCall(JSContext* cx, JS::HandleObject callee,
     if (resultErrType) {
       ComponentValue cv;
       if (!LowerJSReturnValue(cx, exn, opType, *resultErrType, &cv,
-                              abiCtx.handles())) {
+                              ctx->handles())) {
         return false;
       }
       payload = mozilla::Some(cv);
@@ -9424,7 +9439,7 @@ bool js::wasm::LoweredCall(JSContext* cx, JS::HandleObject callee,
     if (resultOkType) {
       ComponentValue cv;
       if (!LowerJSReturnValue(cx, jsResult, opType, *resultOkType, &cv,
-                              abiCtx.handles())) {
+                              ctx->handles())) {
         return false;
       }
       payload = mozilla::Some(cv);
@@ -9441,7 +9456,7 @@ bool js::wasm::LoweredCall(JSContext* cx, JS::HandleObject callee,
   } else if (funcType.resultType.isSome()) {
     ComponentValue componentResult;
     if (!LowerJSReturnValue(cx, jsResult, opType, funcType.resultType.ref(),
-                            &componentResult, abiCtx.handles())) {
+                            &componentResult, ctx->handles())) {
       return false;
     }
     if (!componentResults.append(componentResult)) {
@@ -9451,19 +9466,12 @@ bool js::wasm::LoweredCall(JSContext* cx, JS::HandleObject callee,
   }
 
   RootedValVector coreResults(cx);
-  if (!PrepareCanonABIResults(abiCtx, funcType, componentResults, coreResults,
+  if (!PrepareCanonABIResults(*ctx, funcType, componentResults, coreResults,
                               resultOutPtr)) {
     return false;
   }
-
-  JS::RootedValueVector rawResults(cx);
-  if (!ValsToRawCoreValues(cx, coreResults, rawResults)) {
-    return false;
-  }
-  if (rawResults.length() > 0) {
-    args.rval().set(rawResults[0]);
-  } else {
-    args.rval().setUndefined();
+  if (coreResults.length() > 0) {
+    results[0] = ValToScalarVal(coreResults[0].get());
   }
   return true;
 }

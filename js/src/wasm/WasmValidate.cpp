@@ -6779,18 +6779,15 @@ enum class ComponentExportFlagsRaw : uint8_t {
 // ComponentInstance*) is written into the import's ComponentImportInstanceData
 // slot at instantiation, not decided here.
 //
-// For CanonLower specifically, this classification cannot know whether the
-// import's eventual callee (bound only once the component is instantiated)
-// will actually take GenerateCanonLowerNative's native-call fast path, or
-// fall back to the generic WasmComponentLoweredJS path - see
-// ResolveLoweredCoreFunc / SelectNativeOverload. That decision depends on the
-// concrete JS value the embedder supplies as the import, which isn't known
-// until instantiation. The hint is set regardless; the inlined call site
-// (see BaseCompiler::emitCallComponentCanonLower /
-// FunctionCompiler::callComponentCanonLower) guards on whether instantiation
-// actually found a native closure to inline against
-// (ComponentImportInstanceData's pointer being non-null), falling back to
-// the ordinary import call otherwise, so this is sound either way.
+// For CanonLower specifically: every import classified here gets a
+// LoweredNativeClosure at instantiation (see ResolveLoweredCoreFunc),
+// regardless of whether its eventual callee (bound only once the component
+// is instantiated) has a usable native overload (see SelectNativeOverload)
+// - an ineligible callee's closure just calls the generic entry instead of
+// a specialized one. So the inlined call site (see
+// BaseCompiler::emitCallComponentCanonLower /
+// FunctionCompiler::callComponentCanonLower) can call straight through
+// ComponentImportInstanceData's pointer unconditionally.
 [[nodiscard]] static bool ClassifyComponentImport(const Component& c,
                                                   uint32_t instanceIndex,
                                                   const CacheableName& field,
