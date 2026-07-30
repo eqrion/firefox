@@ -12363,17 +12363,12 @@ class CGMemberJITInfo(CGThing):
             typeName = self.nativeInterfaceTypeName(t)
             return fill(
                 """
-                void* webIDLNative_${argVar};
-                if (!JS::ReadCoercedInterfaceNative(ctx, coreParams, ${step}, 0, &webIDLNative_${argVar})) {
+                mozilla::dom::WebIDLNativeArg<${typeName}> webIDLNativeArg_${argVar};
+                if (!webIDLNativeArg_${argVar}.Read(ctx, coreParams, ${step}, 0)) {
                   return false;
                 }
-                // Keeps the native alive for this call: an own handle's
-                // strong ref is released as soon as it's read out of the
-                // handle table (see JS::ReadCoercedInterfaceNative).
-                RefPtr<${typeName}> webIDLNativeRef_${argVar} =
-                    static_cast<${typeName}*>(webIDLNative_${argVar});
                 NonNull<${typeName}> ${argVar};
-                ${argVar} = webIDLNativeRef_${argVar}.get();
+                ${argVar} = webIDLNativeArg_${argVar}.get();
                 """,
                 argVar=argVar,
                 step=stepExpr,
@@ -12477,7 +12472,7 @@ class CGMemberJITInfo(CGThing):
             return fill(
                 """
                 ${typeName}* ${argVar} = nullptr;
-                RefPtr<${typeName}> webIDLNativeRef_${argVar};
+                mozilla::dom::WebIDLNativeArg<${typeName}> webIDLNativeArg_${argVar};
                 bool webIDLPresent_${argVar} = true;
                 const JS::WebIDLCoerceStep* webIDLInnerStep_${argVar} = &${step};
                 if (${step}.kind == JS::WebIDLStepKind::Option) {
@@ -12489,15 +12484,10 @@ class CGMemberJITInfo(CGThing):
                   webIDLInnerStep_${argVar} = ${step}.child.get();
                 }
                 if (webIDLPresent_${argVar}) {
-                  void* webIDLNative_${argVar};
-                  if (!JS::ReadCoercedInterfaceNative(ctx, coreParams, *webIDLInnerStep_${argVar}, 0, &webIDLNative_${argVar})) {
+                  if (!webIDLNativeArg_${argVar}.Read(ctx, coreParams, *webIDLInnerStep_${argVar}, 0)) {
                     return false;
                   }
-                  // Keeps the native alive for this call: an own handle's
-                  // strong ref is released as soon as it's read out of the
-                  // handle table (see JS::ReadCoercedInterfaceNative).
-                  webIDLNativeRef_${argVar} = static_cast<${typeName}*>(webIDLNative_${argVar});
-                  ${argVar} = webIDLNativeRef_${argVar}.get();
+                  ${argVar} = webIDLNativeArg_${argVar}.get();
                 }
                 """,
                 argVar=argVar,
@@ -12605,8 +12595,8 @@ class CGMemberJITInfo(CGThing):
             typeName = self.nativeInterfaceTypeName(returnType)
             return fill(
                 """
-                RefPtr<${typeName}> webIDLResultRef = ${resultVar};
-                if (!JS::WriteCoercedInterfaceNative(ctx, *adapter.resultStep, resultMemBase, webIDLResultRef.get(), resultsPtr)) {
+                RefPtr<${typeName}> webIDLResultRef = std::move(${resultVar});
+                if (!JS::WriteCoercedInterfaceNative(ctx, *adapter.resultStep, resultMemBase, webIDLResultRef.forget().take(), resultsPtr)) {
                   return false;
                 }
                 """,
@@ -12668,14 +12658,14 @@ class CGMemberJITInfo(CGThing):
             typeName = self.nativeInterfaceTypeName(inner)
             return fill(
                 """
-                RefPtr<${typeName}> webIDLResultRef = ${resultVar};
+                RefPtr<${typeName}> webIDLResultRef = std::move(${resultVar});
                 if (adapter.resultStep->kind == JS::WebIDLStepKind::Option) {
                   uint32_t webIDLResultPtr;
                   if (!JS::WriteCoercedOptionDiscriminant(ctx, *adapter.resultStep, resultMemBase, !!webIDLResultRef, resultsPtr, &webIDLResultPtr)) {
                     return false;
                   }
                   if (webIDLResultRef) {
-                    if (!JS::WriteCoercedInterfaceNative(ctx, *adapter.resultStep->child, webIDLResultPtr, webIDLResultRef.get(), resultsPtr)) {
+                    if (!JS::WriteCoercedInterfaceNative(ctx, *adapter.resultStep->child, webIDLResultPtr, webIDLResultRef.forget().take(), resultsPtr)) {
                       return false;
                     }
                   }
@@ -12687,7 +12677,7 @@ class CGMemberJITInfo(CGThing):
                     JS_ReportErrorASCII(ctx.cx(), "component result type can't represent a null ${typeName}");
                     return false;
                   }
-                  if (!JS::WriteCoercedInterfaceNative(ctx, *adapter.resultStep, resultMemBase, webIDLResultRef.get(), resultsPtr)) {
+                  if (!JS::WriteCoercedInterfaceNative(ctx, *adapter.resultStep, resultMemBase, webIDLResultRef.forget().take(), resultsPtr)) {
                     return false;
                   }
                 }
@@ -12891,10 +12881,11 @@ class CGMemberJITInfo(CGThing):
             selfTypeName = self.descriptor.nativeType
             selfStmts = fill(
                 """
-                ${selfTypeName}* self;
-                if (!JS::ReadCoercedInterfaceNative(ctx, coreParams, adapter.paramSteps[0].step, 0, (void**)&self)) {
+                mozilla::dom::WebIDLNativeArg<${selfTypeName}> webIDLSelfArg;
+                if (!webIDLSelfArg.Read(ctx, coreParams, adapter.paramSteps[0].step, 0)) {
                   return false;
                 }
+                ${selfTypeName}* self = webIDLSelfArg.get();
                 """,
                 selfTypeName=selfTypeName,
             )

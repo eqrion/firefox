@@ -3641,6 +3641,43 @@ bool WriteWebIDLNativeByteArray(JS::WebIDLContext& aCtx,
                                 uint32_t aMemBase, JS::Handle<JSObject*> aValue,
                                 JS::WasmScalarVal* aResult);
 
+// Holds a single WebIDL native call interface argument (or receiver) read
+// via JS::ReadCoercedInterfaceNative, owning whatever ref that call reports:
+// an `own` handle transfers or freshly takes one, released here; a `borrow`
+// takes none, since the handle table itself keeps the pointer alive for the
+// call (see JS::ReadCoercedInterfaceNative's doc comment).
+template <class T>
+class MOZ_STACK_CLASS WebIDLNativeArg final {
+  T* mPtr = nullptr;
+  JS::WebIDLInterface* mOwnedRef = nullptr;
+
+ public:
+  WebIDLNativeArg() = default;
+  WebIDLNativeArg(const WebIDLNativeArg&) = delete;
+  WebIDLNativeArg& operator=(const WebIDLNativeArg&) = delete;
+  ~WebIDLNativeArg() {
+    if (mOwnedRef) {
+      mOwnedRef->releaseNative(mPtr);
+    }
+  }
+
+  [[nodiscard]] bool Read(JS::WebIDLContext& aCtx,
+                          const JS::WasmScalarVal* aCoreParams,
+                          const JS::WebIDLCoerceStep& aStep,
+                          uint32_t aMemBase) {
+    MOZ_ASSERT(!mPtr && !mOwnedRef);
+    void* native;
+    if (!JS::ReadCoercedInterfaceNative(aCtx, aCoreParams, aStep, aMemBase,
+                                        &native, &mOwnedRef)) {
+      return false;
+    }
+    mPtr = static_cast<T*>(native);
+    return true;
+  }
+
+  T* get() const { return mPtr; }
+};
+
 #endif  // ENABLE_WASM_COMPONENTS
 
 }  // namespace dom

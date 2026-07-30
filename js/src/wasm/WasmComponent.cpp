@@ -4940,6 +4940,11 @@ static uint32_t FlagsFromKind(ComponentTypeKind kind) {
   return (uint32_t(kind) << ComponentHandleTable::KindShift) &
          ComponentHandleTable::KindMask;
 }
+static ComponentResourceTypeId EntryResourceTypeId(
+    const ComponentHandleTable::Entry& entry) {
+  return ComponentResourceTypeId(KindFromFlags(entry.flags),
+                                 entry.resourceTypeDef);
+}
 
 bool ComponentHandleTable::growEntries(JSContext* cx) {
   uint32_t newCapacity = capacity_ == 0 ? 8 : capacity_ * 2;
@@ -5031,7 +5036,9 @@ bool ComponentHandleTable::add(JSContext* cx,
     entry.ptr = value.nativePtr;
     entry.iface = value.nativeIface;
     wrapped_[i] = nullptr;
-    value.nativeIface->addRefNative(value.nativePtr);
+    if (!value.adoptRef) {
+      value.nativeIface->addRefNative(value.nativePtr);
+    }
   } else {
     entry.ptr = nullptr;
     entry.iface = nullptr;
@@ -5043,8 +5050,7 @@ bool ComponentHandleTable::add(JSContext* cx,
 
 static void FillHandleView(const ComponentHandleTable::Entry& entry,
                            JSObject* wrappedObj, ComponentResourceHandle* out) {
-  out->resourceType = ComponentResourceTypeId(KindFromFlags(entry.flags),
-                                              entry.resourceTypeDef);
+  out->resourceType = EntryResourceTypeId(entry);
   out->own = entry.flags & ComponentHandleTable::Own;
   out->numLends = entry.numLends;
   out->isNative = entry.flags & ComponentHandleTable::Native;
@@ -8530,7 +8536,8 @@ bool JS::ReadCoercedInterface(WebIDLContext& ctx,
 bool JS::ReadCoercedInterfaceNative(WebIDLContext& ctx,
                                     const WasmScalarVal* coreParams,
                                     const WebIDLCoerceStep& step,
-                                    uint32_t memBase, void** outNative) {
+                                    uint32_t memBase, void** outNative,
+                                    WebIDLInterface** outOwnedRef) {
   MOZ_ASSERT(step.kind == StepKind::Interface);
   CoerceWalkContext wc{ctx.cx(), ctx, coreParams};
   uint32_t index;
@@ -8539,6 +8546,7 @@ bool JS::ReadCoercedInterfaceNative(WebIDLContext& ctx,
   }
   ComponentHandleTable* handles = ctx.handles();
   void* native;
+  WebIDLInterface* ownedRef = nullptr;
   if (step.resourceOwn) {
     ComponentResourceHandle rawHandle;
     if (!handles->remove(ctx.cx(), index, &rawHandle)) {
@@ -8553,22 +8561,48 @@ bool JS::ReadCoercedInterfaceNative(WebIDLContext& ctx,
                                  "component resource handle mismatch");
     }
     native = handle->resolveNative(step.expectedInterface);
+    MOZ_RELEASE_ASSERT(native);
+    if (handle->isNative) {
+      // Pure transfer: the table's ref on this pointer moves to the caller,
+      // released later through the same interface it was added under (see
+      // ComponentResourceHandle::release/ComponentHandleTable::drop, which
+      // do the same). No AddRef/Release pair needed.
+      ownedRef = handle->nativeIface;
+      handle.forget();
+    } else {
+      // Unwrapping a Wrapped object doesn't hand us an existing ref - take
+      // one so the pointer survives past this handle table interaction.
+      step.expectedInterface->addRefNative(native);
+      ownedRef = step.expectedInterface;
+    }
   } else {
-    ComponentResourceHandle handle;
-    if (!handles->get(ctx.cx(), index, &handle)) {
+    // A borrow: peek the entry directly rather than filling a full
+    // ComponentResourceHandle snapshot - no ref changes hands either way,
+    // the table's own ref (or the lender's, transitively) keeps the pointer
+    // alive for the duration of this call.
+    const ComponentHandleTable::Entry* entry = handles->peek(index);
+    if (!entry) {
+      JS_ReportErrorASCII(ctx.cx(), "invalid component resource handle");
       return false;
     }
-    if (handle.resourceType !=
+    if (EntryResourceTypeId(*entry) !=
         ComponentResourceTypeId(step.resourceTypeKind,
                                 step.resourceTypeDef.get())) {
       return ReportComponentTrap(ctx.cx(),
                                  "component resource handle type mismatch");
     }
-    native = handle.resolveNative(step.expectedInterface);
+    if (entry->flags & ComponentHandleTable::Native) {
+      native = entry->ptr;
+    } else {
+      native = step.expectedInterface
+                   ? step.expectedInterface->unwrapNative(
+                         handles->wrappedAt(index))
+                   : nullptr;
+    }
+    MOZ_RELEASE_ASSERT(native);
   }
-  // Don't use this if there is no native implementation
-  MOZ_RELEASE_ASSERT(native);
   *outNative = native;
+  *outOwnedRef = ownedRef;
   return true;
 }
 
@@ -8788,19 +8822,21 @@ bool JS::WriteCoercedInterface(WebIDLContext& ctx, const WebIDLCoerceStep& step,
 
 bool JS::WriteCoercedInterfaceNative(WebIDLContext& ctx,
                                      const WebIDLCoerceStep& step,
-                                     uint32_t memBase, void* native,
+                                     uint32_t memBase,
+                                     void* alreadyAddRefedNative,
                                      WasmScalarVal* result) {
   MOZ_ASSERT(step.kind == StepKind::Interface);
   MOZ_ASSERT(step.expectedInterface && step.expectedInterface->hasNativeOps());
   ComponentHandleTable* handles = ctx.handles();
-  ComponentResourceClassification classification{/* isNative = */ true, native,
-                                                 step.expectedInterface,
-                                                 /* wrappedObj = */ nullptr};
+  ComponentResourceClassification classification =
+      ComponentResourceClassification::AdoptNative(alreadyAddRefedNative,
+                                                    step.expectedInterface);
   uint32_t index;
   if (!handles->add(ctx.cx(),
                     ComponentResourceTypeId(step.resourceTypeKind,
                                             step.resourceTypeDef.get()),
                     step.resourceOwn, classification, &index)) {
+    step.expectedInterface->releaseNative(alreadyAddRefedNative);
     return false;
   }
   return WriteRawUInt32(ctx, step, memBase, index, result);

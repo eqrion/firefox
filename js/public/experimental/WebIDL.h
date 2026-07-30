@@ -1063,14 +1063,23 @@ extern JS_PUBLIC_API bool ReadCoercedInterface(WebIDLContext& ctx,
 // directly if its representation is already Native, or unwraps its Wrapped
 // object via `step.expectedInterface`'s unwrapNative op otherwise (failing,
 // per the same trap, if that interface has no way to unwrap, or the object
-// isn't an instance of it). For an `own` handle, the handle table's own
-// strong ref on the returned pointer is released as part of resolving the
-// handle - the caller must take its own ref (e.g. a RefPtr) before this
-// call's `WebIDLContext` interaction ends, to keep the pointer alive beyond
-// that point.
+// isn't an instance of it).
+//
+// For a `borrow` handle, no ref changes hands: the handle table's own ref
+// keeps the pointer alive for as long as the caller stays within this call
+// (the borrow contract), and `*outOwnedRef` is set to null. For an `own`
+// handle, the handle table's ref on the returned pointer is released as part
+// of resolving the handle, and transferred to the caller instead: when the
+// resource's representation is already Native, this is a pure transfer (no
+// AddRef/Release pair); otherwise (unwrapping a Wrapped object) a fresh ref
+// is taken via `step.expectedInterface`'s addRefNative. Either way,
+// `*outOwnedRef` is set to `step.expectedInterface` and the caller must
+// release the returned pointer through it (e.g. `(*outOwnedRef)->
+// releaseNative(*outNative)`) once done with it.
 extern JS_PUBLIC_API bool ReadCoercedInterfaceNative(
     WebIDLContext& ctx, const WasmScalarVal* coreParams,
-    const WebIDLCoerceStep& step, uint32_t memBase, void** outNative);
+    const WebIDLCoerceStep& step, uint32_t memBase, void** outNative,
+    WebIDLInterface** outOwnedRef);
 
 // Reads an Enumeration-kind WebIDLCoerceStep's raw source label index and
 // applies the step's source-to-target label remap, returning the target
@@ -1169,14 +1178,16 @@ extern JS_PUBLIC_API bool WriteCoercedInterface(WebIDLContext& ctx,
                                                 WasmScalarVal* result);
 
 // Same as WriteCoercedInterface, but for the native fast path: registers
-// `native` as a fresh own handle (or re-borrows it, for a borrow result)
-// directly, with no wrapper - one strong ref is taken on `native` via
-// `step.expectedInterface`'s addRefNative, for as long as it stays in the
-// handle table. `step.expectedInterface` must have native ops
-// (WebIDLInterface::hasNativeOps()).
+// `alreadyAddRefedNative` as a fresh own handle (or re-borrows it, for a
+// borrow result) directly, with no wrapper. Consumes one strong ref on
+// `alreadyAddRefedNative` on every return path: on success, the handle table
+// takes over that ref for as long as it stays in the table; on failure, it is
+// released via `step.expectedInterface`'s releaseNative before returning.
+// `step.expectedInterface` must have native ops (WebIDLInterface::
+// hasNativeOps()).
 extern JS_PUBLIC_API bool WriteCoercedInterfaceNative(
     WebIDLContext& ctx, const WebIDLCoerceStep& step, uint32_t memBase,
-    void* native, WasmScalarVal* result);
+    void* alreadyAddRefedNative, WasmScalarVal* result);
 
 // Writes a Sequence-kind step's (elemPtr,len) header: reallocs
 // `count * step.destAccess.elemStride` bytes for the element buffer, writes

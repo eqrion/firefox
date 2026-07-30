@@ -396,12 +396,22 @@ class ComponentResourceTypeId {
 // its interface, for the fast same-origin case) or `Wrapped` (a plain object
 // reference: the fallback for cross-origin values, or when there's no way to
 // unwrap to a bare pointer). Doesn't take any ref; ComponentHandleTable does
-// that itself when the classification is stored.
+// that itself when the classification is stored, unless `adoptRef` is set (see
+// AdoptNative), in which case the caller's existing ref transfers instead.
 struct ComponentResourceClassification {
   bool isNative;
   void* nativePtr;                   // valid iff isNative
   JS::WebIDLInterface* nativeIface;  // valid iff isNative
   JSObject* wrappedObj;              // valid iff !isNative
+  bool adoptRef = false;             // valid iff isNative
+
+  // A Native classification for a pointer the caller already holds a strong
+  // ref on (e.g. a WebIDL native call result) - ComponentHandleTable::add
+  // takes over that ref instead of calling addRefNative itself.
+  static ComponentResourceClassification AdoptNative(
+      void* aNative, JS::WebIDLInterface* aIface) {
+    return {true, aNative, aIface, nullptr, true};
+  }
 };
 
 inline ComponentResourceClassification ClassifyResourceObject(
@@ -473,6 +483,11 @@ class ComponentResourceHandleOwner {
 
   const ComponentResourceHandle* operator->() const { return &handle_; }
   const ComponentResourceHandle& get() const { return handle_; }
+
+  // Transfers the handle's strong ref (if any) to the caller: the destructor
+  // no longer releases it. Used when the caller wants to keep the ref alive
+  // past this call rather than have it released here.
+  void forget() { handle_.isNative = false; }
 };
 
 // A table of resource handles, mirroring the component model spec's generic
@@ -567,6 +582,17 @@ class ComponentHandleTable {
                          uint32_t* index);
   [[nodiscard]] bool get(JSContext* cx, uint32_t index,
                          ComponentResourceHandle* out) const;
+  // Direct access to a present entry, for hot paths (e.g. a borrow read)
+  // that don't need the full ComponentResourceHandle snapshot. Null iff
+  // `index` is out of range or free; the caller reports the trap. The
+  // returned pointer is invalidated by any subsequent add().
+  const Entry* peek(uint32_t index) const {
+    if (index >= length_ || !(entries_[index].flags & Present)) {
+      return nullptr;
+    }
+    return &entries_[index];
+  }
+  JSObject* wrappedAt(uint32_t index) const { return wrapped_[index]; }
   // Marks `index` free and transfers ownership of any strong ref it holds to
   // `out`; the caller must call out->release() once done with it (see
   // ComponentResourceHandle's comment).
