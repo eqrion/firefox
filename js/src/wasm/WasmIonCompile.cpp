@@ -3160,6 +3160,47 @@ class FunctionCompiler {
 
     return finishCatchableCall(callState);
   }
+
+  // Like nativeFuncPtrCall, but for a plain `void func(void* arg)` C++
+  // function pointer (e.g. JS::WebIDLInterface::releaseNative_) rather than a
+  // JS::WebIDLNativeCall: one pointer argument, no return value, and thus no
+  // way to fail (see callComponentResourceDrop below).
+  [[nodiscard]] bool nativeFuncPtrCall1(MDefinition* calleePtr,
+                                        MDefinition* arg,
+                                        uint32_t bytecodeOffset) {
+    if (inDeadCode()) {
+      return true;
+    }
+
+    CallCompileState callState(ABIKind::System);
+    if (!passCallArg(arg, MIRType::Pointer, &callState) ||
+        !finishCallArgs(&callState)) {
+      return false;
+    }
+
+    CallSiteDesc desc(bytecodeOffset, rootCompiler_.inlinedCallerOffsetsIndex(),
+                      CallSiteKind::Symbolic);
+
+    // ABIArgIter just needs something with length()/operator[]; there's no
+    // reusable one-argument shape lying around, so make one up.
+    class MOZ_STACK_CLASS OnePointerArgTypes {
+     public:
+      size_t length() const { return 1; }
+      MIRType operator[](size_t) const { return MIRType::Pointer; }
+    };
+    uint32_t stackArgAreaSizeUnaligned =
+        StackArgAreaSizeUnaligned(OnePointerArgTypes(), callState.abiKind);
+
+    auto* ins = MWasmCallUncatchable::NewNativeFuncPtrCall(
+        alloc(), desc, FailureMode::Infallible, Trap::Limit, callState.regArgs,
+        stackArgAreaSizeUnaligned, calleePtr);
+    if (!ins) {
+      return false;
+    }
+    curBlock_->add(ins);
+
+    return finishCatchableCall(&callState);
+  }
 #endif  // ENABLE_WASM_COMPONENTS
 
   /*********************************************** Instance call helpers ***/
@@ -3429,23 +3470,22 @@ class FunctionCompiler {
 #  endif
   }
 
-  // Inlines the call-site half of a ComponentImportKind::ResourceDrop import
-  // (see CodeMetadata::componentImportHint) directly into this import call,
-  // instead of calling out to the per-instantiation stub
-  // GenerateResourceDropFunc would otherwise compile: prepend the
-  // ComponentInstance* this instantiation bound for this import to `params`,
-  // then call the same ComponentResourceDrop builtin the stub would have
-  // called.
-  [[nodiscard]] bool callComponentResourceDrop(uint32_t funcIndex,
-                                               const DefVector& params) {
-    MOZ_ASSERT(!inDeadCode());
-    MOZ_ASSERT(params.length() == 1);
-
+  // The original, out-of-line route through the ComponentResourceDrop builtin
+  // (Instance::componentResourceDrop -> ComponentHandleTable::drop): prepend
+  // the ComponentInstance* this instantiation bound for this import to
+  // `index`, then call the builtin GenerateResourceDropFunc's stub would
+  // have called. Used both as the top-level implementation when inlining
+  // isn't attempted (see below) and as the fallback arm of the inline fast
+  // path, so it must stay correct on its own - it re-does the whole
+  // operation from scratch in C++, which is safe because the fast path never
+  // mutates the table before deciding to bail here.
+  [[nodiscard]] bool callComponentResourceDropSlow(uint32_t funcIndex,
+                                                   MDefinition* index) {
     MDefinition* componentInstancePtr = loadComponentImportPtrAsI64(funcIndex);
 
     DefVector builtinParams;
     if (!builtinParams.append(componentInstancePtr) ||
-        !builtinParams.append(params[0])) {
+        !builtinParams.append(index)) {
       return false;
     }
 
@@ -3453,6 +3493,296 @@ class FunctionCompiler {
         BuiltinModuleFuncId::ComponentResourceDrop);
     MOZ_ASSERT(!builtinModuleFunc.usesMemory());
     return callBuiltinModuleFunc(builtinModuleFunc, builtinParams);
+  }
+
+  // Emits `if (cond) { <call the slow path>; goto joinBlock; }`, leaving
+  // curBlock_ pointing at a fresh block for the `!cond` continuation. `cond`
+  // true means "bail to the slow path" - every inline fast-path check below
+  // is phrased this way (a reason to give up, not a reason to continue), so
+  // each one is a single call to this helper.
+  //
+  // The eventual join point is a shared, multi-predecessor merge block (every
+  // check's slow arm plus the final fast-path completion all end up there),
+  // but it can't be created until all of those blocks already exist: Ion's
+  // graph requires a block's predecessors to have been created (and so
+  // ordered earlier in the graph) before the block itself - see
+  // AssertReversePostorder in MIRGraph.cpp. So this leaves each slow arm's
+  // completion block *unterminated* and appends it to `pendingSlowExits`;
+  // callComponentResourceDrop creates the join block last, after its own
+  // fast-path body, and only then terminates every pending block (this one
+  // plus the fast-path's own final block) with a goto to it.
+  [[nodiscard]] bool branchToResourceDropSlowPath(
+      MDefinition* cond, uint32_t funcIndex, MDefinition* index,
+      BlockVector* pendingSlowExits) {
+    MBasicBlock* fastBlock = nullptr;
+    if (!newBlock(curBlock_, &fastBlock)) {
+      return false;
+    }
+    MBasicBlock* slowBlock = nullptr;
+    if (!newBlock(curBlock_, &slowBlock)) {
+      return false;
+    }
+    auto* test = MTest::New(alloc(), cond, slowBlock, fastBlock);
+    if (!test) {
+      return false;
+    }
+    curBlock_->end(test);
+
+    curBlock_ = slowBlock;
+    if (!callComponentResourceDropSlow(funcIndex, index) ||
+        !pendingSlowExits->append(curBlock_)) {
+      return false;
+    }
+
+    curBlock_ = fastBlock;
+    return true;
+  }
+
+  // Inlines the call-site half of a ComponentImportKind::ResourceDrop import
+  // (see CodeMetadata::componentImportHint) directly into this import call,
+  // instead of calling out to the per-instantiation stub
+  // GenerateResourceDropFunc would otherwise compile: the bounds/present/
+  // native/still-lent checks that Instance::componentResourceDrop's C++ body
+  // would make, and the free-list push it would do, happen right here as
+  // Ion MIR, reading and writing ComponentHandleTable's Entry array and free
+  // stack through their static offset accessors (see WasmComponent.h). Only
+  // the actual release crosses into C++, and even that is a plain
+  // wasm::CalleeDesc::NativeFuncPtr call straight to
+  // WebIDLInterface::releaseNative_ (see nativeFuncPtrCall1) - no builtin
+  // thunk, no Instance* argument, no C++ prologue; just an inline exit frame
+  // around one indirect call.
+  //
+  // Every check that fails - out of bounds, absent, a Wrapped (not Native)
+  // value, or still-lent - falls back to callComponentResourceDropSlow,
+  // which redoes the whole operation from scratch in C++. (Own isn't
+  // checked: Instance::componentResourceDrop always passes requireOwn=false,
+  // since resource.drop accepts borrows too - see the component model's
+  // canon_resource_drop.) `entries_`/`freeStack_` are loaded fresh here,
+  // never baked: they're realloc'd and move whenever the table grows, which
+  // can happen from an entirely different call site between two drops of the
+  // same import.
+  [[nodiscard]] bool callComponentResourceDrop(uint32_t funcIndex,
+                                               uint32_t bytecodeOffset,
+                                               const DefVector& params) {
+    MOZ_ASSERT(!inDeadCode());
+    MOZ_ASSERT(params.length() == 1);
+    MDefinition* index = params[0];
+
+    using Entry = ComponentHandleTable::Entry;
+
+    MDefinition* componentInstance = loadComponentImportPtr(funcIndex);
+    auto* table = MWasmDerivedPointer::New(
+        alloc(), componentInstance, ComponentInstance::offsetOfHandles());
+    curBlock_->add(table);
+
+    auto* entries = MWasmLoadField::New(
+        alloc(), table, nullptr, ComponentHandleTable::offsetOfEntries(),
+        mozilla::Nothing(), MIRType::Pointer, MWideningOp::None,
+        AliasSet::Load(AliasSet::Any));
+    if (!entries) {
+      return false;
+    }
+    curBlock_->add(entries);
+
+    auto* length = MWasmLoadField::New(
+        alloc(), table, nullptr, ComponentHandleTable::offsetOfLength(),
+        mozilla::Nothing(), MIRType::Int32, MWideningOp::None,
+        AliasSet::Load(AliasSet::Any));
+    if (!length) {
+      return false;
+    }
+    curBlock_->add(length);
+
+    // Every check's slow arm ends in an unterminated block appended here;
+    // see branchToResourceDropSlowPath for why the eventual join block can't
+    // be created (or targeted) until all of them exist.
+    BlockVector pendingSlowExits;
+
+    // index >= length -> slow. Also covers index 0 (the reserved sentinel,
+    // never Present) and any index the table has never grown to.
+    auto* outOfBounds = MCompare::NewWasm(alloc(), index, length, JSOp::Ge,
+                                          MCompare::Compare_UInt32);
+    curBlock_->add(outOfBounds);
+    if (!branchToResourceDropSlowPath(outOfBounds, funcIndex, index,
+                                      &pendingSlowExits)) {
+      return false;
+    }
+
+    // entry = entries + index * sizeof(Entry). sizeof(Entry) isn't a
+    // supported jit::Scale (only 1/2/4/8), so scale the index by hand first;
+    // MaxLength keeps this multiply well inside Int32 range.
+    MDefinition* scaledIndex = mul(index, constantI32(int32_t(sizeof(Entry))),
+                                   MIRType::Int32, MMul::Integer);
+    if (!scaledIndex) {
+      return false;
+    }
+    auto* entry = MWasmDerivedIndexPointer::New(alloc(), entries, scaledIndex,
+                                                Scale::TimesOne);
+    curBlock_->add(entry);
+
+    auto* flags = MWasmLoadField::New(
+        alloc(), entry, nullptr, Entry::offsetOfFlags(), mozilla::Nothing(),
+        MIRType::Int32, MWideningOp::None, AliasSet::Load(AliasSet::Any));
+    if (!flags) {
+      return false;
+    }
+    curBlock_->add(flags);
+
+    // (flags & (Present|Native)) != (Present|Native) -> slow: covers an
+    // absent slot and a Wrapped value (no native pointer to release inline).
+    auto* presentNativeMask = constantI32(
+        int32_t(ComponentHandleTable::Present | ComponentHandleTable::Native));
+    auto* maskedFlags =
+        MBitAnd::New(alloc(), flags, presentNativeMask, MIRType::Int32);
+    curBlock_->add(maskedFlags);
+    auto* notPresentNative =
+        MCompare::NewWasm(alloc(), maskedFlags, presentNativeMask, JSOp::Ne,
+                          MCompare::Compare_Int32);
+    curBlock_->add(notPresentNative);
+    if (!branchToResourceDropSlowPath(notPresentNative, funcIndex, index,
+                                      &pendingSlowExits)) {
+      return false;
+    }
+
+    auto* numLends = MWasmLoadField::New(
+        alloc(), entry, nullptr, Entry::offsetOfNumLends(), mozilla::Nothing(),
+        MIRType::Int32, MWideningOp::None, AliasSet::Load(AliasSet::Any));
+    if (!numLends) {
+      return false;
+    }
+    curBlock_->add(numLends);
+    auto* stillLent = MCompare::NewWasm(alloc(), numLends, constantI32(0),
+                                        JSOp::Ne, MCompare::Compare_Int32);
+    curBlock_->add(stillLent);
+    if (!branchToResourceDropSlowPath(stillLent, funcIndex, index,
+                                      &pendingSlowExits)) {
+      return false;
+    }
+
+    // Capture the native ptr/iface before clearing the slot.
+    auto* nativePtr = MWasmLoadField::New(
+        alloc(), entry, nullptr, Entry::offsetOfPtr(), mozilla::Nothing(),
+        MIRType::Pointer, MWideningOp::None, AliasSet::Load(AliasSet::Any));
+    if (!nativePtr) {
+      return false;
+    }
+    curBlock_->add(nativePtr);
+    auto* iface = MWasmLoadField::New(
+        alloc(), entry, nullptr, Entry::offsetOfIface(), mozilla::Nothing(),
+        MIRType::Pointer, MWideningOp::None, AliasSet::Load(AliasSet::Any));
+    if (!iface) {
+      return false;
+    }
+    curBlock_->add(iface);
+
+    auto* freeLength = MWasmLoadField::New(
+        alloc(), table, nullptr, ComponentHandleTable::offsetOfFreeLength(),
+        mozilla::Nothing(), MIRType::Int32, MWideningOp::None,
+        AliasSet::Load(AliasSet::Any));
+    if (!freeLength) {
+      return false;
+    }
+    curBlock_->add(freeLength);
+    auto* freeCapacity = MWasmLoadField::New(
+        alloc(), table, nullptr, ComponentHandleTable::offsetOfFreeCapacity(),
+        mozilla::Nothing(), MIRType::Int32, MWideningOp::None,
+        AliasSet::Load(AliasSet::Any));
+    if (!freeCapacity) {
+      return false;
+    }
+    curBlock_->add(freeCapacity);
+
+    // freeLength >= freeCapacity -> slow: rare, let the C++ path grow it.
+    auto* freeListFull = MCompare::NewWasm(alloc(), freeLength, freeCapacity,
+                                           JSOp::Ge, MCompare::Compare_UInt32);
+    curBlock_->add(freeListFull);
+    if (!branchToResourceDropSlowPath(freeListFull, funcIndex, index,
+                                      &pendingSlowExits)) {
+      return false;
+    }
+
+    // All checks passed: every remaining step is a plain write, so nothing
+    // past this point can still bail to the slow path.
+    auto* clearFlags = MWasmStoreField::New(
+        alloc(), entry, nullptr, Entry::offsetOfFlags(), mozilla::Nothing(),
+        constantI32(0), MNarrowingOp::None, AliasSet::Store(AliasSet::Any));
+    if (!clearFlags) {
+      return false;
+    }
+    curBlock_->add(clearFlags);
+
+    auto* freeStack = MWasmLoadField::New(
+        alloc(), table, nullptr, ComponentHandleTable::offsetOfFreeStack(),
+        mozilla::Nothing(), MIRType::Pointer, MWideningOp::None,
+        AliasSet::Load(AliasSet::Any));
+    if (!freeStack) {
+      return false;
+    }
+    curBlock_->add(freeStack);
+    auto* freeSlot = MWasmDerivedIndexPointer::New(
+        alloc(), freeStack, freeLength, Scale::TimesFour);
+    curBlock_->add(freeSlot);
+    auto* storeFreeIndex = MWasmStoreField::New(
+        alloc(), freeSlot, nullptr, 0, mozilla::Nothing(), index,
+        MNarrowingOp::None, AliasSet::Store(AliasSet::Any));
+    if (!storeFreeIndex) {
+      return false;
+    }
+    curBlock_->add(storeFreeIndex);
+
+    MDefinition* newFreeLength =
+        add(freeLength, constantI32(1), MIRType::Int32);
+    if (!newFreeLength) {
+      return false;
+    }
+    auto* storeFreeLength = MWasmStoreField::New(
+        alloc(), table, nullptr, ComponentHandleTable::offsetOfFreeLength(),
+        mozilla::Nothing(), newFreeLength, MNarrowingOp::None,
+        AliasSet::Store(AliasSet::Any));
+    if (!storeFreeLength) {
+      return false;
+    }
+    curBlock_->add(storeFreeLength);
+
+    auto* releaseFn = MWasmLoadField::New(
+        alloc(), iface, nullptr, JS::WebIDLInterface::offsetOfReleaseNative(),
+        mozilla::Nothing(), MIRType::Pointer, MWideningOp::None,
+        AliasSet::Load(AliasSet::Any));
+    if (!releaseFn) {
+      return false;
+    }
+    curBlock_->add(releaseFn);
+    if (!nativeFuncPtrCall1(releaseFn, nativePtr, bytecodeOffset)) {
+      return false;
+    }
+
+    // Every predecessor now exists - the fast path's own final block
+    // (curBlock_, about to become joinBlock's registered creation-time
+    // pred) and every slow arm's completion in pendingSlowExits - so the
+    // join block can finally be created and targeted.
+    MBasicBlock* joinBlock = nullptr;
+    if (!newBlock(curBlock_, &joinBlock)) {
+      return false;
+    }
+    auto* fallthrough = MGoto::New(alloc(), joinBlock);
+    if (!fallthrough) {
+      return false;
+    }
+    curBlock_->end(fallthrough);
+
+    for (MBasicBlock* slowExit : pendingSlowExits) {
+      auto* slowGoto = MGoto::New(alloc(), joinBlock);
+      if (!slowGoto) {
+        return false;
+      }
+      slowExit->end(slowGoto);
+      if (!joinBlock->addPredecessorWithoutPhis(slowExit)) {
+        return false;
+      }
+    }
+
+    curBlock_ = joinBlock;
+    return true;
   }
 
   // Like loadComponentImportPtrAsI64, but as a native Pointer-typed value -
@@ -6730,7 +7060,7 @@ bool FunctionCompiler::emitCall() {
         codeMeta().componentImportHint(funcIndex);
     switch (componentHint.kind) {
       case ComponentImportKind::ResourceDrop:
-        return callComponentResourceDrop(funcIndex, args);
+        return callComponentResourceDrop(funcIndex, bytecodeOffset, args);
       case ComponentImportKind::CanonLower:
         return callComponentCanonLower(funcIndex, componentHint.resultOutParam,
                                        bytecodeOffset, args);

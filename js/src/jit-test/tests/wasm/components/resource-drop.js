@@ -1,9 +1,13 @@
-// |jit-test| skip-if: !wasmComponentsEnabled()
+// |jit-test| skip-if: !wasmComponentsEnabled(); test-also=--wasm-compiler=optimizing
 
 // End-to-end `canon resource.drop` for an imported resource type: an `own<T>`
 // param lifted from JS allocates a handle in the instance's own handle table,
 // a core import wired to `canon resource.drop` releases it, and dropping a
 // stale or reserved index afterwards traps.
+//
+// This resource has no bound WebIDL interface, so every handle here is
+// Wrapped and always takes the slow (C++) path regardless of compiler tier;
+// see resource-drop-native.js for the Ion-inlined Native fast path.
 
 const component = new WebAssembly.Component(wasmTextToBinary(`
   (component

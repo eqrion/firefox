@@ -178,6 +178,13 @@ class WebIDLInterface : public js::AtomicRefCounted<WebIDLInterface> {
   const char* name() const { return name_.get(); }
   WebIDLInterface* parent() const { return parent_; }
 
+  // For JIT code calling `releaseNative_` directly. Safe to bake without a
+  // null check: hasNativeOps() is asserted true whenever a Native-repr
+  // resource handle referencing this interface is created.
+  static constexpr size_t offsetOfReleaseNative() {
+    return offsetof(WebIDLInterface, releaseNative_);
+  }
+
   // Whether this interface is `other` or (transitively) derives from it.
   bool isOrDerivedFrom(const WebIDLInterface* other) const;
 

@@ -1277,11 +1277,11 @@ bool wasm::FlattenType(const ComponentType& type, ValTypeVector* result) {
   return FlattenType(type, result, &hasStringsOrLists, &tooDeep, /*depth=*/0);
 }
 
-JSObject* ComponentResourceValue::reflectToJS(JSContext* cx) const {
-  if (isNative()) {
-    return nativeInterface()->reflect(cx, native());
+JSObject* ComponentResourceHandle::reflectToJS(JSContext* cx) const {
+  if (isNative) {
+    return nativeIface->reflect(cx, nativePtr);
   }
-  JS::Rooted<JSObject*> obj(cx, object());
+  JS::Rooted<JSObject*> obj(cx, wrappedObj);
   if (!JS_WrapObject(cx, &obj)) {
     return nullptr;
   }
@@ -4921,96 +4921,192 @@ UniqueChars wasm::ToString(ComponentSortIndex sortIndex) {
                      sortIndex.index);
 }
 
-bool ComponentHandleTable::reserve(
-    JSContext* cx, mozilla::Maybe<ComponentResourceHandle>** handle,
-    uint32_t* index) {
-  if (array_.empty() && !array_.append(mozilla::Nothing())) {
-    ReportOutOfMemory(cx);
-    return false;
+ComponentHandleTable::~ComponentHandleTable() {
+  for (uint32_t i = 0; i < length_; i++) {
+    Entry& entry = entries_[i];
+    if ((entry.flags & (Present | Native)) == (Present | Native)) {
+      entry.iface->releaseNative(entry.ptr);
+    }
   }
-  if (!free_.empty()) {
-    uint32_t i = free_.popCopy();
-    MOZ_ASSERT(array_[i].isNothing());
-    *handle = &array_[i];
-    *index = i;
-    return true;
+  js_free(entries_);
+  js_free(freeStack_);
+}
+
+static ComponentTypeKind KindFromFlags(uint32_t flags) {
+  return ComponentTypeKind((flags & ComponentHandleTable::KindMask) >>
+                           ComponentHandleTable::KindShift);
+}
+static uint32_t FlagsFromKind(ComponentTypeKind kind) {
+  return (uint32_t(kind) << ComponentHandleTable::KindShift) &
+         ComponentHandleTable::KindMask;
+}
+
+bool ComponentHandleTable::growEntries(JSContext* cx) {
+  uint32_t newCapacity = capacity_ == 0 ? 8 : capacity_ * 2;
+  if (newCapacity > MaxLength) {
+    newCapacity = MaxLength;
   }
-  if (array_.length() >= MaxLength) {
+  if (newCapacity <= capacity_) {
     JS_ReportErrorASCII(cx, "component resource handle table is full");
     return false;
   }
-  if (!array_.append(mozilla::Nothing())) {
+  Entry* newEntries = js_pod_realloc<Entry>(entries_, capacity_, newCapacity);
+  if (!newEntries) {
     ReportOutOfMemory(cx);
     return false;
   }
-  *handle = &array_.back();
-  *index = array_.length() - 1;
+  entries_ = newEntries;
+  capacity_ = newCapacity;
   return true;
 }
 
-bool ComponentHandleTable::add(JSContext* cx, ComponentResourceHandle&& handle,
-                               uint32_t* index) {
-  mozilla::Maybe<ComponentResourceHandle>* slot = nullptr;
-  if (!reserve(cx, &slot, index)) {
+bool ComponentHandleTable::pushFree(JSContext* cx, uint32_t index) {
+  if (freeLength_ == freeCapacity_) {
+    uint32_t newCapacity = freeCapacity_ == 0 ? 8 : freeCapacity_ * 2;
+    uint32_t* newStack =
+        js_pod_realloc<uint32_t>(freeStack_, freeCapacity_, newCapacity);
+    if (!newStack) {
+      ReportOutOfMemory(cx);
+      return false;
+    }
+    freeStack_ = newStack;
+    freeCapacity_ = newCapacity;
+  }
+  freeStack_[freeLength_] = index;
+  freeLength_++;
+  return true;
+}
+
+bool ComponentHandleTable::reserve(JSContext* cx, uint32_t* index) {
+  if (length_ == 0) {
+    // Index 0 is a reserved sentinel, never allocated.
+    if (!growEntries(cx)) {
+      return false;
+    }
+    if (!wrapped_.resize(1)) {
+      ReportOutOfMemory(cx);
+      return false;
+    }
+    entries_[0] = Entry();
+    length_ = 1;
+  }
+  if (freeLength_ > 0) {
+    freeLength_--;
+    uint32_t i = freeStack_[freeLength_];
+    MOZ_ASSERT(!(entries_[i].flags & Present));
+    *index = i;
+    return true;
+  }
+  if (length_ >= MaxLength) {
+    JS_ReportErrorASCII(cx, "component resource handle table is full");
     return false;
   }
-  *slot = mozilla::Some(std::move(handle));
+  if (length_ == capacity_ && !growEntries(cx)) {
+    return false;
+  }
+  if (!wrapped_.resize(length_ + 1)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  entries_[length_] = Entry();
+  *index = length_;
+  length_++;
   return true;
+}
+
+bool ComponentHandleTable::add(JSContext* cx,
+                               ComponentResourceTypeId resourceType, bool own,
+                               const ComponentResourceClassification& value,
+                               uint32_t* index) {
+  uint32_t i;
+  if (!reserve(cx, &i)) {
+    return false;
+  }
+  Entry& entry = entries_[i];
+  entry.flags = Present | (own ? Own : 0) | FlagsFromKind(resourceType.kind());
+  entry.numLends = 0;
+  entry.resourceTypeDef = resourceType.typeDef();
+  if (value.isNative) {
+    entry.flags |= Native;
+    entry.ptr = value.nativePtr;
+    entry.iface = value.nativeIface;
+    wrapped_[i] = nullptr;
+    value.nativeIface->addRefNative(value.nativePtr);
+  } else {
+    entry.ptr = nullptr;
+    entry.iface = nullptr;
+    wrapped_[i] = value.wrappedObj;
+  }
+  *index = i;
+  return true;
+}
+
+static void FillHandleView(const ComponentHandleTable::Entry& entry,
+                           JSObject* wrappedObj, ComponentResourceHandle* out) {
+  out->resourceType = ComponentResourceTypeId(KindFromFlags(entry.flags),
+                                              entry.resourceTypeDef);
+  out->own = entry.flags & ComponentHandleTable::Own;
+  out->numLends = entry.numLends;
+  out->isNative = entry.flags & ComponentHandleTable::Native;
+  out->nativePtr = entry.ptr;
+  out->nativeIface = entry.iface;
+  out->wrappedObj = wrappedObj;
 }
 
 bool ComponentHandleTable::get(JSContext* cx, uint32_t index,
-                               const ComponentResourceHandle** out) const {
-  if (index >= array_.length() || array_[index].isNothing()) {
+                               ComponentResourceHandle* out) const {
+  if (index >= length_ || !(entries_[index].flags & Present)) {
     JS_ReportErrorASCII(cx, "invalid component resource handle");
     return false;
   }
-  *out = array_[index].ptr();
+  FillHandleView(entries_[index], wrapped_[index], out);
   return true;
 }
 
-bool ComponentHandleTable::remove(
-    JSContext* cx, uint32_t index,
-    mozilla::Maybe<ComponentResourceHandle>* out) {
-  if (index >= array_.length() || array_[index].isNothing()) {
+bool ComponentHandleTable::remove(JSContext* cx, uint32_t index,
+                                  ComponentResourceHandle* out) {
+  if (index >= length_ || !(entries_[index].flags & Present)) {
     JS_ReportErrorASCII(cx, "invalid component resource handle");
     return false;
   }
-  *out = std::move(array_[index]);
-  if (!free_.append(index)) {
-    ReportOutOfMemory(cx);
-    return false;
-  }
-  return true;
+  FillHandleView(entries_[index], wrapped_[index], out);
+  entries_[index].flags = 0;
+  entries_[index].ptr = nullptr;
+  entries_[index].iface = nullptr;
+  wrapped_[index] = nullptr;
+  return pushFree(cx, index);
 }
 
 bool ComponentHandleTable::drop(JSContext* cx, uint32_t index,
                                 bool requireOwn) {
-  if (index >= array_.length() || array_[index].isNothing()) {
+  if (index >= length_ || !(entries_[index].flags & Present)) {
     JS_ReportErrorASCII(cx, "invalid component resource handle");
     return false;
   }
-  const mozilla::Maybe<ComponentResourceHandle>& handle = array_[index];
+  Entry& entry = entries_[index];
   // TODO: add this back
-  // if (handle->resourceType().kind() != kind ||
-  //     handle->resourceType().typeDef() != def) {
+  // if (KindFromFlags(entry.flags) != kind || entry.resourceTypeDef != def) {
   //   JS_ReportErrorASCII(cx, "component resource handle type mismatch");
   //   return false;
   // }
-  if (requireOwn && !handle->isOwn()) {
+  bool own = entry.flags & Own;
+  if (requireOwn && !own) {
     JS_ReportErrorASCII(cx, "component resource handle is a borrow");
     return false;
   }
-  if (handle->isOwn() && handle->numLends() != 0) {
+  if (entry.numLends != 0) {
     JS_ReportErrorASCII(cx,
                         "component resource handle still has active borrows");
     return false;
   }
-  array_[index].reset();
-  if (!free_.append(index)) {
-    ReportOutOfMemory(cx);
-    return false;
+  if (entry.flags & Native) {
+    entry.iface->releaseNative(entry.ptr);
   }
-  return true;
+  entry.flags = 0;
+  entry.ptr = nullptr;
+  entry.iface = nullptr;
+  wrapped_[index] = nullptr;
+  return pushFree(cx, index);
 }
 
 ComponentValue ComponentValue::makeBool(const ComponentType& type, bool b) {
@@ -5517,37 +5613,39 @@ bool js::wasm::ToCanonicalWebIDLValue(JSContext* cx,
           ct.kind() == ComponentTypeKind::Own ? ct.asOwn() : ct.asBorrow();
       JSObject* object;
       if (ct.kind() == ComponentTypeKind::Own) {
-        mozilla::Maybe<ComponentResourceHandle> handle;
-        if (!handles->remove(cx, index, &handle)) {
+        ComponentResourceHandle rawHandle;
+        if (!handles->remove(cx, index, &rawHandle)) {
           return false;
         }
-        if (handle->resourceType() != ComponentResourceTypeId(resourceType)) {
+        ComponentResourceHandleOwner handle(rawHandle);
+        if (handle->resourceType != ComponentResourceTypeId(resourceType)) {
           JS_ReportErrorASCII(cx, "component resource handle type mismatch");
           return false;
         }
-        if (!handle->isOwn()) {
+        if (!handle->own) {
           JS_ReportErrorASCII(cx,
                               "expected an owning component resource handle");
           return false;
         }
-        if (handle->numLends() != 0) {
+        if (handle->numLends != 0) {
           JS_ReportErrorASCII(
               cx, "component resource handle still has active borrows");
           return false;
         }
-        // Uses reflectToJS, not object(): a Native-repr handle has no stored
-        // JSObject* and must escape via its interface's reflect op instead.
-        object = handle->value().reflectToJS(cx);
+        // Uses reflectToJS, not the wrapped object directly: a Native-repr
+        // handle has no stored JSObject* and must escape via its interface's
+        // reflect op instead.
+        object = handle->reflectToJS(cx);
       } else {
-        const ComponentResourceHandle* handle;
+        ComponentResourceHandle handle;
         if (!handles->get(cx, index, &handle)) {
           return false;
         }
-        if (handle->resourceType() != ComponentResourceTypeId(resourceType)) {
+        if (handle.resourceType != ComponentResourceTypeId(resourceType)) {
           JS_ReportErrorASCII(cx, "component resource handle type mismatch");
           return false;
         }
-        object = handle->value().reflectToJS(cx);
+        object = handle.reflectToJS(cx);
       }
       if (!object) {
         JS_ReportErrorASCII(
@@ -5812,13 +5910,11 @@ bool js::wasm::FromCanonicalWebIDLValue(JSContext* cx,
       // Uses same-compartment identity as a same-origin proxy stand-in for this
       // prototype; real origin/principal checks are out of scope.
       bool isSameOrigin = obj->compartment() == cx->compartment();
-      ComponentResourceValue resourceValue =
-          iface ? AdoptJSObject(obj, isSameOrigin, iface)
-                : ComponentResourceValue(obj);
-      ComponentResourceHandle handle(ComponentResourceTypeId(resourceType), own,
-                                     std::move(resourceValue));
+      ComponentResourceClassification classification =
+          ClassifyResourceObject(obj, isSameOrigin, iface);
       uint32_t index;
-      if (!handles->add(cx, std::move(handle), &index)) {
+      if (!handles->add(cx, ComponentResourceTypeId(resourceType), own,
+                        classification, &index)) {
         return false;
       }
       *out = ComponentValue::makeUnsigned(targetType, index);
@@ -7246,8 +7342,8 @@ bool js::wasm::BuildResultStep(JSContext* cx,
     // the handle table. A resource with no WebIDL interface canonicalizes to
     // the generic Object type instead of Interface (see CanonicalWebIDLType's
     // Own/Borrow case), but still needs the same handle-table round-trip;
-    // WriteCoercedInterface already falls back to a plain
-    // ComponentResourceValue wrapper when expectedInterface is null.
+    // WriteCoercedInterface already falls back to a plain Wrapped handle
+    // when expectedInterface is null.
     bool hasInterface = dstKind == JS::WebIDLTypeKind::Interface;
     out->kind = StepKind::Interface;
     out->expectedInterface =
@@ -8393,33 +8489,34 @@ bool JS::ReadCoercedInterface(WebIDLContext& ctx,
   }
   JSObject* object;
   if (step.resourceOwn) {
-    mozilla::Maybe<ComponentResourceHandle> handle;
-    if (!handles->remove(ctx.cx(), index, &handle)) {
+    ComponentResourceHandle rawHandle;
+    if (!handles->remove(ctx.cx(), index, &rawHandle)) {
       return false;
     }
-    if (!handle ||
-        handle->resourceType() !=
+    ComponentResourceHandleOwner handle(rawHandle);
+    if (handle->resourceType !=
             ComponentResourceTypeId(step.resourceTypeKind,
                                     step.resourceTypeDef.get()) ||
-        !handle->isOwn() || handle->numLends() != 0) {
+        !handle->own || handle->numLends != 0) {
       return ReportComponentTrap(ctx.cx(),
                                  "component resource handle mismatch");
     }
-    // Uses reflectToJS, not object(): a Native-repr handle has no stored
-    // JSObject* and must escape via its interface's reflect op instead.
-    object = handle->value().reflectToJS(ctx.cx());
+    // Uses reflectToJS, not the wrapped object directly: a Native-repr
+    // handle has no stored JSObject* and must escape via its interface's
+    // reflect op instead.
+    object = handle->reflectToJS(ctx.cx());
   } else {
-    const ComponentResourceHandle* handle;
+    ComponentResourceHandle handle;
     if (!handles->get(ctx.cx(), index, &handle)) {
       return false;
     }
-    if (!handle || handle->resourceType() !=
-                       ComponentResourceTypeId(step.resourceTypeKind,
-                                               step.resourceTypeDef.get())) {
+    if (handle.resourceType !=
+        ComponentResourceTypeId(step.resourceTypeKind,
+                                step.resourceTypeDef.get())) {
       return ReportComponentTrap(ctx.cx(),
                                  "component resource handle type mismatch");
     }
-    object = handle->value().reflectToJS(ctx.cx());
+    object = handle.reflectToJS(ctx.cx());
   }
   if (!object) {
     return ReportComponentTrap(ctx.cx(),
@@ -8441,42 +8538,33 @@ bool JS::ReadCoercedInterfaceNative(WebIDLContext& ctx,
     return false;
   }
   ComponentHandleTable* handles = ctx.handles();
-  auto resolveNative = [&](const ComponentResourceValue& value) -> void* {
-    if (value.isNative()) {
-      return value.native();
-    }
-    void* unwrapped = step.expectedInterface
-                          ? step.expectedInterface->unwrapNative(value.object())
-                          : nullptr;
-    return unwrapped;
-  };
   void* native;
   if (step.resourceOwn) {
-    mozilla::Maybe<ComponentResourceHandle> handle;
-    if (!handles->remove(ctx.cx(), index, &handle)) {
+    ComponentResourceHandle rawHandle;
+    if (!handles->remove(ctx.cx(), index, &rawHandle)) {
       return false;
     }
-    if (!handle ||
-        handle->resourceType() !=
+    ComponentResourceHandleOwner handle(rawHandle);
+    if (handle->resourceType !=
             ComponentResourceTypeId(step.resourceTypeKind,
                                     step.resourceTypeDef.get()) ||
-        !handle->isOwn() || handle->numLends() != 0) {
+        !handle->own || handle->numLends != 0) {
       return ReportComponentTrap(ctx.cx(),
                                  "component resource handle mismatch");
     }
-    native = resolveNative(handle->value());
+    native = handle->resolveNative(step.expectedInterface);
   } else {
-    const ComponentResourceHandle* handle;
+    ComponentResourceHandle handle;
     if (!handles->get(ctx.cx(), index, &handle)) {
       return false;
     }
-    if (!handle || handle->resourceType() !=
-                       ComponentResourceTypeId(step.resourceTypeKind,
-                                               step.resourceTypeDef.get())) {
+    if (handle.resourceType !=
+        ComponentResourceTypeId(step.resourceTypeKind,
+                                step.resourceTypeDef.get())) {
       return ReportComponentTrap(ctx.cx(),
                                  "component resource handle type mismatch");
     }
-    native = resolveNative(handle->value());
+    native = handle.resolveNative(step.expectedInterface);
   }
   // Don't use this if there is no native implementation
   MOZ_RELEASE_ASSERT(native);
@@ -8685,20 +8773,16 @@ bool JS::WriteCoercedInterface(WebIDLContext& ctx, const WebIDLCoerceStep& step,
     return ReportComponentTrap(ctx.cx(),
                                "an own/borrow handle without a handle table");
   }
+  bool isSameOrigin = object->compartment() == ctx.cx()->compartment();
+  ComponentResourceClassification classification =
+      ClassifyResourceObject(object, isSameOrigin, step.expectedInterface);
   uint32_t index;
-  mozilla::Maybe<ComponentResourceHandle>* handle = nullptr;
-  if (!handles->reserve(ctx.cx(), &handle, &index)) {
+  if (!handles->add(ctx.cx(),
+                    ComponentResourceTypeId(step.resourceTypeKind,
+                                            step.resourceTypeDef.get()),
+                    step.resourceOwn, classification, &index)) {
     return false;
   }
-  bool isSameOrigin = object->compartment() == ctx.cx()->compartment();
-  handle->emplace(ComponentResourceHandle(
-      ComponentResourceTypeId(step.resourceTypeKind,
-                              step.resourceTypeDef.get()),
-      step.resourceOwn,
-      ComponentResourceValue(
-          step.expectedInterface
-              ? AdoptJSObject(object, isSameOrigin, step.expectedInterface)
-              : ComponentResourceValue(object))));
   return WriteRawInt(ctx, step, memBase, index, 4, result);
 }
 
@@ -8709,16 +8793,16 @@ bool JS::WriteCoercedInterfaceNative(WebIDLContext& ctx,
   MOZ_ASSERT(step.kind == StepKind::Interface);
   MOZ_ASSERT(step.expectedInterface && step.expectedInterface->hasNativeOps());
   ComponentHandleTable* handles = ctx.handles();
+  ComponentResourceClassification classification{/* isNative = */ true, native,
+                                                 step.expectedInterface,
+                                                 /* wrappedObj = */ nullptr};
   uint32_t index;
-  mozilla::Maybe<ComponentResourceHandle>* slot = nullptr;
-  if (!handles->reserve(ctx.cx(), &slot, &index)) {
+  if (!handles->add(ctx.cx(),
+                    ComponentResourceTypeId(step.resourceTypeKind,
+                                            step.resourceTypeDef.get()),
+                    step.resourceOwn, classification, &index)) {
     return false;
   }
-  slot->emplace(ComponentResourceHandle(
-      ComponentResourceTypeId(step.resourceTypeKind,
-                              step.resourceTypeDef.get()),
-      step.resourceOwn,
-      ComponentResourceValue(step.expectedInterface, native)));
   return WriteRawUInt32(ctx, step, memBase, index, result);
 }
 

@@ -78,9 +78,10 @@ BEGIN_TEST(testWebIDLResourceRepr_interfaceOps) {
 }
 END_TEST(testWebIDLResourceRepr_interfaceOps)
 
-// ComponentResourceValue's dual repr: getNativeForCall/reflectToJS dispatch
-// correctly for each, and `Wrapped`'s reflectToJS preserves identity (no
-// fresh object each time) while `Native`'s calls the interface's op.
+// ComponentHandleTable's dual repr, exercised through add/get/drop (the real
+// insertion/release path, not just a standalone value wrapper): a Native
+// entry takes a ref on add and releases it exactly once on drop; a Wrapped
+// entry round-trips the plain object with no ref-counting involved.
 BEGIN_TEST(testWebIDLResourceRepr_dualRepr) {
   RefPtr<JS::WebIDLInterface> iface = js_new<JS::WebIDLInterface>(
       DuplicateString("R"), nullptr, FakeNative_addRef, FakeNative_release,
@@ -90,30 +91,49 @@ BEGIN_TEST(testWebIDLResourceRepr_dualRepr) {
   CHECK(native);
 
   {
-    ComponentResourceValue v(iface.get(), native);
-    CHECK(v.repr() == ComponentResourceValue::Repr::Native);
-    CHECK(v.isNative());
-    CHECK(v.native() == native);
-    CHECK(v.nativeInterface() == iface.get());
-    CHECK(v.getNativeForCall() == native);
+    ComponentHandleTable table;
+    ComponentResourceClassification classification{true, native, iface.get(),
+                                                   nullptr};
+    uint32_t index;
+    CHECK(table.add(cx, ComponentResourceTypeId(), /* own */ true,
+                    classification, &index));
+    CHECK(native->refcount == 2);  // the table now holds a ref
 
-    JS::RootedObject reflected(cx, v.reflectToJS(cx));
+    ComponentResourceHandle handle;
+    CHECK(table.get(cx, index, &handle));
+    CHECK(handle.isNative);
+    CHECK(handle.nativePtr == native);
+    CHECK(handle.nativeIface == iface.get());
+    CHECK(handle.resolveNative(nullptr) == native);
+
+    JS::RootedObject reflected(cx, handle.reflectToJS(cx));
     CHECK(reflected);
     RootedValue tagVal(cx);
     CHECK(JS_GetProperty(cx, reflected, "tag", &tagVal));
     CHECK(tagVal.isInt32());
     CHECK(tagVal.toInt32() == 7);
+
+    CHECK(table.drop(cx, index, /* requireOwn */ false));
+    CHECK(native->refcount == 1);  // drop released the table's ref exactly once
   }
 
   {
     JS::RootedObject obj(cx, JS_NewPlainObject(cx));
     CHECK(obj);
-    ComponentResourceValue v(obj);
-    CHECK(v.repr() == ComponentResourceValue::Repr::Wrapped);
-    CHECK(!v.isNative());
-    CHECK(!v.getNativeForCall());
-    CHECK(v.reflectToJS(cx) == obj);
-    CHECK(v.object() == obj);
+    ComponentHandleTable table;
+    ComponentResourceClassification classification{false, nullptr, nullptr,
+                                                   obj};
+    uint32_t index;
+    CHECK(table.add(cx, ComponentResourceTypeId(), /* own */ true,
+                    classification, &index));
+
+    ComponentResourceHandle handle;
+    CHECK(table.get(cx, index, &handle));
+    CHECK(!handle.isNative);
+    CHECK(handle.wrappedObj == obj);
+    CHECK(handle.reflectToJS(cx) == obj);
+
+    CHECK(table.drop(cx, index, /* requireOwn */ false));
   }
 
   FakeNative_release(native);
@@ -121,9 +141,10 @@ BEGIN_TEST(testWebIDLResourceRepr_dualRepr) {
 }
 END_TEST(testWebIDLResourceRepr_dualRepr)
 
-// AdoptJSObject (the boundary classifier): same-origin + native ops +
-// a successful unwrap -> Native; any of those failing -> Wrapped.
-BEGIN_TEST(testWebIDLResourceRepr_adoptJSObject) {
+// ClassifyResourceObject (the boundary classifier): same-origin + native ops
+// + a successful unwrap -> Native; any of those failing -> Wrapped. Doesn't
+// take a ref itself - that's ComponentHandleTable::add's job on insertion.
+BEGIN_TEST(testWebIDLResourceRepr_classifyResourceObject) {
   RefPtr<JS::WebIDLInterface> withOps = js_new<JS::WebIDLInterface>(
       DuplicateString("WithOps"), nullptr, FakeNative_addRef,
       FakeNative_release, FakeNative_reflect, GetAdoptTestNative);
@@ -142,33 +163,33 @@ BEGIN_TEST(testWebIDLResourceRepr_adoptJSObject) {
   CHECK(gAdoptTestNative);
 
   {
-    ComponentResourceValue v =
-        AdoptJSObject(obj, /* isSameOrigin */ true, withOps.get());
-    CHECK(v.repr() == ComponentResourceValue::Repr::Native);
-    CHECK(v.native() == gAdoptTestNative);
+    ComponentResourceClassification c =
+        ClassifyResourceObject(obj, /* isSameOrigin */ true, withOps.get());
+    CHECK(c.isNative);
+    CHECK(c.nativePtr == gAdoptTestNative);
   }
   {
-    ComponentResourceValue v =
-        AdoptJSObject(obj, /* isSameOrigin */ false, withOps.get());
-    CHECK(v.repr() == ComponentResourceValue::Repr::Wrapped);
-    CHECK(v.object() == obj);
+    ComponentResourceClassification c =
+        ClassifyResourceObject(obj, /* isSameOrigin */ false, withOps.get());
+    CHECK(!c.isNative);
+    CHECK(c.wrappedObj == obj);
   }
   {
-    ComponentResourceValue v =
-        AdoptJSObject(obj, /* isSameOrigin */ true, noOps.get());
-    CHECK(v.repr() == ComponentResourceValue::Repr::Wrapped);
+    ComponentResourceClassification c =
+        ClassifyResourceObject(obj, /* isSameOrigin */ true, noOps.get());
+    CHECK(!c.isNative);
   }
   {
-    ComponentResourceValue v =
-        AdoptJSObject(obj, /* isSameOrigin */ true, failingUnwrap.get());
-    CHECK(v.repr() == ComponentResourceValue::Repr::Wrapped);
+    ComponentResourceClassification c = ClassifyResourceObject(
+        obj, /* isSameOrigin */ true, failingUnwrap.get());
+    CHECK(!c.isNative);
   }
 
   FakeNative_release(gAdoptTestNative);
   gAdoptTestNative = nullptr;
   return true;
 }
-END_TEST(testWebIDLResourceRepr_adoptJSObject)
+END_TEST(testWebIDLResourceRepr_classifyResourceObject)
 
 // A `reflect`-less interface: reflectToJS returns null rather than
 // crashing - the embedder must keep such a resource Wrapped.

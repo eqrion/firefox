@@ -20,6 +20,8 @@
 #  include "mozilla/Variant.h"
 #  include "mozilla/Vector.h"
 
+#  include <type_traits>
+
 #  include "gc/Barrier.h"
 #  include "jit/IonTypes.h"
 #  include "js/CallArgs.h"
@@ -358,103 +360,6 @@ class ComponentTypeDef : public AtomicRefCounted<ComponentTypeDef> {
                                 const ComponentTypeDef& b);
 };
 
-// A resource's runtime representation: either a plain WebIDL `Object`
-// (a `JSObject*` reflector/CCW/proxy - `Wrapped`), or a bare native pointer
-// (`Native`) for the fast, same-origin-only case. Move-only: a `Native`
-// value owns one strong ref on its native pointer (taken via its
-// interface's `addRefNative` on construction, released via `releaseNative`
-// on destruction or reassignment), for as long as it lives - typically
-// inside a ComponentHandleTable entry, or a caller's local while extracting
-// it from one (see ReadCoercedInterfaceNative for why a caller reading an
-// `own` handle must take its own ref before that local goes out of scope).
-class ComponentResourceValue {
- public:
-  enum class Repr : uint8_t { Native, Wrapped };
-
- private:
-  // Holds a strong ref on `ptr` (taken via `iface->addRefNative` on
-  // construction, released via `iface->releaseNative` on destruction or
-  // reassignment), for as long as it lives.
-  struct NativeRepr {
-    void* ptr = nullptr;
-    JS::WebIDLInterface* iface = nullptr;
-  };
-
-  // A Variant rather than plain fields so that the common `Native` case never
-  // constructs, moves, or destroys the `JS::Heap<JSObject*>` alternative -
-  // avoiding its GC write barriers entirely whenever no wrapped object is
-  // involved (the fast, same-origin-only path this class exists for).
-  mozilla::Variant<NativeRepr, JS::Heap<JSObject*>> repr_;
-
-  void releaseIfNative() {
-    if (repr_.is<NativeRepr>()) {
-      NativeRepr& n = repr_.as<NativeRepr>();
-      if (n.ptr) {
-        n.iface->releaseNative(n.ptr);
-      }
-    }
-  }
-
- public:
-  explicit ComponentResourceValue(JSObject* object)
-      : repr_(JS::Heap<JSObject*>(object)) {}
-
-  // `iface` must have native ops (WebIDLInterface::hasNativeOps()).
-  ComponentResourceValue(JS::WebIDLInterface* iface, void* native)
-      : repr_(NativeRepr{native, iface}) {
-    MOZ_ASSERT(iface && iface->hasNativeOps());
-    iface->addRefNative(native);
-  }
-
-  ComponentResourceValue(const ComponentResourceValue&) = delete;
-  ComponentResourceValue& operator=(const ComponentResourceValue&) = delete;
-
-  ComponentResourceValue(ComponentResourceValue&& other) noexcept
-      : repr_(std::move(other.repr_)) {
-    if (repr_.is<NativeRepr>()) {
-      other.repr_.as<NativeRepr>().ptr = nullptr;
-    }
-  }
-  ComponentResourceValue& operator=(ComponentResourceValue&& other) noexcept {
-    if (this != &other) {
-      releaseIfNative();
-      repr_ = std::move(other.repr_);
-      if (repr_.is<NativeRepr>()) {
-        other.repr_.as<NativeRepr>().ptr = nullptr;
-      }
-    }
-    return *this;
-  }
-
-  ~ComponentResourceValue() { releaseIfNative(); }
-
-  Repr repr() const {
-    return repr_.is<NativeRepr>() ? Repr::Native : Repr::Wrapped;
-  }
-  bool isNative() const { return repr_.is<NativeRepr>(); }
-
-  JSObject* object() const { return repr_.as<JS::Heap<JSObject*>>(); }
-  void* native() const { return repr_.as<NativeRepr>().ptr; }
-  JS::WebIDLInterface* nativeInterface() const {
-    return repr_.as<NativeRepr>().iface;
-  }
-
-  void* getNativeForCall() const {
-    return repr_.is<NativeRepr>() ? repr_.as<NativeRepr>().ptr : nullptr;
-  }
-
-  // Defined out of line in WasmComponent.cpp: needs JS_WrapObject, and
-  // jsapi.h isn't includable from this header.
-  JSObject* reflectToJS(JSContext* cx) const;
-
-  void trace(JSTracer* trc) {
-    if (repr_.is<JS::Heap<JSObject*>>()) {
-      JS::TraceEdge(trc, &repr_.as<JS::Heap<JSObject*>>(),
-                    "ComponentResourceValue wrapper");
-    }
-  }
-};
-
 // A non-owning (kind, typeDef) identity for a resource type - cheap to copy,
 // store, and compare, unlike ComponentType, since it never touches
 // ComponentTypeDef's atomic refcount. Safe wherever the type's owning
@@ -476,6 +381,9 @@ class ComponentResourceTypeId {
   explicit ComponentResourceTypeId(const ComponentType& type)
       : kind_(type.kind()), typeDef_(type.rawTypeDef()) {}
 
+  ComponentTypeKind kind() const { return kind_; }
+  ComponentTypeDef* typeDef() const { return typeDef_; }
+
   bool operator==(const ComponentResourceTypeId& other) const {
     return kind_ == other.kind_ && typeDef_ == other.typeDef_;
   }
@@ -484,55 +392,192 @@ class ComponentResourceTypeId {
   }
 };
 
-// A single entry in a ComponentHandleTable: the spec's `ResourceHandle`.
-// `own_` distinguishes an owning handle from a borrowed one; `numLends_`
-// must be zero for an `own` handle to be lifted or dropped.
-class ComponentResourceHandle {
-  ComponentResourceTypeId resourceType_;
-  bool own_;
-  uint32_t numLends_ = 0;
-  ComponentResourceValue value_;
+// Classifies an incoming JS object as `Native` (a bare pointer, unwrapped via
+// its interface, for the fast same-origin case) or `Wrapped` (a plain object
+// reference: the fallback for cross-origin values, or when there's no way to
+// unwrap to a bare pointer). Doesn't take any ref; ComponentHandleTable does
+// that itself when the classification is stored.
+struct ComponentResourceClassification {
+  bool isNative;
+  void* nativePtr;                   // valid iff isNative
+  JS::WebIDLInterface* nativeIface;  // valid iff isNative
+  JSObject* wrappedObj;              // valid iff !isNative
+};
+
+inline ComponentResourceClassification ClassifyResourceObject(
+    JSObject* obj, bool isSameOrigin, JS::WebIDLInterface* iface) {
+  if (iface && isSameOrigin && iface->hasNativeOps() &&
+      iface->canUnwrapNative()) {
+    if (void* native = iface->unwrapNative(obj)) {
+      return {true, native, iface, nullptr};
+    }
+  }
+  JSObject* wrapped = (iface && isSameOrigin) ? UncheckedUnwrap(obj) : obj;
+  return {false, nullptr, nullptr, wrapped};
+}
+
+// A non-owning snapshot of a ComponentHandleTable entry: the spec's
+// `ResourceHandle`. `own` distinguishes an owning handle from a borrowed one;
+// `numLends` must be zero for an `own` handle to be lifted or dropped.
+// Trivially copyable - reading one (via ComponentHandleTable::get) never
+// changes the table's ownership of whatever ref it holds.
+// ComponentHandleTable::remove is the one operation that transfers that
+// ownership to the caller; use ComponentResourceHandleOwner, below, to hold
+// the result of a remove() so the ref is released exactly once regardless of
+// which return path is taken.
+struct ComponentResourceHandle {
+  ComponentResourceTypeId resourceType;
+  bool own = false;
+  uint32_t numLends = 0;
+  bool isNative = false;
+  void* nativePtr = nullptr;                   // valid iff isNative
+  JS::WebIDLInterface* nativeIface = nullptr;  // valid iff isNative
+  JSObject* wrappedObj = nullptr;              // valid iff !isNative
+
+  // Defined out of line in WasmComponent.cpp: needs JS_WrapObject, and
+  // jsapi.h isn't includable from this header.
+  JSObject* reflectToJS(JSContext* cx) const;
+
+  // Resolves to a native pointer either directly (isNative) or by unwrapping
+  // the wrapped object through `expectedInterface`, if given.
+  void* resolveNative(JS::WebIDLInterface* expectedInterface) const {
+    if (isNative) {
+      return nativePtr;
+    }
+    return expectedInterface ? expectedInterface->unwrapNative(wrappedObj)
+                             : nullptr;
+  }
+
+  // Releases the strong ref this handle holds, if any. Only meaningful after
+  // ComponentHandleTable::remove, which transfers that ownership here.
+  void release() const {
+    if (isNative) {
+      nativeIface->releaseNative(nativePtr);
+    }
+  }
+};
+
+// RAII wrapper for the result of ComponentHandleTable::remove: releases the
+// removed handle's ref (if any) exactly once, on every return path, the way
+// the pre-refactor ComponentResourceHandle's destructor used to.
+class ComponentResourceHandleOwner {
+  ComponentResourceHandle handle_;
 
  public:
-  ComponentResourceHandle(ComponentResourceTypeId resourceType, bool own,
-                          ComponentResourceValue value)
-      : resourceType_(resourceType), own_(own), value_(std::move(value)) {}
+  explicit ComponentResourceHandleOwner(const ComponentResourceHandle& handle)
+      : handle_(handle) {}
+  ComponentResourceHandleOwner(const ComponentResourceHandleOwner&) = delete;
+  ComponentResourceHandleOwner& operator=(const ComponentResourceHandleOwner&) =
+      delete;
+  ~ComponentResourceHandleOwner() { handle_.release(); }
 
-  const ComponentResourceTypeId& resourceType() const { return resourceType_; }
-  bool isOwn() const { return own_; }
-  uint32_t numLends() const { return numLends_; }
-  const ComponentResourceValue& value() const { return value_; }
-
-  void trace(JSTracer* trc) { value_.trace(trc); }
+  const ComponentResourceHandle* operator->() const { return &handle_; }
+  const ComponentResourceHandle& get() const { return handle_; }
 };
 
 // A table of resource handles, mirroring the component model spec's generic
 // `Table`. Index 0 is reserved as a sentinel and never allocated.
+//
+// Storage is a hand-rolled, trivially-copyable Entry array (plus a parallel
+// free-index stack) rather than mozilla::Vector<Maybe<...>>, so that JIT code
+// inlining resource.drop can read the table's geometry and an entry's fields
+// through static, self-owned offset accessors instead of reverse-engineering
+// Vector/Maybe/Variant layout. Entries move on growth: JIT code must load
+// `entries_`/`freeStack_` fresh on every access, never bake them.
 class ComponentHandleTable {
-  mozilla::Vector<mozilla::Maybe<ComponentResourceHandle>, 0, SystemAllocPolicy>
-      array_;
-  mozilla::Vector<uint32_t, 0, SystemAllocPolicy> free_;
+ public:
+  enum : uint32_t {
+    Present = 1u << 0,
+    Own = 1u << 1,
+    // Set iff the entry's value is a native pointer (`ptr`/`iface` valid);
+    // else the value is the JSObject* at the same index in `wrapped_`.
+    Native = 1u << 2,
+  };
+  static constexpr uint32_t KindShift = 8;
+  static constexpr uint32_t KindMask = 0xffu << KindShift;
 
-  static constexpr uint32_t MaxLength = (1u << 28) - 1;
+  // A single table entry. Trivially copyable: grown via js_pod_realloc and
+  // moved with memmove, never via element-wise construction. Does not itself
+  // hold a JSObject* - Wrapped values live in the table's parallel `wrapped_`
+  // array, so this struct (the one the JIT touches) never needs a GC barrier.
+  struct Entry {
+    uint32_t flags = 0;
+    uint32_t numLends = 0;
+    void* ptr = nullptr;                   // valid iff Native
+    JS::WebIDLInterface* iface = nullptr;  // valid iff Native
+    ComponentTypeDef* resourceTypeDef = nullptr;
+
+    static constexpr size_t offsetOfFlags() { return offsetof(Entry, flags); }
+    static constexpr size_t offsetOfNumLends() {
+      return offsetof(Entry, numLends);
+    }
+    static constexpr size_t offsetOfPtr() { return offsetof(Entry, ptr); }
+    static constexpr size_t offsetOfIface() { return offsetof(Entry, iface); }
+  };
+  static_assert(std::is_trivially_copyable_v<Entry>);
+  // MaxLength, below, assumes this fits comfortably in the JIT's Int32
+  // `index * sizeof(Entry)` address computation - grow MaxLength's safety
+  // margin if this ever grows past 32.
+  static_assert(sizeof(Entry) <= 32);
+
+ private:
+  Entry* entries_ = nullptr;
+  uint32_t length_ = 0;
+  uint32_t capacity_ = 0;
+  uint32_t* freeStack_ = nullptr;
+  uint32_t freeLength_ = 0;
+  uint32_t freeCapacity_ = 0;
+  // Wrapped handles' JSObject*s, 1:1 with entries_ by index (same length,
+  // grown in lockstep). Kept out of Entry so the JIT-visible entry stays POD;
+  // wrapped handles are the cold, non-native-fast-path case.
+  mozilla::Vector<JS::Heap<JSObject*>, 0, SystemAllocPolicy> wrapped_;
+
+  // Capped well below the point where `index * sizeof(Entry)` (computed in
+  // Int32 by the JIT's inlined resource.drop fast path) could overflow: at
+  // 32 bytes/entry, 2^20 entries is a 32 MiB table, orders of magnitude past
+  // any real workload, while keeping the product under 2^31.
+  static constexpr uint32_t MaxLength = 1u << 20;
+
+  [[nodiscard]] bool growEntries(JSContext* cx);
+  [[nodiscard]] bool pushFree(JSContext* cx, uint32_t index);
+  [[nodiscard]] bool reserve(JSContext* cx, uint32_t* index);
 
  public:
   ComponentHandleTable() = default;
+  ~ComponentHandleTable();
 
-  [[nodiscard]] bool add(JSContext* cx, ComponentResourceHandle&& handle,
+  static constexpr size_t offsetOfEntries() {
+    return offsetof(ComponentHandleTable, entries_);
+  }
+  static constexpr size_t offsetOfLength() {
+    return offsetof(ComponentHandleTable, length_);
+  }
+  static constexpr size_t offsetOfFreeStack() {
+    return offsetof(ComponentHandleTable, freeStack_);
+  }
+  static constexpr size_t offsetOfFreeLength() {
+    return offsetof(ComponentHandleTable, freeLength_);
+  }
+  static constexpr size_t offsetOfFreeCapacity() {
+    return offsetof(ComponentHandleTable, freeCapacity_);
+  }
+
+  [[nodiscard]] bool add(JSContext* cx, ComponentResourceTypeId resourceType,
+                         bool own, const ComponentResourceClassification& value,
                          uint32_t* index);
-  [[nodiscard]] bool reserve(JSContext* cx,
-                             mozilla::Maybe<ComponentResourceHandle>** handle,
-                             uint32_t* index);
   [[nodiscard]] bool get(JSContext* cx, uint32_t index,
-                         const ComponentResourceHandle** out) const;
+                         ComponentResourceHandle* out) const;
+  // Marks `index` free and transfers ownership of any strong ref it holds to
+  // `out`; the caller must call out->release() once done with it (see
+  // ComponentResourceHandle's comment).
   [[nodiscard]] bool remove(JSContext* cx, uint32_t index,
-                            mozilla::Maybe<ComponentResourceHandle>* out);
+                            ComponentResourceHandle* out);
   [[nodiscard]] bool drop(JSContext* cx, uint32_t index, bool requireOwn);
 
   size_t count() const {
     size_t n = 0;
-    for (const auto& entry : array_) {
-      if (entry) {
+    for (uint32_t i = 0; i < length_; i++) {
+      if (entries_[i].flags & Present) {
         n++;
       }
     }
@@ -540,27 +585,13 @@ class ComponentHandleTable {
   }
 
   void trace(JSTracer* trc) {
-    for (auto& entry : array_) {
-      if (entry) {
-        entry->trace(trc);
+    for (auto& obj : wrapped_) {
+      if (obj) {
+        JS::TraceEdge(trc, &obj, "ComponentHandleTable wrapped resource");
       }
     }
   }
 };
-
-// Classifies an incoming JS object as `Native` (fast, same-origin only) or
-// `Wrapped` (the fallback for cross-origin values, or when there's no way to
-// unwrap to a bare pointer).
-inline ComponentResourceValue AdoptJSObject(JSObject* obj, bool isSameOrigin,
-                                            JS::WebIDLInterface* iface) {
-  if (isSameOrigin && iface && iface->hasNativeOps() &&
-      iface->canUnwrapNative()) {
-    if (void* native = iface->unwrapNative(obj)) {
-      return ComponentResourceValue(iface, native);
-    }
-  }
-  return ComponentResourceValue(isSameOrigin ? UncheckedUnwrap(obj) : obj);
-}
 
 class ComponentValue;
 class ComponentValueData;
@@ -1759,6 +1790,9 @@ class ComponentInstance {
   }
 
   ComponentHandleTable& handles() { return handles_; }
+  static constexpr size_t offsetOfHandles() {
+    return offsetof(ComponentInstance, handles_);
+  }
 
   // Resolves a `coreMemories()`/`coreFuncs()` index (as referenced by a
   // ComponentCanonOpts memory/realloc/postReturn index) to the runtime JS
