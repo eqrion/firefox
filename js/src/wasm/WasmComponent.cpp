@@ -3885,18 +3885,6 @@ static JSFunction* BuildLoweredJSCoreFunc(
   return 0;
 }
 
-/* static */ int32_t Instance::componentCanonLowerCall(Instance* instance,
-                                                       int64_t closure,
-                                                       int32_t resultMemBase) {
-  auto* nativeClosure =
-      reinterpret_cast<LoweredNativeClosure*>(uintptr_t(closure));
-  bool ok = nativeClosure->entry(&nativeClosure->adapter, &nativeClosure->ctx,
-                                 nativeClosure->paramsScratch.get(),
-                                 uint32_t(resultMemBase),
-                                 nativeClosure->resultsScratch.get());
-  return ok ? 0 : -1;
-}
-
 // JIT-compiles a wasm stub with `funcTypeDef`'s shape (the imported
 // resource's `resource.drop` signature: a single i32 handle index, no
 // results) whose entire body is a `global.get` of `componentInstance`

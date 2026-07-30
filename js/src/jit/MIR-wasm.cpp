@@ -778,7 +778,9 @@ MWasmCallCatchable* MWasmCallCatchable::New(
   call->setSuccessor(FallthroughBranchIndex, fallthroughBlock);
   call->setSuccessor(PrePadBranchIndex, prePadBlock);
 
-  MOZ_ASSERT_IF(callee.isTable() || callee.isFuncRef(), tableAddressOrRef);
+  MOZ_ASSERT_IF(callee.isTable() || callee.isFuncRef() ||
+                    callee.isNativeFuncPtr(),
+                tableAddressOrRef);
   if (!call->initWithArgs(alloc, call, args, tableAddressOrRef)) {
     return nullptr;
   }
@@ -807,6 +809,25 @@ MWasmCallCatchable* MWasmCallCatchable::NewBuiltinInstanceMethodCall(
   return call;
 }
 
+MWasmCallCatchable* MWasmCallCatchable::NewNativeFuncPtrCall(
+    TempAllocator& alloc, const wasm::CallSiteDesc& desc,
+    wasm::FailureMode failureMode, wasm::Trap failureTrap, const Args& args,
+    uint32_t stackArgAreaSizeUnaligned, uint32_t tryNoteIndex,
+    MBasicBlock* fallthroughBlock, MBasicBlock* prePadBlock,
+    MDefinition* calleePtr) {
+  auto callee = wasm::CalleeDesc::nativeFuncPtr();
+  MWasmCallCatchable* call = MWasmCallCatchable::New(
+      alloc, desc, callee, args, stackArgAreaSizeUnaligned, tryNoteIndex,
+      fallthroughBlock, prePadBlock, calleePtr);
+  if (!call) {
+    return nullptr;
+  }
+
+  call->builtinMethodFailureMode_ = failureMode;
+  call->builtinMethodFailureTrap_ = failureTrap;
+  return call;
+}
+
 MWasmCallUncatchable* MWasmCallUncatchable::New(
     TempAllocator& alloc, const wasm::CallSiteDesc& desc,
     const wasm::CalleeDesc& callee, const Args& args,
@@ -814,7 +835,9 @@ MWasmCallUncatchable* MWasmCallUncatchable::New(
   MWasmCallUncatchable* call =
       new (alloc) MWasmCallUncatchable(desc, callee, stackArgAreaSizeUnaligned);
 
-  MOZ_ASSERT_IF(callee.isTable() || callee.isFuncRef(), tableAddressOrRef);
+  MOZ_ASSERT_IF(callee.isTable() || callee.isFuncRef() ||
+                    callee.isNativeFuncPtr(),
+                tableAddressOrRef);
   if (!call->initWithArgs(alloc, call, args, tableAddressOrRef)) {
     return nullptr;
   }
@@ -836,6 +859,22 @@ MWasmCallUncatchable* MWasmCallUncatchable::NewBuiltinInstanceMethodCall(
 
   MOZ_ASSERT(instanceArg != ABIArg());
   call->instanceArg_ = instanceArg;
+  call->builtinMethodFailureMode_ = failureMode;
+  call->builtinMethodFailureTrap_ = failureTrap;
+  return call;
+}
+
+MWasmCallUncatchable* MWasmCallUncatchable::NewNativeFuncPtrCall(
+    TempAllocator& alloc, const wasm::CallSiteDesc& desc,
+    wasm::FailureMode failureMode, wasm::Trap failureTrap, const Args& args,
+    uint32_t stackArgAreaSizeUnaligned, MDefinition* calleePtr) {
+  auto callee = wasm::CalleeDesc::nativeFuncPtr();
+  MWasmCallUncatchable* call = MWasmCallUncatchable::New(
+      alloc, desc, callee, args, stackArgAreaSizeUnaligned, calleePtr);
+  if (!call) {
+    return nullptr;
+  }
+
   call->builtinMethodFailureMode_ = failureMode;
   call->builtinMethodFailureTrap_ = failureTrap;
   return call;

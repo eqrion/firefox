@@ -38,28 +38,6 @@
   fail_mode: FailOnNegI32
   uses_memory: false
 
-# component_canon_lower_call(closure: i64, resultMemBase: i32)
-#  Calls through the LoweredNativeClosure pointed to by 'closure' (its entry,
-#  adapter, ctx, paramsScratch and resultsScratch), passing 'resultMemBase'.
-#  Ion-only trampoline for inlining `canon lower` at an import's call site
-#  (see FunctionCompiler::callComponentCanonLower): Ion has no MIR-level
-#  mechanism for an indirect call through a runtime-loaded native (System-ABI)
-#  function pointer, so the indirect call itself is pushed into this ordinary
-#  C++ function instead - Baseline inlines the equivalent sequence directly
-#  (see BaseCompiler::emitCallComponentCanonLower).
-- op: ComponentCanonLowerCall
-  symbolic_address:
-    name: ComponentCanonLowerCall
-    type: Args_Int32_GeneralInt64Int32
-    needs_thunk: true
-  entry: Instance::componentCanonLowerCall
-  export: canon_lower_call
-  params:
-    - 'i64'
-    - 'i32'
-  fail_mode: FailOnNegI32
-  uses_memory: false
-
 #if defined(ENABLE_WASM_MOZ_INTGEMM)
 
 # Intrinsics for integer matrix multiplication followed by addition of bias.

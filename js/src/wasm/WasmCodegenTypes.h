@@ -1668,6 +1668,12 @@ class CalleeDesc {
 
     // Calls a function reference.
     FuncRef,
+
+    // Call a C++ function (System ABI) whose address is computed at runtime
+    // and passed as an extra operand of the call. Unlike Builtin /
+    // BuiltinInstanceMethod there is no builtin thunk, so the call site sets
+    // up and tears down the activation's exit FP itself.
+    NativeFuncPtr,
   };
 
  private:
@@ -1698,6 +1704,7 @@ class CalleeDesc {
   static CalleeDesc builtin(SymbolicAddress callee);
   static CalleeDesc builtinInstanceMethod(SymbolicAddress callee);
   static CalleeDesc wasmFuncRef();
+  static CalleeDesc nativeFuncPtr();
   Which which() const { return which_; }
   uint32_t funcIndex() const {
     MOZ_ASSERT(which_ == Func);
@@ -1733,6 +1740,7 @@ class CalleeDesc {
     return u.builtin_;
   }
   bool isFuncRef() const { return which_ == FuncRef; }
+  bool isNativeFuncPtr() const { return which_ == NativeFuncPtr; }
 };
 
 struct FuncIonPerfSpewer {

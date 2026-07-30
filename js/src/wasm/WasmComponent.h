@@ -21,6 +21,7 @@
 #  include "mozilla/Vector.h"
 
 #  include "gc/Barrier.h"
+#  include "jit/IonTypes.h"
 #  include "js/CallArgs.h"
 #  include "js/experimental/WebIDL.h"
 #  include "js/TracingAPI.h"
@@ -1580,6 +1581,26 @@ class Component : public JS::WasmComponent {
 
 using MutableComponent = RefPtr<Component>;
 using SharedComponent = RefPtr<const Component>;
+
+// The System-ABI argument shape of a JS::WebIDLNativeCall: (adapter, ctx,
+// params, resultMemBase, results). Shared by every place that builds a call
+// to a `LoweredNativeClosure::entry` directly - GenerateCanonLowerNative's
+// per-instantiation stub, BaseCompiler::emitCallComponentCanonLower's
+// call-site inlining, and FunctionCompiler::callComponentCanonLower's - so
+// they all agree on the StackArgAreaSizeUnaligned this call needs.
+class NativeCallArgTypes {
+  static constexpr jit::MIRType kTypes[] = {
+      jit::MIRType::Pointer,  // adapter
+      jit::MIRType::Pointer,  // ctx
+      jit::MIRType::Pointer,  // params
+      jit::MIRType::Int32,    // resultMemBase
+      jit::MIRType::Pointer,  // results
+  };
+
+ public:
+  size_t length() const { return sizeof(kTypes) / sizeof(kTypes[0]); }
+  jit::MIRType operator[](size_t i) const { return kTypes[i]; }
+};
 
 // All the state a `canon lower` core func needs to call straight into a
 // selected `JS::WebIDLNativeCall` overload, built once at instantiation

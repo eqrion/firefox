@@ -85,6 +85,7 @@
 #  include "vtune/VTuneWrapper.h"
 #endif
 #include "wasm/WasmBinary.h"
+#include "wasm/WasmFrameIter.h"
 #include "wasm/WasmGC.h"
 #include "wasm/WasmGcObject.h"
 #include "wasm/WasmStubs.h"
@@ -10566,16 +10567,41 @@ void CodeGenerator::visitWasmCall(LWasmCall* lir) {
       break;
     case wasm::CalleeDesc::BuiltinInstanceMethod: {
       CodeOffset unused_trapStackMapKey;
-      masm.wasmCallBuiltinInstanceMethod(desc, callBase->instanceArg(),
-                                         callee.builtin(),
-                                         callBase->builtinMethodFailureMode(),
-                                         callBase->builtinMethodFailureTrap(),
-                                         &retOffset, &unused_trapStackMapKey);
+      masm.wasmCallBuiltinInstanceMethod(
+          desc, callBase->instanceArg(), callee.builtin(),
+          callBase->failureMode(), callBase->failureTrap(), &retOffset,
+          &unused_trapStackMapKey);
       // The builtin ABI preserves the instance and pinned registers. However,
       // builtins may grow the memory which requires us to reload the pinned
       // registers.
       reloadInstance = false;
       reloadPinnedRegs = true;
+      switchRealm = false;
+      break;
+    }
+    case wasm::CalleeDesc::NativeFuncPtr: {
+      // Unlike Builtin/BuiltinInstanceMethod there is no builtin thunk for
+      // this call, so set up and tear down the exit frame by hand around it.
+      // ABINonArgReg1/2 mirror the scratch registers wasmCallIndirect uses
+      // at this same point; deliberately not ABINonArgReg0, which aliases
+      // ReturnReg on x86 and must survive to the trap check below.
+      wasm::LoadActivation(masm, InstanceReg, ABINonArgReg1);
+      wasm::SetExitFP(masm, wasm::ExitReason::Fixed::ImportInterp,
+                      ABINonArgReg1, ABINonArgReg2);
+
+      retOffset = masm.call(desc, WasmCallRefReg);
+
+      masm.wasmTrapOnFailedInstanceCall(ReturnReg, callBase->failureMode(),
+                                        callBase->failureTrap(),
+                                        desc.toTrapSiteDesc());
+
+      wasm::LoadActivation(masm, InstanceReg, ABINonArgReg1);
+      wasm::ClearExitFP(masm, ABINonArgReg1);
+
+      // The native ABI preserves the instance and pinned registers, and a
+      // JS::WebIDLNativeCall never grows wasm memory.
+      reloadInstance = false;
+      reloadPinnedRegs = false;
       switchRealm = false;
       break;
     }

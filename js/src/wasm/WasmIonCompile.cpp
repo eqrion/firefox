@@ -3117,6 +3117,51 @@ class FunctionCompiler {
     return collectBuiltinCallResult(builtin.retType, result, callState);
   }
 
+#ifdef ENABLE_WASM_COMPONENTS
+  // Emits a System-ABI call straight to `calleePtr`, a runtime-computed
+  // function pointer rather than a SymbolicAddress - see
+  // wasm::CalleeDesc::NativeFuncPtr. Used to call a JS::WebIDLNativeCall
+  // directly from Ion-compiled code (see callComponentCanonLower below).
+  // `calleePtr`'s signature must be exactly NativeCallArgTypes; there is no
+  // result, only the ok/fail bool the trap consumes.
+  [[nodiscard]]
+  bool nativeFuncPtrCall(CallCompileState* callState, MDefinition* calleePtr,
+                        FailureMode failureMode, Trap failureTrap,
+                        uint32_t bytecodeOffset) {
+    if (inDeadCode()) {
+      return true;
+    }
+
+    CallSiteDesc desc(bytecodeOffset, rootCompiler_.inlinedCallerOffsetsIndex(),
+                      CallSiteKind::Symbolic);
+    if (failureMode != FailureMode::Infallible &&
+        !beginCatchableCall(callState)) {
+      return false;
+    }
+
+    uint32_t stackArgAreaSizeUnaligned =
+        StackArgAreaSizeUnaligned(NativeCallArgTypes(), callState->abiKind);
+
+    MInstruction* ins;
+    if (callState->isCatchable()) {
+      ins = MWasmCallCatchable::NewNativeFuncPtrCall(
+          alloc(), desc, failureMode, failureTrap, callState->regArgs,
+          stackArgAreaSizeUnaligned, callState->tryNoteIndex,
+          callState->fallthroughBlock, callState->prePadBlock, calleePtr);
+    } else {
+      ins = MWasmCallUncatchable::NewNativeFuncPtrCall(
+          alloc(), desc, failureMode, failureTrap, callState->regArgs,
+          stackArgAreaSizeUnaligned, calleePtr);
+    }
+    if (!ins) {
+      return false;
+    }
+    curBlock_->add(ins);
+
+    return finishCatchableCall(callState);
+  }
+#endif  // ENABLE_WASM_COMPONENTS
+
   /*********************************************** Instance call helpers ***/
 
   // Do not call this function directly -- it offers no protection against
@@ -3428,11 +3473,9 @@ class FunctionCompiler {
   // instead of calling out to the per-instantiation stub
   // GenerateCanonLowerNative would otherwise compile: marshal `params` into
   // the LoweredNativeClosure* this instantiation bound for this import (see
-  // ComponentImportInstanceData), call through it via the
-  // ComponentCanonLowerCall trampoline (Ion has no MIR-level mechanism for an
-  // indirect call through a runtime-loaded native function pointer, unlike
-  // Baseline's emitCallComponentCanonLower), then unmarshal the results.
-  // Everything about the marshalling shape
+  // ComponentImportInstanceData), call straight through its entry point via
+  // a wasm::CalleeDesc::NativeFuncPtr call (see nativeFuncPtrCall), then
+  // unmarshal the results. Everything about the marshalling shape
   // (numParams/resultOutParamIndex/numResultSlots) is a compile-time constant
   // derived from this import's own declared type - see
   // CodeMetadata::componentImportHint.
@@ -3480,8 +3523,10 @@ class FunctionCompiler {
                                        ? params[resultOutParamIndex]
                                        : constantI32(0);
 
+      MDefinition* closure = loadComponentImportPtr(funcIndex);
+
       auto* paramsBase = MWasmLoadField::New(
-          alloc(), loadComponentImportPtr(funcIndex), nullptr,
+          alloc(), closure, nullptr,
           offsetof(LoweredNativeClosure, paramsScratch), mozilla::Nothing(),
           MIRType::Pointer, MWideningOp::None, AliasSet::Load(AliasSet::Any));
       if (!paramsBase) {
@@ -3522,27 +3567,46 @@ class FunctionCompiler {
         curBlock_->add(store);
       }
 
-      DefVector builtinParams;
-      if (!builtinParams.append(loadComponentImportPtrAsI64(funcIndex)) ||
-          !builtinParams.append(resultMemBase)) {
-        return false;
-      }
-      const BuiltinModuleFunc& builtinModuleFunc =
-          BuiltinModuleFuncs::getFromId(
-              BuiltinModuleFuncId::ComponentCanonLowerCall);
-      MOZ_ASSERT(!builtinModuleFunc.usesMemory());
-      if (!callBuiltinModuleFunc(builtinModuleFunc, builtinParams)) {
-        return false;
-      }
-
       auto* resultsBase = MWasmLoadField::New(
-          alloc(), loadComponentImportPtr(funcIndex), nullptr,
+          alloc(), closure, nullptr,
           offsetof(LoweredNativeClosure, resultsScratch), mozilla::Nothing(),
           MIRType::Pointer, MWideningOp::None, AliasSet::Load(AliasSet::Any));
       if (!resultsBase) {
         return false;
       }
       curBlock_->add(resultsBase);
+
+      auto* entryPtr = MWasmLoadField::New(
+          alloc(), closure, nullptr, offsetof(LoweredNativeClosure, entry),
+          mozilla::Nothing(), MIRType::Pointer, MWideningOp::None,
+          AliasSet::Load(AliasSet::Any));
+      if (!entryPtr) {
+        return false;
+      }
+      curBlock_->add(entryPtr);
+
+      auto* adapterPtr = MWasmDerivedPointer::New(
+          alloc(), closure, offsetof(LoweredNativeClosure, adapter));
+      curBlock_->add(adapterPtr);
+
+      auto* ctxPtr = MWasmDerivedPointer::New(
+          alloc(), closure, offsetof(LoweredNativeClosure, ctx));
+      curBlock_->add(ctxPtr);
+
+      CallCompileState callState(ABIKind::System);
+      if (!passCallArg(adapterPtr, MIRType::Pointer, &callState) ||
+          !passCallArg(ctxPtr, MIRType::Pointer, &callState) ||
+          !passCallArg(paramsBase, MIRType::Pointer, &callState) ||
+          !passCallArg(resultMemBase, MIRType::Int32, &callState) ||
+          !passCallArg(resultsBase, MIRType::Pointer, &callState) ||
+          !finishCallArgs(&callState)) {
+        return false;
+      }
+
+      if (!nativeFuncPtrCall(&callState, entryPtr, FailureMode::FailOnFalseI32,
+                             Trap::ThrowReported, bytecodeOffset)) {
+        return false;
+      }
 
       for (uint32_t j = 0; j < numResultSlots; j++) {
         if (!mirGen().ensureBallast()) {

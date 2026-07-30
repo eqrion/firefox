@@ -367,6 +367,11 @@ CalleeDesc CalleeDesc::wasmFuncRef() {
   c.which_ = FuncRef;
   return c;
 }
+CalleeDesc CalleeDesc::nativeFuncPtr() {
+  CalleeDesc c;
+  c.which_ = NativeFuncPtr;
+  return c;
+}
 
 void CompileStats::merge(const CompileStats& other) {
   MOZ_ASSERT(&other != this);

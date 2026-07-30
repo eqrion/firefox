@@ -1866,12 +1866,14 @@ class MWasmCallBase {
   }
   const wasm::CallSiteDesc& desc() const { return desc_; }
   const wasm::CalleeDesc& callee() const { return callee_; }
-  wasm::FailureMode builtinMethodFailureMode() const {
-    MOZ_ASSERT(callee_.which() == wasm::CalleeDesc::BuiltinInstanceMethod);
+  wasm::FailureMode failureMode() const {
+    MOZ_ASSERT(callee_.which() == wasm::CalleeDesc::BuiltinInstanceMethod ||
+               callee_.which() == wasm::CalleeDesc::NativeFuncPtr);
     return builtinMethodFailureMode_;
   }
-  wasm::Trap builtinMethodFailureTrap() const {
-    MOZ_ASSERT(callee_.which() == wasm::CalleeDesc::BuiltinInstanceMethod);
+  wasm::Trap failureTrap() const {
+    MOZ_ASSERT(callee_.which() == wasm::CalleeDesc::BuiltinInstanceMethod ||
+               callee_.which() == wasm::CalleeDesc::NativeFuncPtr);
     return builtinMethodFailureTrap_;
   }
   uint32_t stackArgAreaSizeUnaligned() const {
@@ -1926,6 +1928,13 @@ class MWasmCallCatchable final : public MVariadicControlInstruction<2>,
       uint32_t stackArgAreaSizeUnaligned, uint32_t tryNoteIndex,
       MBasicBlock* fallthroughBlock, MBasicBlock* prePadBlock);
 
+  static MWasmCallCatchable* NewNativeFuncPtrCall(
+      TempAllocator& alloc, const wasm::CallSiteDesc& desc,
+      wasm::FailureMode failureMode, wasm::Trap failureTrap,
+      const Args& args, uint32_t stackArgAreaSizeUnaligned,
+      uint32_t tryNoteIndex, MBasicBlock* fallthroughBlock,
+      MBasicBlock* prePadBlock, MDefinition* calleePtr);
+
   bool possiblyCalls() const override { return true; }
   AliasSet getAliasSet() const override { return wasmCallAliasSet(); }
 
@@ -1959,6 +1968,12 @@ class MWasmCallUncatchable final : public MVariadicInstruction,
       const wasm::SymbolicAddress builtin, wasm::FailureMode failureMode,
       wasm::Trap failureTrap, const ABIArg& instanceArg, const Args& args,
       uint32_t stackArgAreaSizeUnaligned);
+
+  static MWasmCallUncatchable* NewNativeFuncPtrCall(
+      TempAllocator& alloc, const wasm::CallSiteDesc& desc,
+      wasm::FailureMode failureMode, wasm::Trap failureTrap,
+      const Args& args, uint32_t stackArgAreaSizeUnaligned,
+      MDefinition* calleePtr);
 
   bool possiblyCalls() const override { return true; }
   AliasSet getAliasSet() const override { return wasmCallAliasSet(); }

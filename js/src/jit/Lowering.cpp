@@ -7319,6 +7319,11 @@ void LIRGenerator::visitWasmCall(MWasmCallT ins) {
     MDefinition* ref = ins->getOperand(ins->numArgs());
     lir->setOperand(ins->numArgs(), useFixedAtStart(ref, WasmCallRefReg));
   }
+  if (ins->callee().isNativeFuncPtr()) {
+    MDefinition* calleePtr = ins->getOperand(ins->numArgs());
+    lir->setOperand(ins->numArgs(),
+                    useFixedAtStart(calleePtr, WasmCallRefReg));
+  }
 
   add(lir, ins);
   assignWasmSafepoint(lir);

@@ -10524,25 +10524,6 @@ bool BaseCompiler::emitCallBuiltinModuleFunc() {
 }
 
 #ifdef ENABLE_WASM_COMPONENTS
-// A minimal argTypes list for StackArgAreaSizeUnaligned's generic overload
-// (it only needs .length()/operator[]) describing the fixed 5-arg system-ABI
-// shape of JS::WebIDLNativeCall below.
-namespace {
-class NativeCallArgTypes {
-  static constexpr jit::MIRType kTypes[] = {
-      jit::MIRType::Pointer,  // adapter
-      jit::MIRType::Pointer,  // ctx
-      jit::MIRType::Pointer,  // params
-      jit::MIRType::Int32,    // resultMemBase
-      jit::MIRType::Pointer,  // results
-  };
-
- public:
-  size_t length() const { return sizeof(kTypes) / sizeof(kTypes[0]); }
-  jit::MIRType operator[](size_t i) const { return kTypes[i]; }
-};
-}  // namespace
-
 // Calls straight into the JS::WebIDLNativeCall selected ahead of time for
 // this `canon lower` core func (see wasm::GenerateCanonLowerNative), instead
 // of going through the wasm import call machinery at all: pop this
