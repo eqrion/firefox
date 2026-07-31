@@ -592,7 +592,12 @@ class ComponentHandleTable {
     }
     return &entries_[index];
   }
-  JSObject* wrappedAt(uint32_t index) const { return wrapped_[index]; }
+  JSObject* wrappedAt(uint32_t index) const {
+    if (index >= wrapped_.length()) {
+      return nullptr;
+    }
+    return wrapped_[index];
+  }
   // Marks `index` free and transfers ownership of any strong ref it holds to
   // `out`; the caller must call out->release() once done with it (see
   // ComponentResourceHandle's comment).

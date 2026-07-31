@@ -5035,13 +5035,14 @@ bool ComponentHandleTable::add(JSContext* cx,
     entry.flags |= Native;
     entry.ptr = value.nativePtr;
     entry.iface = value.nativeIface;
-    wrapped_[i] = nullptr;
+    MOZ_ASSERT(!wrapped_[i]);
+    // wrapped_[i] = nullptr;
     if (!value.adoptRef) {
       value.nativeIface->addRefNative(value.nativePtr);
     }
   } else {
-    entry.ptr = nullptr;
-    entry.iface = nullptr;
+    MOZ_ASSERT(!entry.ptr);
+    MOZ_ASSERT(!entry.iface);
     wrapped_[i] = value.wrappedObj;
   }
   *index = i;
@@ -5054,9 +5055,12 @@ static void FillHandleView(const ComponentHandleTable::Entry& entry,
   out->own = entry.flags & ComponentHandleTable::Own;
   out->numLends = entry.numLends;
   out->isNative = entry.flags & ComponentHandleTable::Native;
-  out->nativePtr = entry.ptr;
-  out->nativeIface = entry.iface;
-  out->wrappedObj = wrappedObj;
+  if (out->isNative) {
+    out->nativePtr = entry.ptr;
+    out->nativeIface = entry.iface;
+  } else {
+    out->wrappedObj = wrappedObj;
+  }
 }
 
 bool ComponentHandleTable::get(JSContext* cx, uint32_t index,
@@ -5077,9 +5081,15 @@ bool ComponentHandleTable::remove(JSContext* cx, uint32_t index,
   }
   FillHandleView(entries_[index], wrapped_[index], out);
   entries_[index].flags = 0;
-  entries_[index].ptr = nullptr;
-  entries_[index].iface = nullptr;
-  wrapped_[index] = nullptr;
+  if ((entries_[index].flags & ComponentHandleTable::Native) != 0) {
+    entries_[index].ptr = nullptr;
+    entries_[index].iface = nullptr;
+    MOZ_ASSERT(!wrapped_[index]);
+  } else {
+    MOZ_ASSERT(!entries_[index].ptr);
+    MOZ_ASSERT(!entries_[index].iface);
+    wrapped_[index] = nullptr;
+  }
   return pushFree(cx, index);
 }
 
@@ -5107,11 +5117,16 @@ bool ComponentHandleTable::drop(JSContext* cx, uint32_t index,
   }
   if (entry.flags & Native) {
     entry.iface->releaseNative(entry.ptr);
+    entry.ptr = nullptr;
+    entry.iface = nullptr;
+    MOZ_ASSERT(!wrapped_[index]);
+  } else {
+    MOZ_ASSERT(!entry.ptr);
+    MOZ_ASSERT(!entry.iface);
+    wrapped_[index] = nullptr;
   }
   entry.flags = 0;
-  entry.ptr = nullptr;
-  entry.iface = nullptr;
-  wrapped_[index] = nullptr;
+
   return pushFree(cx, index);
 }
 
