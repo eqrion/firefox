@@ -1288,6 +1288,17 @@ JSObject* ComponentResourceHandle::reflectToJS(JSContext* cx) const {
   return obj;
 }
 
+JS::WebIDLOptionalStep::WebIDLOptionalStep() = default;
+JS::WebIDLOptionalStep::~WebIDLOptionalStep() = default;
+JS::WebIDLOptionalStep::WebIDLOptionalStep(WebIDLOptionalStep&&) = default;
+JS::WebIDLOptionalStep& JS::WebIDLOptionalStep::operator=(
+    WebIDLOptionalStep&&) = default;
+
+void JS::WebIDLOptionalStep::emplace() {
+  step_ = WebIDLCoerceStep();
+  present_ = true;
+}
+
 bool JS::WebIDLContext::memoryBytes(uint8_t** base, size_t* len) const {
   *base = memoryBase_;
   // TODO: only works with unshared memory
@@ -1683,29 +1694,6 @@ static bool ReadBytes(WebIDLContext& ctx, uint32_t ptr, void* data) {
   return true;
 }
 
-static bool WriteUint(WebIDLContext& ctx, uint32_t ptr, uint64_t value,
-                      uint32_t nbytes) {
-  uint8_t buf[8];
-  for (uint32_t i = 0; i < nbytes; i++) {
-    buf[i] = uint8_t(value >> (8 * i));
-  }
-  return WriteBytes(ctx, ptr, buf, nbytes);
-}
-
-static bool ReadUint(WebIDLContext& ctx, uint32_t ptr, uint32_t nbytes,
-                     uint64_t* out) {
-  uint8_t buf[8];
-  if (!ReadBytes(ctx, ptr, buf, nbytes)) {
-    return false;
-  }
-  uint64_t v = 0;
-  for (uint32_t i = 0; i < nbytes; i++) {
-    v |= uint64_t(buf[i]) << (8 * i);
-  }
-  *out = v;
-  return true;
-}
-
 // Fixed-size variants of WriteUint/ReadUint, dispatched on the integer type
 // T rather than a runtime byte count - for callers where the value's width
 // is known at compile time.
@@ -1732,6 +1720,63 @@ static bool ReadUint(WebIDLContext& ctx, uint32_t ptr, T* out) {
     }
     *out = mozilla::NativeEndian::swapFromLittleEndian(le);
     return true;
+  }
+}
+
+// Runtime-width variants, for callers whose width comes from a canonical-ABI
+// layout computation (DiscriminantSize/FlagsSize/an integer type's width).
+// Dispatched to the fixed-width paths above rather than a memcpy of `nbytes`
+// bytes: every canonical-ABI integer is 1, 2, 4 or 8 bytes wide, and a
+// memcpy the compiler can't see the width of becomes a libc call - a real
+// cost on the hot native-call path, where the most common case of all is a
+// single-byte option discriminant.
+static bool WriteUint(WebIDLContext& ctx, uint32_t ptr, uint64_t value,
+                      uint32_t nbytes) {
+  switch (nbytes) {
+    case 1:
+      return WriteUint<uint8_t>(ctx, ptr, uint8_t(value));
+    case 2:
+      return WriteUint<uint16_t>(ctx, ptr, uint16_t(value));
+    case 4:
+      return WriteUint<uint32_t>(ctx, ptr, uint32_t(value));
+    case 8:
+      return WriteUint<uint64_t>(ctx, ptr, value);
+    default:
+      MOZ_CRASH("unsupported canonical ABI integer width");
+  }
+}
+
+static bool ReadUint(WebIDLContext& ctx, uint32_t ptr, uint32_t nbytes,
+                     uint64_t* out) {
+  switch (nbytes) {
+    case 1: {
+      uint8_t v;
+      if (!ReadUint<uint8_t>(ctx, ptr, &v)) {
+        return false;
+      }
+      *out = v;
+      return true;
+    }
+    case 2: {
+      uint16_t v;
+      if (!ReadUint<uint16_t>(ctx, ptr, &v)) {
+        return false;
+      }
+      *out = v;
+      return true;
+    }
+    case 4: {
+      uint32_t v;
+      if (!ReadUint<uint32_t>(ctx, ptr, &v)) {
+        return false;
+      }
+      *out = v;
+      return true;
+    }
+    case 8:
+      return ReadUint<uint64_t>(ctx, ptr, out);
+    default:
+      MOZ_CRASH("unsupported canonical ABI integer width");
   }
 }
 
@@ -5080,8 +5125,12 @@ bool ComponentHandleTable::remove(JSContext* cx, uint32_t index,
     return false;
   }
   FillHandleView(entries_[index], wrapped_[index], out);
+  // Read the Native bit before clearing the flags, not after.
+  bool wasNative = (entries_[index].flags & ComponentHandleTable::Native) != 0;
   entries_[index].flags = 0;
-  if ((entries_[index].flags & ComponentHandleTable::Native) != 0) {
+  if (wasNative) {
+    // The ref itself went to `out`; only the entry's copy of the pointer is
+    // dropped here (see this function's doc comment).
     entries_[index].ptr = nullptr;
     entries_[index].iface = nullptr;
     MOZ_ASSERT(!wrapped_[index]);
@@ -8554,12 +8603,36 @@ bool JS::ReadCoercedInterfaceNative(WebIDLContext& ctx,
                                     uint32_t memBase, void** outNative,
                                     WebIDLInterface** outOwnedRef) {
   MOZ_ASSERT(step.kind == StepKind::Interface);
+  ComponentHandleTable* handles = ctx.handles();
+
+  // The hot shape, spelled out rather than assembled from the generic
+  // helpers: a `borrow` handle index read straight out of a flat param,
+  // naming a present Native entry of the expected resource type. Everything
+  // else (an `own` handle, a handle read from linear memory, a Wrapped value,
+  // any mismatch) falls through to the general walk below.
+  if (step.access.mode == AccessLoc::Mode::FlatSlot && !step.resourceOwn) {
+    uint32_t index = coreParams[step.access.flatSlot].i32();
+    if (const ComponentHandleTable::Entry* entry = handles->peek(index)) {
+      constexpr uint32_t kNativeOfKind =
+          ComponentHandleTable::Native | ComponentHandleTable::KindMask;
+      uint32_t expectedFlags =
+          ComponentHandleTable::Native | ((uint32_t(step.resourceTypeKind)
+                                           << ComponentHandleTable::KindShift) &
+                                          ComponentHandleTable::KindMask);
+      if ((entry->flags & kNativeOfKind) == expectedFlags &&
+          entry->resourceTypeDef == step.resourceTypeDef.get()) {
+        *outNative = entry->ptr;
+        *outOwnedRef = nullptr;
+        return true;
+      }
+    }
+  }
+
   CoerceWalkContext wc{ctx.cx(), ctx, coreParams};
   uint32_t index;
   if (!ReadRawU32(wc, step, memBase, &index)) {
     return false;
   }
-  ComponentHandleTable* handles = ctx.handles();
   void* native;
   WebIDLInterface* ownedRef = nullptr;
   if (step.resourceOwn) {
@@ -8609,10 +8682,10 @@ bool JS::ReadCoercedInterfaceNative(WebIDLContext& ctx,
     if (entry->flags & ComponentHandleTable::Native) {
       native = entry->ptr;
     } else {
-      native = step.expectedInterface
-                   ? step.expectedInterface->unwrapNative(
-                         handles->wrappedAt(index))
-                   : nullptr;
+      native =
+          step.expectedInterface
+              ? step.expectedInterface->unwrapNative(handles->wrappedAt(index))
+              : nullptr;
     }
     MOZ_RELEASE_ASSERT(native);
   }
@@ -8813,6 +8886,31 @@ bool JS::WriteCoercedCodePoint(WebIDLContext& ctx, const WebIDLCoerceStep& step,
   return WriteRawInt(ctx, step, memBase, cp, 4, result);
 }
 
+// Registers `alreadyAddRefedNative` as a fresh handle for an Interface-kind
+// step, consuming its strong ref on every path: the caller's ref moves into
+// the table on success, and is released before returning on failure.
+static MOZ_ALWAYS_INLINE bool AddNativeHandle(WebIDLContext& ctx,
+                                              const CoerceStep& step,
+                                              void* alreadyAddRefedNative,
+                                              uint32_t* index) {
+  ComponentHandleTable* handles = ctx.handles();
+  ComponentResourceTypeId resourceType(step.resourceTypeKind,
+                                       step.resourceTypeDef.get());
+  if (handles->addNativeFast(resourceType, step.resourceOwn,
+                             alreadyAddRefedNative, step.expectedInterface,
+                             index)) {
+    return true;
+  }
+  if (!handles->add(ctx.cx(), resourceType, step.resourceOwn,
+                    ComponentResourceClassification::AdoptNative(
+                        alreadyAddRefedNative, step.expectedInterface),
+                    index)) {
+    step.expectedInterface->releaseNative(alreadyAddRefedNative);
+    return false;
+  }
+  return true;
+}
+
 bool JS::WriteCoercedInterface(WebIDLContext& ctx, const WebIDLCoerceStep& step,
                                uint32_t memBase, JSObject* object,
                                WasmScalarVal* result) {
@@ -8842,19 +8940,88 @@ bool JS::WriteCoercedInterfaceNative(WebIDLContext& ctx,
                                      WasmScalarVal* result) {
   MOZ_ASSERT(step.kind == StepKind::Interface);
   MOZ_ASSERT(step.expectedInterface && step.expectedInterface->hasNativeOps());
-  ComponentHandleTable* handles = ctx.handles();
-  ComponentResourceClassification classification =
-      ComponentResourceClassification::AdoptNative(alreadyAddRefedNative,
-                                                    step.expectedInterface);
   uint32_t index;
-  if (!handles->add(ctx.cx(),
-                    ComponentResourceTypeId(step.resourceTypeKind,
-                                            step.resourceTypeDef.get()),
-                    step.resourceOwn, classification, &index)) {
-    step.expectedInterface->releaseNative(alreadyAddRefedNative);
+  if (!AddNativeHandle(ctx, step, alreadyAddRefedNative, &index)) {
     return false;
   }
   return WriteRawUInt32(ctx, step, memBase, index, result);
+}
+
+bool JS::WriteCoercedNullableInterfaceNative(WebIDLContext& ctx,
+                                             const WebIDLCoerceStep& step,
+                                             uint32_t memBase,
+                                             void* maybeNative,
+                                             WasmScalarVal* result) {
+  // The component result type doesn't model optionality at all, so it can't
+  // represent an actually-null value (see BuildResultStep: a nullable WebIDL
+  // return over a plain component result type).
+  if (step.kind == StepKind::Interface) {
+    if (!maybeNative) {
+      JS_ReportErrorASCII(ctx.cx(),
+                          "component result type can't represent a null %s",
+                          step.expectedInterface->name());
+      return false;
+    }
+    return WriteCoercedInterfaceNative(ctx, step, memBase, maybeNative, result);
+  }
+
+  MOZ_ASSERT(step.kind == StepKind::Option);
+  const CoerceStep& child = *step.child;
+  MOZ_ASSERT(child.kind == StepKind::Interface);
+
+  // The fused shape: a discriminant byte and, when present, a handle index
+  // both written into linear memory at compile-time-known offsets from the
+  // same base. Nothing between the two writes can move linear memory (adding
+  // a handle only touches the handle table), so one bounds check covers both.
+  if (step.destAccess.mode != AccessLoc::Mode::Mem ||
+      child.destAccess.mode != AccessLoc::Mode::Mem) {
+    uint32_t payloadBase;
+    if (!WriteCoercedOptionDiscriminant(ctx, step, memBase, !!maybeNative,
+                                        result, &payloadBase)) {
+      if (maybeNative) {
+        child.expectedInterface->releaseNative(maybeNative);
+      }
+      return false;
+    }
+    if (!maybeNative) {
+      return true;
+    }
+    return WriteCoercedInterfaceNative(ctx, child, payloadBase, maybeNative,
+                                       result);
+  }
+
+  MOZ_ASSERT(child.expectedInterface &&
+             child.expectedInterface->hasNativeOps());
+  uint32_t discPtr = memBase + step.destAccess.offset;
+  uint32_t indexPtr = discPtr + child.destAccess.offset;
+  uint8_t* base;
+  size_t memLen;
+  if (!ctx.memoryBytes(&base, &memLen)) {
+    if (maybeNative) {
+      child.expectedInterface->releaseNative(maybeNative);
+    }
+    return false;
+  }
+  if (uint64_t(indexPtr) + 4 > memLen || uint64_t(discPtr) + 1 > memLen) {
+    if (maybeNative) {
+      child.expectedInterface->releaseNative(maybeNative);
+    }
+    JS_ReportErrorASCII(ctx.cx(), "canonical ABI: store out of bounds");
+    return false;
+  }
+
+  base[discPtr] = maybeNative ? 1 : 0;
+  if (!maybeNative) {
+    return true;
+  }
+
+  uint32_t index;
+  if (!AddNativeHandle(ctx, child, maybeNative, &index)) {
+    return false;
+  }
+  uint32_t indexLE = mozilla::NativeEndian::swapToLittleEndian(index);
+  memcpy(base + indexPtr, &indexLE, sizeof(indexLE));
+  return true;
 }
 
 bool JS::WriteCoercedListHeader(WebIDLContext& ctx,

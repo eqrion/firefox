@@ -580,6 +580,33 @@ class ComponentHandleTable {
   [[nodiscard]] bool add(JSContext* cx, ComponentResourceTypeId resourceType,
                          bool own, const ComponentResourceClassification& value,
                          uint32_t* index);
+  // The native-call result direction's hot path: hands out a recycled entry
+  // and takes over `alreadyAddRefedNative`'s existing strong ref, with none
+  // of add()'s generality (no classification struct to round-trip through
+  // the stack, no Wrapped arm, no growth). False iff there is no recycled
+  // entry to hand out, which is the caller's cue to fall back to add() - it
+  // never fails or reports an error, and leaves the table untouched when it
+  // returns false.
+  [[nodiscard]] MOZ_ALWAYS_INLINE bool addNativeFast(
+      ComponentResourceTypeId resourceType, bool own,
+      void* alreadyAddRefedNative, JS::WebIDLInterface* iface,
+      uint32_t* index) {
+    if (freeLength_ == 0) {
+      return false;
+    }
+    uint32_t i = freeStack_[--freeLength_];
+    Entry& entry = entries_[i];
+    MOZ_ASSERT(!(entry.flags & Present));
+    MOZ_ASSERT(!wrapped_[i]);
+    entry.flags = Present | Native | (own ? Own : 0) |
+                  ((uint32_t(resourceType.kind()) << KindShift) & KindMask);
+    entry.numLends = 0;
+    entry.ptr = alreadyAddRefedNative;
+    entry.iface = iface;
+    entry.resourceTypeDef = resourceType.typeDef();
+    *index = i;
+    return true;
+  }
   [[nodiscard]] bool get(JSContext* cx, uint32_t index,
                          ComponentResourceHandle* out) const;
   // Direct access to a present entry, for hot paths (e.g. a borrow read)

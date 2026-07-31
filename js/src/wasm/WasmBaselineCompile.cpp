@@ -10544,12 +10544,11 @@ bool BaseCompiler::emitCanonLowerNativeCall(const FuncType& funcType,
   // The last wasm param is the linear-memory offset for a spilled result,
   // when this overload's result doesn't fit flat; otherwise resultMemBase is
   // always 0. Popped first: params were pushed in order, so it's on top.
-  RegI32 resultMemBase;
+  // Nothing() means "the constant 0", pushed as a constant below rather than
+  // materialized into a register only to be spilled by sync().
+  mozilla::Maybe<RegI32> resultMemBase;
   if (resultOutParamIndex >= 0) {
-    resultMemBase = popI32();
-  } else {
-    resultMemBase = needI32();
-    moveImm32(0, resultMemBase);
+    resultMemBase.emplace(popI32());
   }
 
   RegPtr paramsBase = needPtr();
@@ -10602,49 +10601,62 @@ bool BaseCompiler::emitCanonLowerNativeCall(const FuncType& funcType,
   // is the same low, well-exercised shape every other call site's argument
   // list already relies on (the allocator only has to guarantee it can
   // spill Stk-resident values, not a pile of simultaneously-held raw ones).
+  //
+  // With `immClosure` known, every one of these is a compile-time constant,
+  // and is pushed as one: a register-held push would be spilled to the frame
+  // by the sync() below and reloaded into its ABI argument register, which
+  // for a stub whose entire body is this one call is most of the stub.
   ValType wordType = ValType::fromMIRType(TargetWordMIRType());
 
-  RegPtr adapterPtr = needPtr();
   if (immClosure) {
-    masm.movePtr(ImmPtr(&immClosure->adapter, ImmPtr::NoCheckToken()),
-                 adapterPtr);
+    pushPtr(intptr_t(&immClosure->adapter));
+    pushPtr(intptr_t(&immClosure->ctx));
   } else {
-    RegPtr closureReg = loadComponentImportPtr(importFuncIndex);
-    masm.computeEffectiveAddress(
-        Address(closureReg, offsetof(LoweredNativeClosure, adapter)),
-        adapterPtr);
-    freePtr(closureReg);
+    RegPtr adapterPtr = needPtr();
+    {
+      RegPtr closureReg = loadComponentImportPtr(importFuncIndex);
+      masm.computeEffectiveAddress(
+          Address(closureReg, offsetof(LoweredNativeClosure, adapter)),
+          adapterPtr);
+      freePtr(closureReg);
+    }
+    pushPtr(adapterPtr);
+
+    RegPtr ctxPtr = needPtr();
+    {
+      RegPtr closureReg = loadComponentImportPtr(importFuncIndex);
+      masm.computeEffectiveAddress(
+          Address(closureReg, offsetof(LoweredNativeClosure, ctx)), ctxPtr);
+      freePtr(closureReg);
+    }
+    pushPtr(ctxPtr);
   }
-  pushPtr(adapterPtr);
 
-  RegPtr ctxPtr = needPtr();
   if (immClosure) {
-    masm.movePtr(ImmPtr(&immClosure->ctx, ImmPtr::NoCheckToken()), ctxPtr);
+    // paramsBase only had to be a register for the stores above.
+    freePtr(paramsBase);
+    pushPtr(intptr_t(immClosure->paramsScratch.get()));
   } else {
-    RegPtr closureReg = loadComponentImportPtr(importFuncIndex);
-    masm.computeEffectiveAddress(
-        Address(closureReg, offsetof(LoweredNativeClosure, ctx)), ctxPtr);
-    freePtr(closureReg);
+    pushPtr(paramsBase);
   }
-  pushPtr(ctxPtr);
 
-  pushPtr(paramsBase);
-
-  pushI32(resultMemBase);
-
-  RegPtr resultsBase = needPtr();
-  if (immClosure) {
-    masm.movePtr(
-        ImmPtr(immClosure->resultsScratch.get(), ImmPtr::NoCheckToken()),
-        resultsBase);
+  if (resultMemBase.isSome()) {
+    pushI32(*resultMemBase);
   } else {
+    pushI32(int32_t(0));
+  }
+
+  if (immClosure) {
+    pushPtr(intptr_t(immClosure->resultsScratch.get()));
+  } else {
+    RegPtr resultsBase = needPtr();
     RegPtr closureReg = loadComponentImportPtr(importFuncIndex);
     masm.loadPtr(
         Address(closureReg, offsetof(LoweredNativeClosure, resultsScratch)),
         resultsBase);
     freePtr(closureReg);
+    pushPtr(resultsBase);
   }
-  pushPtr(resultsBase);
 
   // Must run after every push above (sync() flushes whatever is currently
   // on the value stack to memory, which is what createStackMap requires of
@@ -10717,6 +10729,13 @@ bool BaseCompiler::emitCanonLowerNativeCall(const FuncType& funcType,
     wasm::LoadActivation(masm, InstanceReg, scratch1);
     wasm::ClearExitFP(masm, scratch1);
     freePtr(scratch1);
+  }
+
+  // An overload whose result spilled into linear memory (resultOutParamIndex
+  // >= 0) has no flat result slots to drain, and so needs no scratch base at
+  // all - which is the shape every option/record-returning binding takes.
+  if (numResultSlots == 0) {
+    return true;
   }
 
   RegPtr resultsBase2 = needPtr();

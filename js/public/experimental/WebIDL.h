@@ -786,19 +786,24 @@ enum class WebIDLStringKind : uint8_t { DOMString, USVString, ByteString };
 // point in a walk, never an absolute address; a Sequence element's own
 // WebIDLAccessLoc is relative to its runtime-loaded `ptr`, not to the base
 // the Sequence itself was read from.
+// Kept to 12 bytes (the two 32-bit fields narrowed to bytes): every native
+// call reads one of these per step it visits, and each byte here is a byte of
+// WebIDLCoerceStep's leading cache line (see the field-order note there).
 struct WebIDLAccessLoc {
   enum class Mode : uint8_t {
     FlatSlot,  // flattened param/result slot(s) (top level)
     Mem,       // (enclosing base + offset) in linear memory
     Absent,    // Default / NotPassed / MissingRequired
   } mode = Mode::Absent;
-  uint32_t flatSlot = 0;    // FlatSlot: first slot (scalar = 1, ptr+len = 2)
-  uint32_t offset = 0;      // Mem: byte offset from the enclosing base
-  uint32_t elemStride = 0;  // Sequence: element size, to derive child bases
+  // FlatSlot: first slot (scalar = 1, ptr+len = 2). Bounded by MaxFlatParams.
+  uint8_t flatSlot = 0;
   // Sequence, destAccess only: the element buffer's own alignment (from
   // Alignment(elemType) at build time) - WriteCoercedListHeader needs this
   // to realloc; a read never allocates, so `access.elemAlign` stays unused.
-  uint32_t elemAlign = 0;
+  // A canonical-ABI alignment, so always a small power of two.
+  uint8_t elemAlign = 0;
+  uint32_t offset = 0;      // Mem: byte offset from the enclosing base
+  uint32_t elemStride = 0;  // Sequence: element size, to derive child bases
 };
 
 struct WebIDLCoerceStep;
@@ -831,15 +836,40 @@ struct WebIDLVariantCaseStep {
 using WebIDLVariantCaseStepVector =
     mozilla::Vector<WebIDLVariantCaseStep, 0, js::SystemAllocPolicy>;
 
+// Field order is deliberate: everything a native call's fast paths read
+// (kind, both access locations, the Interface fields, `child`) is packed into
+// the leading ~52 bytes, i.e. one cache line, with the per-kind cold data
+// after it. These lines are read once per DOM call and evicted in between by
+// whatever the call itself touches - on a DOM traversal, megabytes of nodes -
+// so the number of lines a call has to pull back in is what this costs.
 struct WebIDLCoerceStep {
   WebIDLStepKind kind = WebIDLStepKind::Scalar;
-  // Used by the dynamic interpreter to build output + recurse; skipped by a
-  // generated static walk, which debug-asserts `kind` instead.
-  JS::WebIDLType targetType;
+  // Interface (component `own`/`borrow`): own removes the handle (transfers
+  // out), borrow only reads it. The source's component type is stored as
+  // its raw (kind, typeDef) parts rather than a js::wasm::ComponentType by
+  // value, since that type's full definition depends on wasm-internal
+  // headers unsuitable for public exposure.
+  bool resourceOwn = false;
+  js::wasm::ComponentTypeKind resourceTypeKind =
+      js::wasm::ComponentTypeKind::Invalid;
+  // Dictionary/Option/Variant result direction only: true when this step's
+  // own flattened representation exceeds the flat result budget (see the full
+  // note below, at resultSize).
+  bool resultSpills = false;
   WebIDLAccessLoc access;
   // Result-direction only: where a JS::WriteCoerced* call writes this
   // step's value. Default Absent is treated as FlatSlot.
   WebIDLAccessLoc destAccess;
+  JS::WebIDLInterface* expectedInterface = nullptr;
+  RefPtr<js::wasm::ComponentTypeDef> resourceTypeDef;
+  // Children (owning): Nullable's inner, Sequence's element, or a Union arm.
+  mozilla::UniquePtr<WebIDLCoerceStep> child;
+
+  // ---- Cold from here down: per-kind detail no fast path reads. ----
+
+  // Used by the dynamic interpreter to build output + recurse; skipped by a
+  // generated static walk, which debug-asserts `kind` instead.
+  JS::WebIDLType targetType;
   // Dictionary/Option/Variant result direction only: true when this step's
   // own flattened representation exceeds the flat result budget, so it must
   // own a freshly-allocated buffer when reached as the walk's un-addressed
@@ -850,7 +880,6 @@ struct WebIDLCoerceStep {
   // Dictionary case of the result walk for why that's always safe: a
   // non-spilling composite's every member/payload independently flattens to
   // zero slots too.
-  bool resultSpills = false;
   // Dictionary result direction only: the byte size/alignment of this
   // step's own buffer, needed only when it's the top-level result (a
   // Dictionary has no self-describing (ptr,len) header to infer it from at
@@ -876,16 +905,6 @@ struct WebIDLCoerceStep {
   // per-value trap, since the label set is only known at that value).
   static constexpr uint32_t kNoEnumMatch = UINT32_MAX;
   mozilla::Vector<uint32_t, 0, js::SystemAllocPolicy> enumRemap;
-  // Interface (component `own`/`borrow`): own removes the handle (transfers
-  // out), borrow only reads it. The source's component type is stored as
-  // its raw (kind, typeDef) parts rather than a js::wasm::ComponentType by
-  // value, since that type's full definition depends on wasm-internal
-  // headers unsuitable for public exposure.
-  JS::WebIDLInterface* expectedInterface = nullptr;
-  bool resourceOwn = false;
-  js::wasm::ComponentTypeKind resourceTypeKind =
-      js::wasm::ComponentTypeKind::Invalid;
-  RefPtr<js::wasm::ComponentTypeDef> resourceTypeDef;
   // BufferSource
   JS::WebIDLBufferSourceKind bufferKind =
       JS::WebIDLBufferSourceKind::ArrayBuffer;
@@ -897,8 +916,6 @@ struct WebIDLCoerceStep {
   js::wasm::ComponentTypeKind genericSourceTypeKind =
       js::wasm::ComponentTypeKind::Invalid;
   RefPtr<js::wasm::ComponentTypeDef> genericSourceTypeDef;
-  // Children (owning): Nullable's inner, Sequence's element, or a Union arm.
-  mozilla::UniquePtr<WebIDLCoerceStep> child;
   // Dictionary target members, in target declaration order.
   WebIDLDictMemberStepVector dictMembers;
   // Variant target cases, in source declaration order.
@@ -909,6 +926,11 @@ struct WebIDLCoerceStep {
 // from the component call, from a declared/absent default, or from the
 // variadic tail) and how to coerce it.
 struct WebIDLParamStep {
+  // First, so that a param's step begins where its vector element does: the
+  // step's own leading fields are what a native call reads (see the
+  // field-order note on WebIDLCoerceStep), and putting anything ahead of them
+  // here would push them across a cache line for no reason.
+  WebIDLCoerceStep step;
   enum class Source : uint8_t {
     Positional,
     Default,
@@ -919,18 +941,61 @@ struct WebIDLParamStep {
   // required-but-missing param folds into WebIDLCallAdapter::isTrap
   // instead.
   const JS::WebIDLValue* defaultValue = nullptr;
-  WebIDLCoerceStep step;
 };
 
 using WebIDLParamStepVector =
     mozilla::Vector<WebIDLParamStep, 0, js::SystemAllocPolicy>;
 
+// An optionally-present WebIDLCoerceStep, held by value. Not
+// mozilla::Maybe<WebIDLCoerceStep>: Maybe stores its present flag *after* the
+// value, so testing it would touch a cache line a whole step-sized stride
+// away from the step's own hot leading fields - on every native call, which
+// dereferences this once per result.
+class WebIDLOptionalStep {
+  bool present_ = false;
+  WebIDLCoerceStep step_;
+
+ public:
+  // Out-of-line: destroying or resetting a step needs js::wasm::
+  // ComponentTypeDef complete, which this header deliberately only
+  // forward-declares.
+  WebIDLOptionalStep();
+  ~WebIDLOptionalStep();
+  WebIDLOptionalStep(WebIDLOptionalStep&&);
+  WebIDLOptionalStep& operator=(WebIDLOptionalStep&&);
+  void emplace();
+
+  explicit operator bool() const { return present_; }
+  bool isSome() const { return present_; }
+  // Valid only once emplace()d, like mozilla::Maybe's accessors.
+  WebIDLCoerceStep* ptr() {
+    MOZ_ASSERT(present_);
+    return &step_;
+  }
+  WebIDLCoerceStep* operator->() {
+    MOZ_ASSERT(present_);
+    return &step_;
+  }
+  const WebIDLCoerceStep* operator->() const {
+    MOZ_ASSERT(present_);
+    return &step_;
+  }
+  WebIDLCoerceStep& operator*() {
+    MOZ_ASSERT(present_);
+    return step_;
+  }
+  const WebIDLCoerceStep& operator*() const {
+    MOZ_ASSERT(present_);
+    return step_;
+  }
+};
+
 struct WebIDLCallAdapter {
   WebIDLParamStepVector paramSteps;  // one per WebIDL param (decl order)
   bool throwing = false;             // component result is `result<T,E>`
-  mozilla::Maybe<WebIDLCoerceStep> resultStep;  // WebIDL return -> ok/T
-  mozilla::Maybe<WebIDLCoerceStep> errorStep;   // thrown exception -> E
-  bool isTrap = false;                          // whole binding traps at entry
+  WebIDLOptionalStep resultStep;     // WebIDL return -> ok/T
+  WebIDLOptionalStep errorStep;      // thrown exception -> E
+  bool isTrap = false;               // whole binding traps at entry
 };
 
 // The generated-style "static walk" entry point for one overload: reads its
@@ -1188,6 +1253,20 @@ extern JS_PUBLIC_API bool WriteCoercedInterface(WebIDLContext& ctx,
 extern JS_PUBLIC_API bool WriteCoercedInterfaceNative(
     WebIDLContext& ctx, const WebIDLCoerceStep& step, uint32_t memBase,
     void* alreadyAddRefedNative, WasmScalarVal* result);
+
+// The whole result-write for a nullable native-interface return, in one call:
+// `step` is either an Option whose child is an Interface (the component
+// result is `option<own/borrow<T>>`) or a bare Interface (the component
+// result can't represent null at all, so a null `maybeNative` traps). Fusing
+// the two writes lets the common shape - a nullable DOM getter returning into
+// linear memory - resolve its step metadata once and bounds-check linear
+// memory once, instead of once per JS::WriteCoercedOptionDiscriminant /
+// JS::WriteCoercedInterfaceNative call. Consumes one strong ref on
+// `maybeNative` on every return path, exactly as
+// JS::WriteCoercedInterfaceNative does; a null `maybeNative` owns no ref.
+extern JS_PUBLIC_API bool WriteCoercedNullableInterfaceNative(
+    WebIDLContext& ctx, const WebIDLCoerceStep& step, uint32_t memBase,
+    void* maybeNative, WasmScalarVal* result);
 
 // Writes a Sequence-kind step's (elemPtr,len) header: reallocs
 // `count * step.destAccess.elemStride` bytes for the element buffer, writes

@@ -12656,30 +12656,14 @@ class CGMemberJITInfo(CGThing):
             )
         if self.nativeInterfaceTypeName(inner) is not None:
             typeName = self.nativeInterfaceTypeName(inner)
+            # Both shapes (Option-wrapped and plain Interface, per this
+            # function's doc comment) are handled inside the one call, which
+            # also fuses the discriminant and handle-index writes.
             return fill(
                 """
                 RefPtr<${typeName}> webIDLResultRef = std::move(${resultVar});
-                if (adapter.resultStep->kind == JS::WebIDLStepKind::Option) {
-                  uint32_t webIDLResultPtr;
-                  if (!JS::WriteCoercedOptionDiscriminant(ctx, *adapter.resultStep, resultMemBase, !!webIDLResultRef, resultsPtr, &webIDLResultPtr)) {
-                    return false;
-                  }
-                  if (webIDLResultRef) {
-                    if (!JS::WriteCoercedInterfaceNative(ctx, *adapter.resultStep->child, webIDLResultPtr, webIDLResultRef.forget().take(), resultsPtr)) {
-                      return false;
-                    }
-                  }
-                } else {
-                  // The component result type doesn't model optionality at
-                  // all here (see this function's doc comment) - it can't
-                  // represent an actually-null value.
-                  if (!webIDLResultRef) {
-                    JS_ReportErrorASCII(ctx.cx(), "component result type can't represent a null ${typeName}");
-                    return false;
-                  }
-                  if (!JS::WriteCoercedInterfaceNative(ctx, *adapter.resultStep, resultMemBase, webIDLResultRef.forget().take(), resultsPtr)) {
-                    return false;
-                  }
+                if (!JS::WriteCoercedNullableInterfaceNative(ctx, *adapter.resultStep, resultMemBase, webIDLResultRef.forget().take(), resultsPtr)) {
+                  return false;
                 }
                 """,
                 resultVar=resultVar,
