@@ -12863,13 +12863,22 @@ class CGMemberJITInfo(CGThing):
         receiverExpr = "self"
         if not isStatic:
             selfTypeName = self.descriptor.nativeType
+            # `webIDLResolvedSelf` is the receiver the JIT already resolved out
+            # of the handle table, or null when it declined (see
+            # JS::WebIDLNativeCallWithSelf). Only the null case needs the
+            # reader library, and only it owns a ref to release.
             selfStmts = fill(
                 """
                 mozilla::dom::WebIDLNativeArg<${selfTypeName}> webIDLSelfArg;
-                if (!webIDLSelfArg.Read(ctx, coreParams, adapter.paramSteps[0].step, 0)) {
-                  return false;
+                ${selfTypeName}* self;
+                if (webIDLResolvedSelf) {
+                  self = static_cast<${selfTypeName}*>(webIDLResolvedSelf);
+                } else {
+                  if (!webIDLSelfArg.Read(ctx, coreParams, adapter.paramSteps[0].step, 0)) {
+                    return false;
+                  }
+                  self = webIDLSelfArg.get();
                 }
-                ${selfTypeName}* self = webIDLSelfArg.get();
                 """,
                 selfTypeName=selfTypeName,
             )
@@ -12956,10 +12965,43 @@ class CGMemberJITInfo(CGThing):
             object=receiverExpr,
         ).define()
 
+        # A static has no receiver, so it gets only the plain
+        # JS::WebIDLNativeCall form. An operation with a receiver gets the
+        # JS::WebIDLNativeCallWithSelf form as the real body, plus that plain
+        # form as a thin forwarder for callers with no receiver to hand over
+        # (the generic entry, and baseline-compiled call sites).
+        if isStatic:
+            return fill(
+                """
+                static bool ${funcName}(const JS::WebIDLCallAdapter* adapterPtr,
+                                        JS::WebIDLContext* ctxPtr,
+                                        const JS::WasmScalarVal* paramsPtr,
+                                        uint32_t resultMemBase,
+                                        JS::WasmScalarVal* resultsPtr) {
+                  [[maybe_unused]] const JS::WebIDLCallAdapter& adapter =
+                      *adapterPtr;
+                  JS::WebIDLContext& ctx = *ctxPtr;
+                  [[maybe_unused]] const JS::WasmScalarVal* coreParams = paramsPtr;
+                  [[maybe_unused]] JSContext* cx = ctx.cx();
+                  $*{selfStmts}
+                  $*{argStmts}
+                  $*{call}
+                  $*{resultWriteStmts}
+                  return true;
+                }
+                """,
+                funcName=funcName,
+                selfStmts=selfStmts,
+                argStmts=argStmts,
+                call=call,
+                resultWriteStmts=resultWriteStmts,
+            )
+
         return fill(
             """
-            static bool ${funcName}(const JS::WebIDLCallAdapter* adapterPtr,
+            static bool ${funcName}_self(const JS::WebIDLCallAdapter* adapterPtr,
                                     JS::WebIDLContext* ctxPtr,
+                                    void* webIDLResolvedSelf,
                                     const JS::WasmScalarVal* paramsPtr,
                                     uint32_t resultMemBase,
                                     JS::WasmScalarVal* resultsPtr) {
@@ -12973,6 +13015,14 @@ class CGMemberJITInfo(CGThing):
               $*{call}
               $*{resultWriteStmts}
               return true;
+            }
+            static bool ${funcName}(const JS::WebIDLCallAdapter* adapterPtr,
+                                    JS::WebIDLContext* ctxPtr,
+                                    const JS::WasmScalarVal* paramsPtr,
+                                    uint32_t resultMemBase,
+                                    JS::WasmScalarVal* resultsPtr) {
+              return ${funcName}_self(adapterPtr, ctxPtr, nullptr, paramsPtr,
+                                      resultMemBase, resultsPtr);
             }
             """,
             funcName=funcName,
@@ -13633,6 +13683,7 @@ class CGMemberJITInfo(CGThing):
                 # component overload matching is unaffected. The two lists
                 # stay index-aligned - only element types differ.
                 nativeSignatures = self.nativeCallSignatures(signatures)
+                selfEntryNames = []
                 for i, (returnType, args) in enumerate(nativeSignatures):
                     entryName = self.nativeCallEntryFuncName(opType, i)
                     entryDef = self.buildNativeCallEntryFunction(
@@ -13640,14 +13691,30 @@ class CGMemberJITInfo(CGThing):
                     )
                     if entryDef is None:
                         entryNames.append("nullptr")
+                        selfEntryNames.append("nullptr")
                         continue
                     entryDefs += entryDef
                     entryNames.append(entryName)
+                    # Kept in sync with buildNativeCallEntryFunction: only an
+                    # operation with a receiver has the resolved-receiver form.
+                    selfEntryNames.append(
+                        "nullptr"
+                        if self.member.isStatic()
+                        else "%s_self" % entryName
+                    )
                 entriesName = "%s_overloadEntries" % buildFuncName
                 entriesDecl = (
                     "static const JS::WebIDLNativeCall %s[] = { %s };\n"
                     % (entriesName, ", ".join(entryNames))
                 )
+                if all(n == "nullptr" for n in selfEntryNames):
+                    selfEntriesName = "nullptr"
+                else:
+                    selfEntriesName = "%s_selfOverloadEntries" % buildFuncName
+                    entriesDecl += (
+                        "static const JS::WebIDLNativeCallWithSelf %s[] = { %s };\n"
+                        % (selfEntriesName, ", ".join(selfEntryNames))
+                    )
                 # Three nested brace levels: JSWebIDLNativeMethodJitInfo {
                 # JSWebIDLMethodJitInfo { JSJitInfo; buildOperationTypes; };
                 # overloadEntries; }.
@@ -13665,11 +13732,13 @@ class CGMemberJITInfo(CGThing):
                     """
                     {
                     ${webIDLMethodInitializer},
-                      ${entriesName}
+                      ${entriesName},
+                      ${selfEntriesName}
                     }
                     """,
                     webIDLMethodInitializer=indent(webIDLMethodInitializer),
                     entriesName=entriesName,
+                    selfEntriesName=selfEntriesName,
                 )
                 return fill(
                     """

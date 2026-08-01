@@ -528,6 +528,9 @@ class ComponentHandleTable {
     }
     static constexpr size_t offsetOfPtr() { return offsetof(Entry, ptr); }
     static constexpr size_t offsetOfIface() { return offsetof(Entry, iface); }
+    static constexpr size_t offsetOfResourceTypeDef() {
+      return offsetof(Entry, resourceTypeDef);
+    }
   };
   static_assert(std::is_trivially_copyable_v<Entry>);
   // MaxLength, below, assumes this fits comfortably in the JIT's Int32
@@ -556,10 +559,20 @@ class ComponentHandleTable {
   [[nodiscard]] bool growEntries(JSContext* cx);
   [[nodiscard]] bool pushFree(JSContext* cx, uint32_t index);
   [[nodiscard]] bool reserve(JSContext* cx, uint32_t* index);
+  [[nodiscard]] bool initSentinel(JSContext* cx);
 
  public:
   ComponentHandleTable() = default;
   ~ComponentHandleTable();
+
+  // Establishes the invariant JIT code relies on: `entries_` is non-null and
+  // `length_` is at least 1, with index 0 the reserved sentinel - all-zero,
+  // never Present, never handed out. A JIT-emitted probe can then clamp an
+  // out-of-range index to 0 and read that entry unconditionally, rather than
+  // branching around the load, and reads a null `ptr` for it. Idempotent.
+  [[nodiscard]] bool ensureInitialized(JSContext* cx) {
+    return length_ != 0 || initSentinel(cx);
+  }
 
   static constexpr size_t offsetOfEntries() {
     return offsetof(ComponentHandleTable, entries_);
@@ -1671,6 +1684,22 @@ class NativeCallArgTypes {
   jit::MIRType operator[](size_t i) const { return kTypes[i]; }
 };
 
+// The same, for JS::WebIDLNativeCallWithSelf.
+class NativeCallWithSelfArgTypes {
+  static constexpr jit::MIRType kTypes[] = {
+      jit::MIRType::Pointer,  // adapter
+      jit::MIRType::Pointer,  // ctx
+      jit::MIRType::Pointer,  // resolvedSelf
+      jit::MIRType::Pointer,  // params
+      jit::MIRType::Int32,    // resultMemBase
+      jit::MIRType::Pointer,  // results
+  };
+
+ public:
+  size_t length() const { return sizeof(kTypes) / sizeof(kTypes[0]); }
+  jit::MIRType operator[](size_t i) const { return kTypes[i]; }
+};
+
 class ComponentInstance;
 
 // All the state a `canon lower` core func needs to call straight into a
@@ -1684,6 +1713,19 @@ class ComponentInstance;
 // pointer to it directly into compiled code.
 struct LoweredNativeClosure {
   JS::WebIDLNativeCall entry = nullptr;
+  // The receiver-taking form of `entry`, for an import whose first component
+  // param is a `borrow<resource>` (ComponentImportHint::selfBorrowReceiver).
+  // Never null for such an import: an overload with no generated
+  // receiver-taking entry gets a trampoline that ignores the receiver and
+  // calls `entry`, so JIT code can call through this unconditionally.
+  JS::WebIDLNativeCallWithSelf selfEntry = nullptr;
+  // What JIT code must find in a handle table Entry for it to be the expected
+  // receiver: `selfExpectedFlags` is the exact Present|Native|kind bit
+  // pattern, and `selfExpectedTypeDef` the resource type. Both zero when this
+  // closure has no resolvable receiver, which makes the JIT's checks fail and
+  // hand `selfEntry` a null receiver (see JS::WebIDLNativeCallWithSelf).
+  uint32_t selfExpectedFlags = 0;
+  ComponentTypeDef* selfExpectedTypeDef = nullptr;
   CallAdapter adapter;
   JS::WebIDLContext ctx;
 

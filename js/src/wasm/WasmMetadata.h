@@ -37,6 +37,13 @@ struct ComponentImportHint {
   // a spilled result (i.e. the overload's result doesn't fit flat). The rest of
   // the marshalling shape is derivable from the import's core func type.
   bool resultOutParam = false;
+  // For CanonLower: whether this import's first component param is a
+  // `borrow<resource>`, i.e. the receiver of a method. Its handle index is the
+  // first core param, so the JIT can resolve it to a native pointer inline and
+  // hand it to the native entry, instead of the entry calling back out to
+  // JS::ReadCoercedInterfaceNative. See FunctionCompiler::
+  // resolveBorrowReceiver.
+  bool selfBorrowReceiver = false;
 };
 
 using ComponentImportHintVector =

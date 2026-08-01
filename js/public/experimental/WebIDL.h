@@ -711,6 +711,12 @@ class WebIDLContext {
   // typed param or result is reachable.
   js::wasm::ComponentHandleTable* handles() const { return handles_; }
 
+  // For JIT code reading the handle table directly (see FunctionCompiler::
+  // resolveBorrowReceiver), relative to the enclosing closure's `ctx`.
+  static constexpr size_t offsetOfHandles() {
+    return offsetof(WebIDLContext, handles_);
+  }
+
   void trace(JSTracer* trc);
 };
 
@@ -1026,6 +1032,26 @@ using WebIDLNativeCall = bool (*)(const WebIDLCallAdapter* adapter,
                                   uint32_t resultMemBase,
                                   WasmScalarVal* results);
 
+// A WebIDLNativeCall for an operation whose first component param is a
+// `borrow<resource>` receiver, taking that receiver's already-resolved native
+// pointer. Resolving a borrow handle is a handle-table probe the JIT can emit
+// inline (see FunctionCompiler::resolveBorrowReceiver), which saves the entry
+// an out-of-line JS::ReadCoercedInterfaceNative call and the round trip of
+// the handle index through `params`.
+//
+// `resolvedSelf` is null when the JIT declined - the handle wasn't a present,
+// Native-repr handle of the expected resource type, or this closure has no
+// resolvable receiver at all - and the entry then reads the receiver itself,
+// exactly as the plain WebIDLNativeCall form does. So a null `resolvedSelf` is
+// always correct, just slower, and the JIT never has to be able to reproduce
+// the reader library's trap behavior.
+using WebIDLNativeCallWithSelf = bool (*)(const WebIDLCallAdapter* adapter,
+                                          WebIDLContext* ctx,
+                                          void* resolvedSelf,
+                                          const WasmScalarVal* params,
+                                          uint32_t resultMemBase,
+                                          WasmScalarVal* results);
+
 }  // namespace JS
 
 // Composed onto a JSWebIDLMethodJitInfo, adding the native overload-entry
@@ -1037,6 +1063,9 @@ using WebIDLNativeCall = bool (*)(const WebIDLCallAdapter* adapter,
 struct JSWebIDLNativeMethodJitInfo {
   JSWebIDLMethodJitInfo base;
   const JS::WebIDLNativeCall* overloadEntries;
+  // Index-aligned with `overloadEntries`; null both here and per-slot when no
+  // overload takes a resolved receiver (see JS::WebIDLNativeCallWithSelf).
+  const JS::WebIDLNativeCallWithSelf* selfOverloadEntries;
 };
 
 namespace JS {

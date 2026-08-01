@@ -3127,7 +3127,7 @@ class FunctionCompiler {
   [[nodiscard]]
   bool nativeFuncPtrCall(CallCompileState* callState, MDefinition* calleePtr,
                          FailureMode failureMode, Trap failureTrap,
-                         uint32_t bytecodeOffset) {
+                         uint32_t bytecodeOffset, bool withSelf = false) {
     if (inDeadCode()) {
       return true;
     }
@@ -3140,7 +3140,10 @@ class FunctionCompiler {
     }
 
     uint32_t stackArgAreaSizeUnaligned =
-        StackArgAreaSizeUnaligned(NativeCallArgTypes(), callState->abiKind);
+        withSelf ? StackArgAreaSizeUnaligned(NativeCallWithSelfArgTypes(),
+                                             callState->abiKind)
+                 : StackArgAreaSizeUnaligned(NativeCallArgTypes(),
+                                             callState->abiKind);
 
     MInstruction* ins;
     if (callState->isCatchable()) {
@@ -3815,8 +3818,148 @@ class FunctionCompiler {
   // specialized one - so this can call straight through
   // ComponentImportInstanceData's pointer unconditionally, with no fallback
   // arm.
+  // Resolves core param 0 - a `borrow<resource>` handle index, see
+  // ComponentImportHint::selfBorrowReceiver - to the native pointer it names,
+  // so the native entry doesn't have to call out to
+  // JS::ReadCoercedInterfaceNative for its receiver. Returns the pointer, or
+  // null at runtime whenever this probe doesn't find exactly what
+  // JS::ReadCoercedInterfaceNative's own borrow fast path would accept: a
+  // present, Native-repr handle of the closure's expected resource type. A
+  // null result is always safe - the entry then reads the receiver itself (see
+  // JS::WebIDLNativeCallWithSelf) - so this deliberately has no slow arm, no
+  // trap, and no branches at all.
+  //
+  // Branch-free needs two things of the handle table, both guaranteed by
+  // ComponentHandleTable::ensureInitialized: `entries_` is never null, and
+  // index 0 is an all-zero, never-Present sentinel. So an out-of-range index
+  // is masked to 0, whose entry fails the checks below, and a failed check is
+  // itself expressed by masking the index to 0 again and reading that entry's
+  // null `ptr`.
+  [[nodiscard]] MDefinition* resolveBorrowReceiver(MDefinition* closure,
+                                                   MDefinition* handleIndex) {
+    using Entry = ComponentHandleTable::Entry;
+    MOZ_ASSERT(handleIndex->type() == MIRType::Int32);
+
+    auto loadField = [&](MDefinition* base, size_t offset, MIRType type) {
+      auto* load = MWasmLoadField::New(
+          alloc(), base, nullptr, offset, mozilla::Nothing(), type,
+          MWideningOp::None, AliasSet::Load(AliasSet::Any));
+      if (load) {
+        curBlock_->add(load);
+      }
+      return load;
+    };
+    // A pointer-width value compared as an integer: MIRType::Pointer has no
+    // MCompare form, and no constant form either (see
+    // loadComponentImportPtrAsI64 for the same dance).
+    MIRType wordType = targetIs64Bit() ? MIRType::Int64 : MIRType::Int32;
+    auto compareWords = [&](MDefinition* a, MDefinition* b) -> MDefinition* {
+      auto* cmp = MCompare::NewWasm(
+          alloc(), a, b, JSOp::Eq,
+          targetIs64Bit() ? MCompare::Compare_Int64 : MCompare::Compare_Int32);
+      curBlock_->add(cmp);
+      return cmp;
+    };
+    // `value` when `ok` (a wasm comparison result, so exactly 0 or 1) holds,
+    // 0 otherwise. A multiply rather than a subtract-and-mask: MSub is not a
+    // wasm-safe arithmetic node (it wants an overflow bailout snapshot), while
+    // this is the same MMul::Integer form the inlined resource.drop already
+    // uses for its index scaling.
+    auto keepIf = [&](MDefinition* value, MDefinition* ok) -> MDefinition* {
+      return mul(value, ok, MIRType::Int32, MMul::Integer);
+    };
+
+    MDefinition* handles = loadField(closure,
+                                     offsetof(LoweredNativeClosure, ctx) +
+                                         JS::WebIDLContext::offsetOfHandles(),
+                                     MIRType::Pointer);
+    if (!handles) {
+      return nullptr;
+    }
+    MDefinition* entries = loadField(
+        handles, ComponentHandleTable::offsetOfEntries(), MIRType::Pointer);
+    MDefinition* length = loadField(
+        handles, ComponentHandleTable::offsetOfLength(), MIRType::Int32);
+    if (!entries || !length) {
+      return nullptr;
+    }
+
+    auto* inRange = MCompare::NewWasm(alloc(), handleIndex, length, JSOp::Lt,
+                                      MCompare::Compare_UInt32);
+    curBlock_->add(inRange);
+    MDefinition* safeIndex = keepIf(handleIndex, inRange);
+    if (!safeIndex) {
+      return nullptr;
+    }
+
+    auto* scaled = mul(safeIndex, constantI32(int32_t(sizeof(Entry))),
+                       MIRType::Int32, MMul::Integer);
+    if (!scaled) {
+      return nullptr;
+    }
+    auto* entry = MWasmDerivedIndexPointer::New(alloc(), entries, scaled,
+                                                Scale::TimesOne);
+    curBlock_->add(entry);
+
+    MDefinition* flags =
+        loadField(entry, Entry::offsetOfFlags(), MIRType::Int32);
+    MDefinition* typeDef =
+        loadField(entry, Entry::offsetOfResourceTypeDef(), wordType);
+    MDefinition* expectedFlags =
+        loadField(closure, offsetof(LoweredNativeClosure, selfExpectedFlags),
+                  MIRType::Int32);
+    MDefinition* expectedTypeDef = loadField(
+        closure, offsetof(LoweredNativeClosure, selfExpectedTypeDef), wordType);
+    if (!flags || !typeDef || !expectedFlags || !expectedTypeDef) {
+      return nullptr;
+    }
+
+    // Only the Present, Native and resource-kind bits participate; numLends
+    // and the rest of the flags word are none of this check's business.
+    auto* maskedFlags =
+        MBitAnd::New(alloc(), flags,
+                     constantI32(int32_t(ComponentHandleTable::Present |
+                                         ComponentHandleTable::Native |
+                                         ComponentHandleTable::KindMask)),
+                     MIRType::Int32);
+    curBlock_->add(maskedFlags);
+    auto* flagsOk = MCompare::NewWasm(alloc(), maskedFlags, expectedFlags,
+                                      JSOp::Eq, MCompare::Compare_Int32);
+    curBlock_->add(flagsOk);
+    MDefinition* typeOk = compareWords(typeDef, expectedTypeDef);
+    // A closure with no resolvable receiver leaves both expectations zero, and
+    // a zeroed `selfExpectedFlags` would otherwise match a *free* entry.
+    MDefinition* zeroWord =
+        targetIs64Bit() ? constantI64(int64_t(0)) : constantI32(int32_t(0));
+    auto* haveExpectation = MCompare::NewWasm(
+        alloc(), expectedTypeDef, zeroWord, JSOp::Ne,
+        targetIs64Bit() ? MCompare::Compare_Int64 : MCompare::Compare_Int32);
+    curBlock_->add(haveExpectation);
+
+    auto* ok1 = MBitAnd::New(alloc(), inRange, flagsOk, MIRType::Int32);
+    curBlock_->add(ok1);
+    auto* ok2 = MBitAnd::New(alloc(), typeOk, haveExpectation, MIRType::Int32);
+    curBlock_->add(ok2);
+    auto* ok = MBitAnd::New(alloc(), ok1, ok2, MIRType::Int32);
+    curBlock_->add(ok);
+
+    // Zero the index again rather than the loaded pointer: masking a
+    // MIRType::Pointer isn't expressible, while entry 0's `ptr` is null by
+    // construction. In the overwhelmingly common case this addresses the very
+    // same entry that was just loaded from.
+    MDefinition* finalIndex = keepIf(scaled, ok);
+    if (!finalIndex) {
+      return nullptr;
+    }
+    auto* finalEntry = MWasmDerivedIndexPointer::New(
+        alloc(), entries, finalIndex, Scale::TimesOne);
+    curBlock_->add(finalEntry);
+    return loadField(finalEntry, Entry::offsetOfPtr(), MIRType::Pointer);
+  }
+
   [[nodiscard]] bool callComponentCanonLower(uint32_t funcIndex,
                                              bool resultOutParam,
+                                             bool selfBorrowReceiver,
                                              uint32_t bytecodeOffset,
                                              const DefVector& params) {
     MOZ_ASSERT(!inDeadCode());
@@ -3885,8 +4028,22 @@ class FunctionCompiler {
     }
     curBlock_->add(resultsBase);
 
+    // With a receiver to resolve, call the receiver-taking form of the entry
+    // instead - always non-null for such an import, see
+    // LoweredNativeClosure::selfEntry.
+    MDefinition* resolvedSelf = nullptr;
+    if (selfBorrowReceiver) {
+      MOZ_ASSERT(numParams >= 1);
+      resolvedSelf = resolveBorrowReceiver(closure, params[0]);
+      if (!resolvedSelf) {
+        return false;
+      }
+    }
+
     auto* entryPtr = MWasmLoadField::New(
-        alloc(), closure, nullptr, offsetof(LoweredNativeClosure, entry),
+        alloc(), closure, nullptr,
+        selfBorrowReceiver ? offsetof(LoweredNativeClosure, selfEntry)
+                           : offsetof(LoweredNativeClosure, entry),
         mozilla::Nothing(), MIRType::Pointer, MWideningOp::None,
         AliasSet::Load(AliasSet::Any));
     if (!entryPtr) {
@@ -3904,8 +4061,14 @@ class FunctionCompiler {
 
     CallCompileState callState(ABIKind::System);
     if (!passCallArg(adapterPtr, MIRType::Pointer, &callState) ||
-        !passCallArg(ctxPtr, MIRType::Pointer, &callState) ||
-        !passCallArg(paramsBase, MIRType::Pointer, &callState) ||
+        !passCallArg(ctxPtr, MIRType::Pointer, &callState)) {
+      return false;
+    }
+    if (resolvedSelf &&
+        !passCallArg(resolvedSelf, MIRType::Pointer, &callState)) {
+      return false;
+    }
+    if (!passCallArg(paramsBase, MIRType::Pointer, &callState) ||
         !passCallArg(resultMemBase, MIRType::Int32, &callState) ||
         !passCallArg(resultsBase, MIRType::Pointer, &callState) ||
         !finishCallArgs(&callState)) {
@@ -3913,7 +4076,8 @@ class FunctionCompiler {
     }
 
     if (!nativeFuncPtrCall(&callState, entryPtr, FailureMode::FailOnFalseI32,
-                           Trap::ThrowReported, bytecodeOffset)) {
+                           Trap::ThrowReported, bytecodeOffset,
+                           /*withSelf=*/resolvedSelf != nullptr)) {
       return false;
     }
 
@@ -7063,6 +7227,7 @@ bool FunctionCompiler::emitCall() {
         return callComponentResourceDrop(funcIndex, bytecodeOffset, args);
       case ComponentImportKind::CanonLower:
         return callComponentCanonLower(funcIndex, componentHint.resultOutParam,
+                                       componentHint.selfBorrowReceiver,
                                        bytecodeOffset, args);
       case ComponentImportKind::None:
         break;

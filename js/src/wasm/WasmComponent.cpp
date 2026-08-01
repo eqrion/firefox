@@ -3836,7 +3836,8 @@ static JSFunction* BuildLoweredJSCoreFunc(
 // Defined alongside TryCallWebIDLNative's former call site, further below.
 [[nodiscard]] static bool SelectNativeOverload(
     JSContext* cx, JS::HandleFunction callee, const ComponentFuncType& funcType,
-    bool* eligible, JS::WebIDLNativeCall* outEntry, CallAdapter* outAdapter);
+    bool* eligible, JS::WebIDLNativeCall* outEntry,
+    JS::WebIDLNativeCallWithSelf* outSelfEntry, CallAdapter* outAdapter);
 
 // The generic JS::WebIDLNativeCall entry - defined alongside its own former
 // call site (WasmComponentLoweredJS's predecessor), further below.
@@ -3845,6 +3846,22 @@ static bool LoweredNativeCall(const JS::WebIDLCallAdapter* adapter,
                               const JS::WasmScalarVal* params,
                               uint32_t resultMemBase,
                               JS::WasmScalarVal* results);
+
+// The JS::WebIDLNativeCallWithSelf every closure whose selected overload has
+// no receiver-taking entry gets, so that JIT code emitted for a
+// ComponentImportHint::selfBorrowReceiver import can call `selfEntry`
+// unconditionally. Discarding an already-resolved receiver is free of
+// consequence: resolving one has no side effects, so the entry just reads it
+// again.
+static bool CallNativeEntryIgnoringSelf(const JS::WebIDLCallAdapter* adapter,
+                                        JS::WebIDLContext* ctx,
+                                        void* resolvedSelf,
+                                        const JS::WasmScalarVal* params,
+                                        uint32_t resultMemBase,
+                                        JS::WasmScalarVal* results) {
+  return LoweredNativeClosure::fromCtx(ctx)->entry(adapter, ctx, params,
+                                                   resultMemBase, results);
+}
 
 // Resolves a `canon lower` core func's import into a LoweredNativeClosure and
 // stores its JSFunction form in `exportVal`. Called from
@@ -3881,12 +3898,13 @@ static bool LoweredNativeCall(const JS::WebIDLCallAdapter* adapter,
 
   bool eligible = false;
   JS::WebIDLNativeCall entry = nullptr;
+  JS::WebIDLNativeCallWithSelf selfEntry = nullptr;
   CallAdapter adapter;
   JSObject* unwrappedCallee = UncheckedUnwrap(callee);
   if (unwrappedCallee->is<JSFunction>()) {
     RootedFunction calleeFun(cx, &unwrappedCallee->as<JSFunction>());
     if (!SelectNativeOverload(cx, calleeFun, funcType, &eligible, &entry,
-                              &adapter)) {
+                              &selfEntry, &adapter)) {
       return false;
     }
   }
@@ -3898,6 +3916,12 @@ static bool LoweredNativeCall(const JS::WebIDLCallAdapter* adapter,
     return false;
   }
   closure->ctx.init(cx, &instance.handles());
+  // JIT code emitted for a selfBorrowReceiver import probes the handle table
+  // without branching around an empty one - see
+  // ComponentHandleTable::ensureInitialized.
+  if (!instance.handles().ensureInitialized(cx)) {
+    return false;
+  }
   if (eligible) {
     closure->entry = entry;
     closure->adapter = std::move(adapter);
@@ -3914,6 +3938,28 @@ static bool LoweredNativeCall(const JS::WebIDLCallAdapter* adapter,
         !BuildCallAdapter(cx, funcType, opType, ComponentStringEncoding::Utf8,
                           &closure->adapter)) {
       return false;
+    }
+  }
+
+  // What JIT code must find in a handle table entry for core param 0 to be
+  // this call's receiver. Left zero unless the selected overload has a
+  // receiver-taking entry *and* the adapter really does source its first param
+  // from a `borrow` handle, so that a mismatch (or a closure with no
+  // receiver-taking entry at all) resolves to a null receiver and the entry
+  // reads it the ordinary way.
+  closure->selfEntry = selfEntry ? selfEntry : CallNativeEntryIgnoringSelf;
+  if (selfEntry && !closure->adapter.paramSteps.empty()) {
+    const JS::WebIDLCoerceStep& selfStep = closure->adapter.paramSteps[0].step;
+    if (selfStep.kind == JS::WebIDLStepKind::Interface &&
+        !selfStep.resourceOwn &&
+        selfStep.access.mode == JS::WebIDLAccessLoc::Mode::FlatSlot &&
+        selfStep.access.flatSlot == 0 && selfStep.resourceTypeDef) {
+      closure->selfExpectedFlags = ComponentHandleTable::Present |
+                                   ComponentHandleTable::Native |
+                                   ((uint32_t(selfStep.resourceTypeKind)
+                                     << ComponentHandleTable::KindShift) &
+                                    ComponentHandleTable::KindMask);
+      closure->selfExpectedTypeDef = selfStep.resourceTypeDef.get();
     }
   }
 
@@ -5027,18 +5073,24 @@ bool ComponentHandleTable::pushFree(JSContext* cx, uint32_t index) {
   return true;
 }
 
+// Index 0 is a reserved sentinel, never allocated. See ensureInitialized.
+bool ComponentHandleTable::initSentinel(JSContext* cx) {
+  MOZ_ASSERT(length_ == 0);
+  if (!growEntries(cx)) {
+    return false;
+  }
+  if (!wrapped_.resize(1)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  entries_[0] = Entry();
+  length_ = 1;
+  return true;
+}
+
 bool ComponentHandleTable::reserve(JSContext* cx, uint32_t* index) {
-  if (length_ == 0) {
-    // Index 0 is a reserved sentinel, never allocated.
-    if (!growEntries(cx)) {
-      return false;
-    }
-    if (!wrapped_.resize(1)) {
-      ReportOutOfMemory(cx);
-      return false;
-    }
-    entries_[0] = Entry();
-    length_ = 1;
+  if (!ensureInitialized(cx)) {
+    return false;
   }
   if (freeLength_ > 0) {
     freeLength_--;
@@ -9243,8 +9295,10 @@ bool JS::WriteCoercedBool(WebIDLContext& ctx, const WebIDLCoerceStep& step,
 // overload's native entry point and compiled call adapter.
 [[nodiscard]] static bool SelectNativeOverload(
     JSContext* cx, JS::HandleFunction callee, const ComponentFuncType& funcType,
-    bool* eligible, JS::WebIDLNativeCall* outEntry, CallAdapter* outAdapter) {
+    bool* eligible, JS::WebIDLNativeCall* outEntry,
+    JS::WebIDLNativeCallWithSelf* outSelfEntry, CallAdapter* outAdapter) {
   *eligible = false;
+  *outSelfEntry = nullptr;
   if (!callee->hasJitInfo()) {
     JS_LOG(wasmComponents, Info,
            "native call path: not taken (callee has no jitinfo)");
@@ -9286,8 +9340,11 @@ bool JS::WriteCoercedBool(WebIDLContext& ctx, const WebIDLCoerceStep& step,
   }
   *eligible = true;
   *outEntry = methodInfo->overloadEntries[*selected];
-  JS_LOG(wasmComponents, Info, "native call path: taken (overload %zu)",
-         *selected);
+  if (methodInfo->selfOverloadEntries) {
+    *outSelfEntry = methodInfo->selfOverloadEntries[*selected];
+  }
+  JS_LOG(wasmComponents, Info, "native call path: taken (overload %zu%s)",
+         *selected, *outSelfEntry ? ", resolved receiver" : "");
   return true;
 }
 

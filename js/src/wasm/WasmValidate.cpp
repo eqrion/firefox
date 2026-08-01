@@ -6832,8 +6832,13 @@ enum class ComponentExportFlagsRaw : uint8_t {
           }
           hasResultOutParam = flatResult.length() > MaxFlatResults;
         }
+        // A `borrow<resource>` flattens to exactly one i32 handle index, so
+        // when it comes first its index is core param 0.
+        bool selfBorrowReceiver =
+            !funcType.paramTypes.empty() &&
+            funcType.paramTypes[0].kind() == ComponentTypeKind::Borrow;
         *hint = ComponentImportHint{ComponentImportKind::CanonLower,
-                                    hasResultOutParam};
+                                    hasResultOutParam, selfBorrowReceiver};
         return true;
       }
       const ComponentResourceBuiltin& builtin =
@@ -6916,7 +6921,8 @@ enum class ComponentExportFlagsRaw : uint8_t {
       MOZ_RELEASE_ASSERT(moduleHints.length() == hints.length());
       for (uint32_t i = 0; i < hints.length(); i++) {
         if (moduleHints[i].kind != hints[i].kind ||
-            moduleHints[i].resultOutParam != hints[i].resultOutParam) {
+            moduleHints[i].resultOutParam != hints[i].resultOutParam ||
+            moduleHints[i].selfBorrowReceiver != hints[i].selfBorrowReceiver) {
           moduleHints[i] = ComponentImportHint();
         }
       }
