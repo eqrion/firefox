@@ -260,52 +260,11 @@ enum class DefinitionKind {
   Tag = 0x04,
 };
 
-// The values here must not intersect with the values of DefinitionKind.
-enum class CompactImportKind {
-  ModuleName = 0x7F,
-  ModuleNameAndExternType = 0x7E,
-};
-
 enum class GlobalTypeImmediate { IsMutable = 0x1, AllowedMask = 0x1 };
 
 enum class LimitsFlags {
   Default = 0x0,
   HasMaximum = 0x1,
-  IsShared = 0x2,
-  IsI64 = 0x4,
-#ifdef ENABLE_WASM_CUSTOM_PAGE_SIZES
-  HasCustomPageSize = 0x8,
-#endif
-};
-
-enum class LimitsMask {
-  Table = uint8_t(LimitsFlags::HasMaximum) | uint8_t(LimitsFlags::IsI64),
-#ifdef ENABLE_WASM_CUSTOM_PAGE_SIZES
-  Memory = uint8_t(LimitsFlags::HasMaximum) | uint8_t(LimitsFlags::IsShared) |
-           uint8_t(LimitsFlags::IsI64) |
-           uint8_t(LimitsFlags::HasCustomPageSize),
-#else
-  Memory = uint8_t(LimitsFlags::HasMaximum) | uint8_t(LimitsFlags::IsShared) |
-           uint8_t(LimitsFlags::IsI64),
-#endif
-};
-
-enum class DataSegmentKind {
-  Active = 0x00,
-  Passive = 0x01,
-  ActiveWithMemoryIndex = 0x02
-};
-
-enum class ElemSegmentKind : uint32_t {
-  Active = 0x0,
-  Passive = 0x1,
-  ActiveWithTableIndex = 0x2,
-  Declared = 0x3,
-};
-
-enum class ElemSegmentPayload : uint32_t {
-  Indices = 0x0,
-  Expressions = 0x4,
 };
 
 enum class TagKind {
@@ -1184,8 +1143,8 @@ static const unsigned MaxTypes = 1000000;
 static const unsigned MaxSubTypingDepth = 63;
 static const unsigned MaxTags = 1000000;
 static const unsigned MaxFuncs = 1000000;
-static const unsigned MaxTables = 100000;
-static const unsigned MaxMemories = 100;
+static const unsigned MaxTables = 1;
+static const unsigned MaxMemories = 1;
 static const unsigned MaxImports = 1000000;
 static const unsigned MaxExports = 1000000;
 static const unsigned MaxGlobals = 1000000;

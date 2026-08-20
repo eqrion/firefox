@@ -143,40 +143,18 @@ let $0 = instantiate(`(module
     end
     local.get \$res
   )
-
-  (global \$temp (mut i32) (i32.const 0))
-  (func \$add_one_to_global (result i32)
-    (local i32)
-    (global.set \$temp (i32.add (i32.const 1) (global.get \$temp)))
-    (global.get \$temp)
-  )
-  (func \$add_one_to_global_and_drop
-    (drop (call \$add_one_to_global))
-  )
-  (func (export "not-quite-a-tree") (result i32)
-    call \$add_one_to_global
-    call \$add_one_to_global
-    call \$add_one_to_global_and_drop
-    i32.add
-  )
 )`);
 
-// ./test/core/stack.wast:146
+// ./test/core/stack.wast:130
 assert_return(() => invoke($0, `fac-expr`, [25n]), [value("i64", 7034535277573963776n)]);
 
-// ./test/core/stack.wast:147
+// ./test/core/stack.wast:131
 assert_return(() => invoke($0, `fac-stack`, [25n]), [value("i64", 7034535277573963776n)]);
 
-// ./test/core/stack.wast:148
+// ./test/core/stack.wast:132
 assert_return(() => invoke($0, `fac-mixed`, [25n]), [value("i64", 7034535277573963776n)]);
 
-// ./test/core/stack.wast:150
-assert_return(() => invoke($0, `not-quite-a-tree`, []), [value("i32", 3)]);
-
-// ./test/core/stack.wast:151
-assert_return(() => invoke($0, `not-quite-a-tree`, []), [value("i32", 9)]);
-
-// ./test/core/stack.wast:156
+// ./test/core/stack.wast:137
 let $1 = instantiate(`(module
   (type \$proc (func))
   (table 1 funcref)

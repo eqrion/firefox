@@ -618,10 +618,6 @@ class MOZ_STACK_CLASS OpIter : private Policy {
   // order, we keep track of the most recently accessed index.
   // Retrieving branch hints is also done in order inside a function.
   BranchHint getBranchHint(uint32_t funcIndex, uint32_t branchOffset) {
-    if (!codeMeta_.branchHintingEnabled()) {
-      return BranchHint::Invalid;
-    }
-
     // Get the next hint in the collection
     while (lastBranchHintIndex_ < branchHintVector_->length() &&
            (*branchHintVector_)[lastBranchHintIndex_].branchOffset <
@@ -1242,23 +1238,16 @@ inline bool OpIter<Policy>::readBlockType(BlockType* type) {
     if (!readValType(&v)) {
       return false;
     }
+    if (!v.isNumber()) {
+      return fail("bad block type");
+    }
     *type = BlockType::VoidToSingle(v);
     return true;
   }
 
-  int32_t x;
-  if (!d_.readVarS32(&x) || x < 0 || uint32_t(x) >= codeMeta_.types->length()) {
-    return fail("invalid block type type index");
-  }
-
-  const TypeDef* typeDef = &codeMeta_.types->type(x);
-  if (!typeDef->isFuncType()) {
-    return fail("block type type index must be func type");
-  }
-
-  *type = BlockType::Func(typeDef->funcType());
-
-  return true;
+  // wasm 1.0 block types are either void or a single value type; a type
+  // index (multi-value proposal) is not allowed.
+  return fail("invalid block type");
 }
 
 template <typename Policy>
@@ -1300,9 +1289,7 @@ inline bool OpIter<Policy>::startFunction(uint32_t funcIndex) {
 
   // Initialize information related to branch hinting.
   lastBranchHintIndex_ = 0;
-  if (codeMeta_.branchHintingEnabled()) {
-    branchHintVector_ = &codeMeta_.branchHints.getHintVector(funcIndex);
-  }
+  branchHintVector_ = &codeMeta_.branchHints.getHintVector(funcIndex);
 
   size_t numArgs = codeMeta_.getFuncType(funcIndex).args().length();
   if (!unsetLocals_.init(locals_, numArgs)) {
@@ -2333,12 +2320,14 @@ inline bool OpIter<Policy>::readGetGlobal(uint32_t* id) {
     return fail("global.get index out of range");
   }
 
-  // Initializer expressions can only access previously-defined immutable
+  // wasm 1.0 initializer expressions can only access immutable imported
   // globals.
-  if (kind_ == OpIter::InitExpr && codeMeta_.globals[*id].isMutable()) {
+  if (kind_ == OpIter::InitExpr &&
+      (codeMeta_.globals[*id].isMutable() ||
+       !codeMeta_.globals[*id].isImport())) {
     return fail(
-        "global.get in initializer expression must reference a "
-        "previously-defined immutable global");
+        "global.get in initializer expression must reference an "
+        "immutable imported global");
   }
 
   return push(codeMeta_.globals[*id].type());
@@ -2633,6 +2622,9 @@ inline bool OpIter<Policy>::readCallIndirect(uint32_t* funcTypeIndex,
 
   if (!readVarU32(tableIndex)) {
     return fail("unable to read call_indirect table index");
+  }
+  if (*tableIndex != 0) {
+    return fail("expected reserved byte to be 0");
   }
   if (*tableIndex >= codeMeta_.tables.length()) {
     // Special case this for improved user experience.

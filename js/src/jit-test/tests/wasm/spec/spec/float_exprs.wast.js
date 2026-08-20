@@ -2493,7 +2493,7 @@ assert_return(
   [value("f32", -Infinity)],
 );
 
-// ./test/core/float_exprs.wast:655
+// ./test/core/float_exprs.wast:654
 let $37 = instantiate(`(module
   (func (export "no_demote_mixed_add") (param \$x f64) (param \$y f32) (result f32)
     (f32.demote_f64 (f64.add (local.get \$x) (f64.promote_f32 (local.get \$y)))))
@@ -2501,34 +2501,34 @@ let $37 = instantiate(`(module
     (f32.demote_f64 (f64.add (f64.promote_f32 (local.get \$y)) (local.get \$x))))
 )`);
 
-// ./test/core/float_exprs.wast:662
+// ./test/core/float_exprs.wast:661
 assert_return(
   () => invoke($37, `no_demote_mixed_add`, [
     value("f64", 0.00000000000000000000000000004941266527909197),
     value("f32", 0.0000000000000000000000000000000000018767183),
   ]),
   [value("f32", 0.000000000000000000000000000049412667)],
+);
+
+// ./test/core/float_exprs.wast:662
+assert_return(
+  () => invoke($37, `no_demote_mixed_add`, [
+    value("f64", 140851523637.69385),
+    value("f32", 401096440000),
+  ]),
+  [value("f32", 541947950000)],
 );
 
 // ./test/core/float_exprs.wast:663
 assert_return(
   () => invoke($37, `no_demote_mixed_add`, [
-    value("f64", 140851523637.69385),
-    value("f32", 401096440000),
-  ]),
-  [value("f32", 541947950000)],
-);
-
-// ./test/core/float_exprs.wast:664
-assert_return(
-  () => invoke($37, `no_demote_mixed_add`, [
     value("f64", 0.0000000000000000000000000000000000020831160914192852),
     value("f32", -0.0000000000000000000000000000000000006050095),
   ]),
   [value("f32", 0.0000000000000000000000000000000000014781066)],
 );
 
-// ./test/core/float_exprs.wast:665
+// ./test/core/float_exprs.wast:664
 assert_return(
   () => invoke($37, `no_demote_mixed_add`, [
     value("f64", -0.0000010032827553674626),
@@ -2537,7 +2537,7 @@ assert_return(
   [value("f32", -0.0000010013515)],
 );
 
-// ./test/core/float_exprs.wast:666
+// ./test/core/float_exprs.wast:665
 assert_return(
   () => invoke($37, `no_demote_mixed_add`, [
     value("f64", -0.0000013840207035752711),
@@ -2546,7 +2546,7 @@ assert_return(
   [value("f32", -0.0000013840212)],
 );
 
-// ./test/core/float_exprs.wast:668
+// ./test/core/float_exprs.wast:667
 assert_return(
   () => invoke($37, `no_demote_mixed_add_commuted`, [
     value("f32", 0.0000000000000000000000000000000000018767183),
@@ -2555,7 +2555,7 @@ assert_return(
   [value("f32", 0.000000000000000000000000000049412667)],
 );
 
-// ./test/core/float_exprs.wast:669
+// ./test/core/float_exprs.wast:668
 assert_return(
   () => invoke($37, `no_demote_mixed_add_commuted`, [
     value("f32", 401096440000),
@@ -2564,7 +2564,7 @@ assert_return(
   [value("f32", 541947950000)],
 );
 
-// ./test/core/float_exprs.wast:670
+// ./test/core/float_exprs.wast:669
 assert_return(
   () => invoke($37, `no_demote_mixed_add_commuted`, [
     value("f32", -0.0000000000000000000000000000000000006050095),
@@ -2573,7 +2573,7 @@ assert_return(
   [value("f32", 0.0000000000000000000000000000000000014781066)],
 );
 
-// ./test/core/float_exprs.wast:671
+// ./test/core/float_exprs.wast:670
 assert_return(
   () => invoke($37, `no_demote_mixed_add_commuted`, [
     value("f32", 0.0000000019312918),
@@ -2582,7 +2582,7 @@ assert_return(
   [value("f32", -0.0000010013515)],
 );
 
-// ./test/core/float_exprs.wast:672
+// ./test/core/float_exprs.wast:671
 assert_return(
   () => invoke($37, `no_demote_mixed_add_commuted`, [
     value("f32", -0.0000000000005202814),
@@ -2591,15 +2591,13 @@ assert_return(
   [value("f32", -0.0000013840212)],
 );
 
-// ./test/core/float_exprs.wast:677
+// ./test/core/float_exprs.wast:675
 let $38 = instantiate(`(module
   (func (export "no_demote_mixed_sub") (param \$x f64) (param \$y f32) (result f32)
     (f32.demote_f64 (f64.sub (local.get \$x) (f64.promote_f32 (local.get \$y)))))
-  (func (export "no_demote_mixed_sub_commuted") (param \$y f32) (param \$x f64) (result f32)
-    (f32.demote_f64 (f64.sub (f64.promote_f32 (local.get \$y)) (local.get \$x))))
 )`);
 
-// ./test/core/float_exprs.wast:684
+// ./test/core/float_exprs.wast:680
 assert_return(
   () => invoke($38, `no_demote_mixed_sub`, [
     value("f64", 7869935327202668000000000),
@@ -2608,7 +2606,7 @@ assert_return(
   [value("f32", 7869931000000000000000000)],
 );
 
-// ./test/core/float_exprs.wast:685
+// ./test/core/float_exprs.wast:681
 assert_return(
   () => invoke($38, `no_demote_mixed_sub`, [
     value("f64", -1535841968.9056544),
@@ -2617,7 +2615,7 @@ assert_return(
   [value("f32", -1536081900)],
 );
 
-// ./test/core/float_exprs.wast:686
+// ./test/core/float_exprs.wast:682
 assert_return(
   () => invoke($38, `no_demote_mixed_sub`, [
     value("f64", -102.19459272722602),
@@ -2626,7 +2624,7 @@ assert_return(
   [value("f32", -102.194984)],
 );
 
-// ./test/core/float_exprs.wast:687
+// ./test/core/float_exprs.wast:683
 assert_return(
   () => invoke($38, `no_demote_mixed_sub`, [
     value("f64", 0.00000000000000005645470375565188),
@@ -2635,7 +2633,7 @@ assert_return(
   [value("f32", 0.00000000000000005645412)],
 );
 
-// ./test/core/float_exprs.wast:688
+// ./test/core/float_exprs.wast:684
 assert_return(
   () => invoke($38, `no_demote_mixed_sub`, [
     value("f64", 27090.388466832894),
@@ -2644,249 +2642,8 @@ assert_return(
   [value("f32", -36030.504)],
 );
 
-// ./test/core/float_exprs.wast:690
-assert_return(
-  () => invoke($38, `no_demote_mixed_sub_commuted`, [
-    value("f32", 4086347000000000000),
-    value("f64", 7869935327202668000000000),
-  ]),
-  [value("f32", -7869931000000000000000000)],
-);
-
-// ./test/core/float_exprs.wast:691
-assert_return(
-  () => invoke($38, `no_demote_mixed_sub_commuted`, [
-    value("f32", 239897.28),
-    value("f64", -1535841968.9056544),
-  ]),
-  [value("f32", 1536081900)],
-);
-
-// ./test/core/float_exprs.wast:692
-assert_return(
-  () => invoke($38, `no_demote_mixed_sub_commuted`, [
-    value("f32", 0.00039426138),
-    value("f64", -102.19459272722602),
-  ]),
-  [value("f32", 102.194984)],
-);
-
-// ./test/core/float_exprs.wast:693
-assert_return(
-  () => invoke($38, `no_demote_mixed_sub_commuted`, [
-    value("f32", 0.0000000000000000000005851077),
-    value("f64", 0.00000000000000005645470375565188),
-  ]),
-  [value("f32", -0.00000000000000005645412)],
-);
-
-// ./test/core/float_exprs.wast:694
-assert_return(
-  () => invoke($38, `no_demote_mixed_sub_commuted`, [
-    value("f32", 63120.89),
-    value("f64", 27090.388466832894),
-  ]),
-  [value("f32", 36030.504)],
-);
-
-// ./test/core/float_exprs.wast:699
+// ./test/core/float_exprs.wast:688
 let $39 = instantiate(`(module
-  (func (export "no_demote_mixed_mul") (param \$x f64) (param \$y f32) (result f32)
-    (f32.demote_f64 (f64.mul (local.get \$x) (f64.promote_f32 (local.get \$y)))))
-  (func (export "no_demote_mixed_mul_commuted") (param \$y f32) (param \$x f64) (result f32)
-    (f32.demote_f64 (f64.mul (f64.promote_f32 (local.get \$y)) (local.get \$x))))
-)`);
-
-// ./test/core/float_exprs.wast:706
-assert_return(
-  () => invoke($39, `no_demote_mixed_mul`, [
-    value("f64", 0.00000000000000000000000000000000000000000000000000000000000025377744840344215),
-    value("f32", 15802016000000000000000000000000000),
-  ]),
-  [value("f32", 0.0000000000000000000000000040101952)],
-);
-
-// ./test/core/float_exprs.wast:707
-assert_return(
-  () => invoke($39, `no_demote_mixed_mul`, [
-    value("f64", 2172669212942878800000000000000000000000000),
-    value("f32", 0.000000000000000000000000000000007293721),
-  ]),
-  [value("f32", 15846843000)],
-);
-
-// ./test/core/float_exprs.wast:708
-assert_return(
-  () => invoke($39, `no_demote_mixed_mul`, [
-    value("f64", 185661354759469570000000000000000000000000000000000000),
-    value("f32", 0.000000000000000011523599),
-  ]),
-  [value("f32", 2139487000000000000000000000000000000)],
-);
-
-// ./test/core/float_exprs.wast:709
-assert_return(
-  () => invoke($39, `no_demote_mixed_mul`, [
-    value("f64", 5434641042224456000000000000000000000000000000000000000000000000000),
-    value("f32", 0.00000000000000000000000000000000000023453286),
-  ]),
-  [value("f32", 1274601900000000000000000000000)],
-);
-
-// ./test/core/float_exprs.wast:710
-assert_return(
-  () => invoke($39, `no_demote_mixed_mul`, [
-    value("f64", 0.0000000000000000000000000000000000000000000000000011834791522838056),
-    value("f32", 310965330000000),
-  ]),
-  [value("f32", 0.00000000000000000000000000000000000036802098)],
-);
-
-// ./test/core/float_exprs.wast:712
-assert_return(
-  () => invoke($39, `no_demote_mixed_mul_commuted`, [
-    value("f32", 15802016000000000000000000000000000),
-    value("f64", 0.00000000000000000000000000000000000000000000000000000000000025377744840344215),
-  ]),
-  [value("f32", 0.0000000000000000000000000040101952)],
-);
-
-// ./test/core/float_exprs.wast:713
-assert_return(
-  () => invoke($39, `no_demote_mixed_mul_commuted`, [
-    value("f32", 0.000000000000000000000000000000007293721),
-    value("f64", 2172669212942878800000000000000000000000000),
-  ]),
-  [value("f32", 15846843000)],
-);
-
-// ./test/core/float_exprs.wast:714
-assert_return(
-  () => invoke($39, `no_demote_mixed_mul_commuted`, [
-    value("f32", 0.000000000000000011523599),
-    value("f64", 185661354759469570000000000000000000000000000000000000),
-  ]),
-  [value("f32", 2139487000000000000000000000000000000)],
-);
-
-// ./test/core/float_exprs.wast:715
-assert_return(
-  () => invoke($39, `no_demote_mixed_mul_commuted`, [
-    value("f32", 0.00000000000000000000000000000000000023453286),
-    value("f64", 5434641042224456000000000000000000000000000000000000000000000000000),
-  ]),
-  [value("f32", 1274601900000000000000000000000)],
-);
-
-// ./test/core/float_exprs.wast:716
-assert_return(
-  () => invoke($39, `no_demote_mixed_mul_commuted`, [
-    value("f32", 310965330000000),
-    value("f64", 0.0000000000000000000000000000000000000000000000000011834791522838056),
-  ]),
-  [value("f32", 0.00000000000000000000000000000000000036802098)],
-);
-
-// ./test/core/float_exprs.wast:721
-let $40 = instantiate(`(module
-  (func (export "no_demote_mixed_div") (param \$x f64) (param \$y f32) (result f32)
-    (f32.demote_f64 (f64.div (local.get \$x) (f64.promote_f32 (local.get \$y)))))
-  (func (export "no_demote_mixed_div_commuted") (param \$y f32) (param \$x f64) (result f32)
-    (f32.demote_f64 (f64.div (f64.promote_f32 (local.get \$y)) (local.get \$x))))
-)`);
-
-// ./test/core/float_exprs.wast:728
-assert_return(
-  () => invoke($40, `no_demote_mixed_div`, [
-    value("f64", 1788604883532416200000000000000000000000000000),
-    value("f32", 14437566000000000000000000000000),
-  ]),
-  [value("f32", 123885480000000)],
-);
-
-// ./test/core/float_exprs.wast:729
-assert_return(
-  () => invoke($40, `no_demote_mixed_div`, [
-    value("f64", 0.00000000000000000000000000000000000000000000010952898401798359),
-    value("f32", 0.00000000000000000000000025665392),
-  ]),
-  [value("f32", 0.0000000000000000000004267575)],
-);
-
-// ./test/core/float_exprs.wast:730
-assert_return(
-  () => invoke($40, `no_demote_mixed_div`, [
-    value("f64", 0.000000000009080603501514862),
-    value("f32", 0.000000000000000000000000000000000000004837378),
-  ]),
-  [value("f32", 1877174900000000000000000000)],
-);
-
-// ./test/core/float_exprs.wast:731
-assert_return(
-  () => invoke($40, `no_demote_mixed_div`, [
-    value("f64", 0.000000000000000000000000000000000000000003782857642810886),
-    value("f32", 0.000000000000000000000000003438024),
-  ]),
-  [value("f32", 0.0000000000000011002999)],
-);
-
-// ./test/core/float_exprs.wast:732
-assert_return(
-  () => invoke($40, `no_demote_mixed_div`, [
-    value("f64", 34505644707116606000000),
-    value("f32", 600334200000000000000000000),
-  ]),
-  [value("f32", 0.000057477395)],
-);
-
-// ./test/core/float_exprs.wast:734
-assert_return(
-  () => invoke($40, `no_demote_mixed_div_commuted`, [
-    value("f32", 0.00000000000000000000009751511),
-    value("f64", 0.00000000000026675841907359984),
-  ]),
-  [value("f32", 0.0000000003655559)],
-);
-
-// ./test/core/float_exprs.wast:735
-assert_return(
-  () => invoke($40, `no_demote_mixed_div_commuted`, [
-    value("f32", 100059280),
-    value("f64", 811135195112395900000000000000000000000000000000),
-  ]),
-  [value("f32", 0.000000000000000000000000000000000000000123358)],
-);
-
-// ./test/core/float_exprs.wast:736
-assert_return(
-  () => invoke($40, `no_demote_mixed_div_commuted`, [
-    value("f32", 0.000000000001732505),
-    value("f64", 0.000000000000000000000000000000000000000011227001577189032),
-  ]),
-  [value("f32", 154315910000000000000000000000)],
-);
-
-// ./test/core/float_exprs.wast:737
-assert_return(
-  () => invoke($40, `no_demote_mixed_div_commuted`, [
-    value("f32", 1752210100000000000000000),
-    value("f64", 2520073054793086300000000000000000000000000000000000000000000000),
-  ]),
-  [value("f32", 0.000000000000000000000000000000000000000695302)],
-);
-
-// ./test/core/float_exprs.wast:738
-assert_return(
-  () => invoke($40, `no_demote_mixed_div_commuted`, [
-    value("f32", 0.00000000000000000000015513188),
-    value("f64", 0.0000000000000000000000000000000000000000000000000000000000035774408529541256),
-  ]),
-  [value("f32", 43363930000000000000000000000000000000)],
-);
-
-// ./test/core/float_exprs.wast:742
-let $41 = instantiate(`(module
   (func (export "f32.i32.no_fold_trunc_s_convert_s") (param \$x f32) (result f32)
     (f32.convert_i32_s (i32.trunc_f32_s (local.get \$x))))
   (func (export "f32.i32.no_fold_trunc_u_convert_s") (param \$x f32) (result f32)
@@ -2921,200 +2678,200 @@ let $41 = instantiate(`(module
     (f64.convert_i64_u (i64.trunc_f64_u (local.get \$x))))
 )`);
 
-// ./test/core/float_exprs.wast:777
+// ./test/core/float_exprs.wast:723
 assert_return(
-  () => invoke($41, `f32.i32.no_fold_trunc_s_convert_s`, [value("f32", 1.5)]),
+  () => invoke($39, `f32.i32.no_fold_trunc_s_convert_s`, [value("f32", 1.5)]),
   [value("f32", 1)],
 );
 
-// ./test/core/float_exprs.wast:778
+// ./test/core/float_exprs.wast:724
 assert_return(
-  () => invoke($41, `f32.i32.no_fold_trunc_s_convert_s`, [value("f32", -1.5)]),
+  () => invoke($39, `f32.i32.no_fold_trunc_s_convert_s`, [value("f32", -1.5)]),
   [value("f32", -1)],
 );
 
-// ./test/core/float_exprs.wast:779
+// ./test/core/float_exprs.wast:725
 assert_return(
-  () => invoke($41, `f32.i32.no_fold_trunc_u_convert_s`, [value("f32", 1.5)]),
+  () => invoke($39, `f32.i32.no_fold_trunc_u_convert_s`, [value("f32", 1.5)]),
   [value("f32", 1)],
 );
 
-// ./test/core/float_exprs.wast:780
+// ./test/core/float_exprs.wast:726
 assert_return(
-  () => invoke($41, `f32.i32.no_fold_trunc_u_convert_s`, [value("f32", -0.5)]),
+  () => invoke($39, `f32.i32.no_fold_trunc_u_convert_s`, [value("f32", -0.5)]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:781
+// ./test/core/float_exprs.wast:727
 assert_return(
-  () => invoke($41, `f32.i32.no_fold_trunc_s_convert_u`, [value("f32", 1.5)]),
+  () => invoke($39, `f32.i32.no_fold_trunc_s_convert_u`, [value("f32", 1.5)]),
   [value("f32", 1)],
 );
 
-// ./test/core/float_exprs.wast:782
+// ./test/core/float_exprs.wast:728
 assert_return(
-  () => invoke($41, `f32.i32.no_fold_trunc_s_convert_u`, [value("f32", -1.5)]),
+  () => invoke($39, `f32.i32.no_fold_trunc_s_convert_u`, [value("f32", -1.5)]),
   [value("f32", 4294967300)],
 );
 
-// ./test/core/float_exprs.wast:783
+// ./test/core/float_exprs.wast:729
 assert_return(
-  () => invoke($41, `f32.i32.no_fold_trunc_u_convert_u`, [value("f32", 1.5)]),
+  () => invoke($39, `f32.i32.no_fold_trunc_u_convert_u`, [value("f32", 1.5)]),
   [value("f32", 1)],
 );
 
-// ./test/core/float_exprs.wast:784
+// ./test/core/float_exprs.wast:730
 assert_return(
-  () => invoke($41, `f32.i32.no_fold_trunc_u_convert_u`, [value("f32", -0.5)]),
+  () => invoke($39, `f32.i32.no_fold_trunc_u_convert_u`, [value("f32", -0.5)]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:786
+// ./test/core/float_exprs.wast:732
 assert_return(
-  () => invoke($41, `f64.i32.no_fold_trunc_s_convert_s`, [value("f64", 1.5)]),
+  () => invoke($39, `f64.i32.no_fold_trunc_s_convert_s`, [value("f64", 1.5)]),
   [value("f64", 1)],
 );
 
-// ./test/core/float_exprs.wast:787
+// ./test/core/float_exprs.wast:733
 assert_return(
-  () => invoke($41, `f64.i32.no_fold_trunc_s_convert_s`, [value("f64", -1.5)]),
+  () => invoke($39, `f64.i32.no_fold_trunc_s_convert_s`, [value("f64", -1.5)]),
   [value("f64", -1)],
 );
 
-// ./test/core/float_exprs.wast:788
+// ./test/core/float_exprs.wast:734
 assert_return(
-  () => invoke($41, `f64.i32.no_fold_trunc_u_convert_s`, [value("f64", 1.5)]),
+  () => invoke($39, `f64.i32.no_fold_trunc_u_convert_s`, [value("f64", 1.5)]),
   [value("f64", 1)],
 );
 
-// ./test/core/float_exprs.wast:789
+// ./test/core/float_exprs.wast:735
 assert_return(
-  () => invoke($41, `f64.i32.no_fold_trunc_u_convert_s`, [value("f64", -0.5)]),
+  () => invoke($39, `f64.i32.no_fold_trunc_u_convert_s`, [value("f64", -0.5)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:790
+// ./test/core/float_exprs.wast:736
 assert_return(
-  () => invoke($41, `f64.i32.no_fold_trunc_s_convert_u`, [value("f64", 1.5)]),
+  () => invoke($39, `f64.i32.no_fold_trunc_s_convert_u`, [value("f64", 1.5)]),
   [value("f64", 1)],
 );
 
-// ./test/core/float_exprs.wast:791
+// ./test/core/float_exprs.wast:737
 assert_return(
-  () => invoke($41, `f64.i32.no_fold_trunc_s_convert_u`, [value("f64", -1.5)]),
+  () => invoke($39, `f64.i32.no_fold_trunc_s_convert_u`, [value("f64", -1.5)]),
   [value("f64", 4294967295)],
 );
 
-// ./test/core/float_exprs.wast:792
+// ./test/core/float_exprs.wast:738
 assert_return(
-  () => invoke($41, `f64.i32.no_fold_trunc_u_convert_u`, [value("f64", 1.5)]),
+  () => invoke($39, `f64.i32.no_fold_trunc_u_convert_u`, [value("f64", 1.5)]),
   [value("f64", 1)],
 );
 
-// ./test/core/float_exprs.wast:793
+// ./test/core/float_exprs.wast:739
 assert_return(
-  () => invoke($41, `f64.i32.no_fold_trunc_u_convert_u`, [value("f64", -0.5)]),
+  () => invoke($39, `f64.i32.no_fold_trunc_u_convert_u`, [value("f64", -0.5)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:795
+// ./test/core/float_exprs.wast:741
 assert_return(
-  () => invoke($41, `f32.i64.no_fold_trunc_s_convert_s`, [value("f32", 1.5)]),
+  () => invoke($39, `f32.i64.no_fold_trunc_s_convert_s`, [value("f32", 1.5)]),
   [value("f32", 1)],
 );
 
-// ./test/core/float_exprs.wast:796
+// ./test/core/float_exprs.wast:742
 assert_return(
-  () => invoke($41, `f32.i64.no_fold_trunc_s_convert_s`, [value("f32", -1.5)]),
+  () => invoke($39, `f32.i64.no_fold_trunc_s_convert_s`, [value("f32", -1.5)]),
   [value("f32", -1)],
 );
 
-// ./test/core/float_exprs.wast:797
+// ./test/core/float_exprs.wast:743
 assert_return(
-  () => invoke($41, `f32.i64.no_fold_trunc_u_convert_s`, [value("f32", 1.5)]),
+  () => invoke($39, `f32.i64.no_fold_trunc_u_convert_s`, [value("f32", 1.5)]),
   [value("f32", 1)],
 );
 
-// ./test/core/float_exprs.wast:798
+// ./test/core/float_exprs.wast:744
 assert_return(
-  () => invoke($41, `f32.i64.no_fold_trunc_u_convert_s`, [value("f32", -0.5)]),
+  () => invoke($39, `f32.i64.no_fold_trunc_u_convert_s`, [value("f32", -0.5)]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:799
+// ./test/core/float_exprs.wast:745
 assert_return(
-  () => invoke($41, `f32.i64.no_fold_trunc_s_convert_u`, [value("f32", 1.5)]),
+  () => invoke($39, `f32.i64.no_fold_trunc_s_convert_u`, [value("f32", 1.5)]),
   [value("f32", 1)],
 );
 
-// ./test/core/float_exprs.wast:800
+// ./test/core/float_exprs.wast:746
 assert_return(
-  () => invoke($41, `f32.i64.no_fold_trunc_s_convert_u`, [value("f32", -1.5)]),
+  () => invoke($39, `f32.i64.no_fold_trunc_s_convert_u`, [value("f32", -1.5)]),
   [value("f32", 18446744000000000000)],
 );
 
-// ./test/core/float_exprs.wast:801
+// ./test/core/float_exprs.wast:747
 assert_return(
-  () => invoke($41, `f32.i64.no_fold_trunc_u_convert_u`, [value("f32", 1.5)]),
+  () => invoke($39, `f32.i64.no_fold_trunc_u_convert_u`, [value("f32", 1.5)]),
   [value("f32", 1)],
 );
 
-// ./test/core/float_exprs.wast:802
+// ./test/core/float_exprs.wast:748
 assert_return(
-  () => invoke($41, `f32.i64.no_fold_trunc_u_convert_u`, [value("f32", -0.5)]),
+  () => invoke($39, `f32.i64.no_fold_trunc_u_convert_u`, [value("f32", -0.5)]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:804
+// ./test/core/float_exprs.wast:750
 assert_return(
-  () => invoke($41, `f64.i64.no_fold_trunc_s_convert_s`, [value("f64", 1.5)]),
+  () => invoke($39, `f64.i64.no_fold_trunc_s_convert_s`, [value("f64", 1.5)]),
   [value("f64", 1)],
 );
 
-// ./test/core/float_exprs.wast:805
+// ./test/core/float_exprs.wast:751
 assert_return(
-  () => invoke($41, `f64.i64.no_fold_trunc_s_convert_s`, [value("f64", -1.5)]),
+  () => invoke($39, `f64.i64.no_fold_trunc_s_convert_s`, [value("f64", -1.5)]),
   [value("f64", -1)],
 );
 
-// ./test/core/float_exprs.wast:806
+// ./test/core/float_exprs.wast:752
 assert_return(
-  () => invoke($41, `f64.i64.no_fold_trunc_u_convert_s`, [value("f64", 1.5)]),
+  () => invoke($39, `f64.i64.no_fold_trunc_u_convert_s`, [value("f64", 1.5)]),
   [value("f64", 1)],
 );
 
-// ./test/core/float_exprs.wast:807
+// ./test/core/float_exprs.wast:753
 assert_return(
-  () => invoke($41, `f64.i64.no_fold_trunc_u_convert_s`, [value("f64", -0.5)]),
+  () => invoke($39, `f64.i64.no_fold_trunc_u_convert_s`, [value("f64", -0.5)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:808
+// ./test/core/float_exprs.wast:754
 assert_return(
-  () => invoke($41, `f64.i64.no_fold_trunc_s_convert_u`, [value("f64", 1.5)]),
+  () => invoke($39, `f64.i64.no_fold_trunc_s_convert_u`, [value("f64", 1.5)]),
   [value("f64", 1)],
 );
 
-// ./test/core/float_exprs.wast:809
+// ./test/core/float_exprs.wast:755
 assert_return(
-  () => invoke($41, `f64.i64.no_fold_trunc_s_convert_u`, [value("f64", -1.5)]),
+  () => invoke($39, `f64.i64.no_fold_trunc_s_convert_u`, [value("f64", -1.5)]),
   [value("f64", 18446744073709552000)],
 );
 
-// ./test/core/float_exprs.wast:810
+// ./test/core/float_exprs.wast:756
 assert_return(
-  () => invoke($41, `f64.i64.no_fold_trunc_u_convert_u`, [value("f64", 1.5)]),
+  () => invoke($39, `f64.i64.no_fold_trunc_u_convert_u`, [value("f64", 1.5)]),
   [value("f64", 1)],
 );
 
-// ./test/core/float_exprs.wast:811
+// ./test/core/float_exprs.wast:757
 assert_return(
-  () => invoke($41, `f64.i64.no_fold_trunc_u_convert_u`, [value("f64", -0.5)]),
+  () => invoke($39, `f64.i64.no_fold_trunc_u_convert_u`, [value("f64", -0.5)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:817
-let $42 = instantiate(`(module
+// ./test/core/float_exprs.wast:763
+let $40 = instantiate(`(module
   (memory 1 1)
   (func (export "init") (param \$i i32) (param \$x f32) (f32.store (local.get \$i) (local.get \$x)))
 
@@ -3135,47 +2892,47 @@ let $42 = instantiate(`(module
   (func (export "check") (param \$i i32) (result f32) (f32.load (local.get \$i)))
 )`);
 
-// ./test/core/float_exprs.wast:838
-invoke($42, `init`, [0, value("f32", 15.1)]);
+// ./test/core/float_exprs.wast:784
+invoke($40, `init`, [0, value("f32", 15.1)]);
 
-// ./test/core/float_exprs.wast:839
-invoke($42, `init`, [4, value("f32", 15.2)]);
+// ./test/core/float_exprs.wast:785
+invoke($40, `init`, [4, value("f32", 15.2)]);
 
-// ./test/core/float_exprs.wast:840
-invoke($42, `init`, [8, value("f32", 15.3)]);
+// ./test/core/float_exprs.wast:786
+invoke($40, `init`, [8, value("f32", 15.3)]);
 
-// ./test/core/float_exprs.wast:841
-invoke($42, `init`, [12, value("f32", 15.4)]);
+// ./test/core/float_exprs.wast:787
+invoke($40, `init`, [12, value("f32", 15.4)]);
 
-// ./test/core/float_exprs.wast:842
-assert_return(() => invoke($42, `check`, [0]), [value("f32", 15.1)]);
+// ./test/core/float_exprs.wast:788
+assert_return(() => invoke($40, `check`, [0]), [value("f32", 15.1)]);
 
-// ./test/core/float_exprs.wast:843
-assert_return(() => invoke($42, `check`, [4]), [value("f32", 15.2)]);
+// ./test/core/float_exprs.wast:789
+assert_return(() => invoke($40, `check`, [4]), [value("f32", 15.2)]);
 
-// ./test/core/float_exprs.wast:844
-assert_return(() => invoke($42, `check`, [8]), [value("f32", 15.3)]);
+// ./test/core/float_exprs.wast:790
+assert_return(() => invoke($40, `check`, [8]), [value("f32", 15.3)]);
 
-// ./test/core/float_exprs.wast:845
-assert_return(() => invoke($42, `check`, [12]), [value("f32", 15.4)]);
+// ./test/core/float_exprs.wast:791
+assert_return(() => invoke($40, `check`, [12]), [value("f32", 15.4)]);
 
-// ./test/core/float_exprs.wast:846
-invoke($42, `run`, [16, value("f32", 3)]);
+// ./test/core/float_exprs.wast:792
+invoke($40, `run`, [16, value("f32", 3)]);
 
-// ./test/core/float_exprs.wast:847
-assert_return(() => invoke($42, `check`, [0]), [value("f32", 5.0333333)]);
+// ./test/core/float_exprs.wast:793
+assert_return(() => invoke($40, `check`, [0]), [value("f32", 5.0333333)]);
 
-// ./test/core/float_exprs.wast:848
-assert_return(() => invoke($42, `check`, [4]), [value("f32", 5.0666666)]);
+// ./test/core/float_exprs.wast:794
+assert_return(() => invoke($40, `check`, [4]), [value("f32", 5.0666666)]);
 
-// ./test/core/float_exprs.wast:849
-assert_return(() => invoke($42, `check`, [8]), [value("f32", 5.1)]);
+// ./test/core/float_exprs.wast:795
+assert_return(() => invoke($40, `check`, [8]), [value("f32", 5.1)]);
 
-// ./test/core/float_exprs.wast:850
-assert_return(() => invoke($42, `check`, [12]), [value("f32", 5.133333)]);
+// ./test/core/float_exprs.wast:796
+assert_return(() => invoke($40, `check`, [12]), [value("f32", 5.133333)]);
 
-// ./test/core/float_exprs.wast:852
-let $43 = instantiate(`(module
+// ./test/core/float_exprs.wast:798
+let $41 = instantiate(`(module
   (memory 1 1)
   (func (export "init") (param \$i i32) (param \$x f64) (f64.store (local.get \$i) (local.get \$x)))
 
@@ -3196,47 +2953,47 @@ let $43 = instantiate(`(module
   (func (export "check") (param \$i i32) (result f64) (f64.load (local.get \$i)))
 )`);
 
-// ./test/core/float_exprs.wast:873
-invoke($43, `init`, [0, value("f64", 15.1)]);
+// ./test/core/float_exprs.wast:819
+invoke($41, `init`, [0, value("f64", 15.1)]);
 
-// ./test/core/float_exprs.wast:874
-invoke($43, `init`, [8, value("f64", 15.2)]);
+// ./test/core/float_exprs.wast:820
+invoke($41, `init`, [8, value("f64", 15.2)]);
 
-// ./test/core/float_exprs.wast:875
-invoke($43, `init`, [16, value("f64", 15.3)]);
+// ./test/core/float_exprs.wast:821
+invoke($41, `init`, [16, value("f64", 15.3)]);
 
-// ./test/core/float_exprs.wast:876
-invoke($43, `init`, [24, value("f64", 15.4)]);
+// ./test/core/float_exprs.wast:822
+invoke($41, `init`, [24, value("f64", 15.4)]);
 
-// ./test/core/float_exprs.wast:877
-assert_return(() => invoke($43, `check`, [0]), [value("f64", 15.1)]);
+// ./test/core/float_exprs.wast:823
+assert_return(() => invoke($41, `check`, [0]), [value("f64", 15.1)]);
 
-// ./test/core/float_exprs.wast:878
-assert_return(() => invoke($43, `check`, [8]), [value("f64", 15.2)]);
+// ./test/core/float_exprs.wast:824
+assert_return(() => invoke($41, `check`, [8]), [value("f64", 15.2)]);
 
-// ./test/core/float_exprs.wast:879
-assert_return(() => invoke($43, `check`, [16]), [value("f64", 15.3)]);
+// ./test/core/float_exprs.wast:825
+assert_return(() => invoke($41, `check`, [16]), [value("f64", 15.3)]);
 
-// ./test/core/float_exprs.wast:880
-assert_return(() => invoke($43, `check`, [24]), [value("f64", 15.4)]);
+// ./test/core/float_exprs.wast:826
+assert_return(() => invoke($41, `check`, [24]), [value("f64", 15.4)]);
 
-// ./test/core/float_exprs.wast:881
-invoke($43, `run`, [32, value("f64", 3)]);
+// ./test/core/float_exprs.wast:827
+invoke($41, `run`, [32, value("f64", 3)]);
 
-// ./test/core/float_exprs.wast:882
-assert_return(() => invoke($43, `check`, [0]), [value("f64", 5.033333333333333)]);
+// ./test/core/float_exprs.wast:828
+assert_return(() => invoke($41, `check`, [0]), [value("f64", 5.033333333333333)]);
 
-// ./test/core/float_exprs.wast:883
-assert_return(() => invoke($43, `check`, [8]), [value("f64", 5.066666666666666)]);
+// ./test/core/float_exprs.wast:829
+assert_return(() => invoke($41, `check`, [8]), [value("f64", 5.066666666666666)]);
 
-// ./test/core/float_exprs.wast:884
-assert_return(() => invoke($43, `check`, [16]), [value("f64", 5.1000000000000005)]);
+// ./test/core/float_exprs.wast:830
+assert_return(() => invoke($41, `check`, [16]), [value("f64", 5.1000000000000005)]);
 
-// ./test/core/float_exprs.wast:885
-assert_return(() => invoke($43, `check`, [24]), [value("f64", 5.133333333333334)]);
+// ./test/core/float_exprs.wast:831
+assert_return(() => invoke($41, `check`, [24]), [value("f64", 5.133333333333334)]);
 
-// ./test/core/float_exprs.wast:889
-let $44 = instantiate(`(module
+// ./test/core/float_exprs.wast:835
+let $42 = instantiate(`(module
   (func (export "f32.ult") (param \$x f32) (param \$y f32) (result i32) (i32.eqz (f32.ge (local.get \$x) (local.get \$y))))
   (func (export "f32.ule") (param \$x f32) (param \$y f32) (result i32) (i32.eqz (f32.gt (local.get \$x) (local.get \$y))))
   (func (export "f32.ugt") (param \$x f32) (param \$y f32) (result i32) (i32.eqz (f32.le (local.get \$x) (local.get \$y))))
@@ -3248,140 +3005,140 @@ let $44 = instantiate(`(module
   (func (export "f64.uge") (param \$x f64) (param \$y f64) (result i32) (i32.eqz (f64.lt (local.get \$x) (local.get \$y))))
 )`);
 
-// ./test/core/float_exprs.wast:901
-assert_return(() => invoke($44, `f32.ult`, [value("f32", 3), value("f32", 2)]), [value("i32", 0)]);
+// ./test/core/float_exprs.wast:847
+assert_return(() => invoke($42, `f32.ult`, [value("f32", 3), value("f32", 2)]), [value("i32", 0)]);
 
-// ./test/core/float_exprs.wast:902
-assert_return(() => invoke($44, `f32.ult`, [value("f32", 2), value("f32", 2)]), [value("i32", 0)]);
+// ./test/core/float_exprs.wast:848
+assert_return(() => invoke($42, `f32.ult`, [value("f32", 2), value("f32", 2)]), [value("i32", 0)]);
 
-// ./test/core/float_exprs.wast:903
-assert_return(() => invoke($44, `f32.ult`, [value("f32", 2), value("f32", 3)]), [value("i32", 1)]);
+// ./test/core/float_exprs.wast:849
+assert_return(() => invoke($42, `f32.ult`, [value("f32", 2), value("f32", 3)]), [value("i32", 1)]);
 
-// ./test/core/float_exprs.wast:904
+// ./test/core/float_exprs.wast:850
 assert_return(
-  () => invoke($44, `f32.ult`, [value("f32", 2), bytes("f32", [0x0, 0x0, 0xc0, 0x7f])]),
+  () => invoke($42, `f32.ult`, [value("f32", 2), bytes("f32", [0x0, 0x0, 0xc0, 0x7f])]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:905
-assert_return(() => invoke($44, `f32.ule`, [value("f32", 3), value("f32", 2)]), [value("i32", 0)]);
+// ./test/core/float_exprs.wast:851
+assert_return(() => invoke($42, `f32.ule`, [value("f32", 3), value("f32", 2)]), [value("i32", 0)]);
 
-// ./test/core/float_exprs.wast:906
-assert_return(() => invoke($44, `f32.ule`, [value("f32", 2), value("f32", 2)]), [value("i32", 1)]);
+// ./test/core/float_exprs.wast:852
+assert_return(() => invoke($42, `f32.ule`, [value("f32", 2), value("f32", 2)]), [value("i32", 1)]);
 
-// ./test/core/float_exprs.wast:907
-assert_return(() => invoke($44, `f32.ule`, [value("f32", 2), value("f32", 3)]), [value("i32", 1)]);
+// ./test/core/float_exprs.wast:853
+assert_return(() => invoke($42, `f32.ule`, [value("f32", 2), value("f32", 3)]), [value("i32", 1)]);
 
-// ./test/core/float_exprs.wast:908
+// ./test/core/float_exprs.wast:854
 assert_return(
-  () => invoke($44, `f32.ule`, [value("f32", 2), bytes("f32", [0x0, 0x0, 0xc0, 0x7f])]),
+  () => invoke($42, `f32.ule`, [value("f32", 2), bytes("f32", [0x0, 0x0, 0xc0, 0x7f])]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:909
-assert_return(() => invoke($44, `f32.ugt`, [value("f32", 3), value("f32", 2)]), [value("i32", 1)]);
+// ./test/core/float_exprs.wast:855
+assert_return(() => invoke($42, `f32.ugt`, [value("f32", 3), value("f32", 2)]), [value("i32", 1)]);
 
-// ./test/core/float_exprs.wast:910
-assert_return(() => invoke($44, `f32.ugt`, [value("f32", 2), value("f32", 2)]), [value("i32", 0)]);
+// ./test/core/float_exprs.wast:856
+assert_return(() => invoke($42, `f32.ugt`, [value("f32", 2), value("f32", 2)]), [value("i32", 0)]);
 
-// ./test/core/float_exprs.wast:911
-assert_return(() => invoke($44, `f32.ugt`, [value("f32", 2), value("f32", 3)]), [value("i32", 0)]);
+// ./test/core/float_exprs.wast:857
+assert_return(() => invoke($42, `f32.ugt`, [value("f32", 2), value("f32", 3)]), [value("i32", 0)]);
 
-// ./test/core/float_exprs.wast:912
+// ./test/core/float_exprs.wast:858
 assert_return(
-  () => invoke($44, `f32.ugt`, [value("f32", 2), bytes("f32", [0x0, 0x0, 0xc0, 0x7f])]),
+  () => invoke($42, `f32.ugt`, [value("f32", 2), bytes("f32", [0x0, 0x0, 0xc0, 0x7f])]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:913
-assert_return(() => invoke($44, `f32.uge`, [value("f32", 3), value("f32", 2)]), [value("i32", 1)]);
+// ./test/core/float_exprs.wast:859
+assert_return(() => invoke($42, `f32.uge`, [value("f32", 3), value("f32", 2)]), [value("i32", 1)]);
 
-// ./test/core/float_exprs.wast:914
-assert_return(() => invoke($44, `f32.uge`, [value("f32", 2), value("f32", 2)]), [value("i32", 1)]);
+// ./test/core/float_exprs.wast:860
+assert_return(() => invoke($42, `f32.uge`, [value("f32", 2), value("f32", 2)]), [value("i32", 1)]);
 
-// ./test/core/float_exprs.wast:915
-assert_return(() => invoke($44, `f32.uge`, [value("f32", 2), value("f32", 3)]), [value("i32", 0)]);
+// ./test/core/float_exprs.wast:861
+assert_return(() => invoke($42, `f32.uge`, [value("f32", 2), value("f32", 3)]), [value("i32", 0)]);
 
-// ./test/core/float_exprs.wast:916
+// ./test/core/float_exprs.wast:862
 assert_return(
-  () => invoke($44, `f32.uge`, [value("f32", 2), bytes("f32", [0x0, 0x0, 0xc0, 0x7f])]),
+  () => invoke($42, `f32.uge`, [value("f32", 2), bytes("f32", [0x0, 0x0, 0xc0, 0x7f])]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:917
-assert_return(() => invoke($44, `f64.ult`, [value("f64", 3), value("f64", 2)]), [value("i32", 0)]);
+// ./test/core/float_exprs.wast:863
+assert_return(() => invoke($42, `f64.ult`, [value("f64", 3), value("f64", 2)]), [value("i32", 0)]);
 
-// ./test/core/float_exprs.wast:918
-assert_return(() => invoke($44, `f64.ult`, [value("f64", 2), value("f64", 2)]), [value("i32", 0)]);
+// ./test/core/float_exprs.wast:864
+assert_return(() => invoke($42, `f64.ult`, [value("f64", 2), value("f64", 2)]), [value("i32", 0)]);
 
-// ./test/core/float_exprs.wast:919
-assert_return(() => invoke($44, `f64.ult`, [value("f64", 2), value("f64", 3)]), [value("i32", 1)]);
+// ./test/core/float_exprs.wast:865
+assert_return(() => invoke($42, `f64.ult`, [value("f64", 2), value("f64", 3)]), [value("i32", 1)]);
 
-// ./test/core/float_exprs.wast:920
+// ./test/core/float_exprs.wast:866
 assert_return(
-  () => invoke($44, `f64.ult`, [
+  () => invoke($42, `f64.ult`, [
     value("f64", 2),
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
   ]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:921
-assert_return(() => invoke($44, `f64.ule`, [value("f64", 3), value("f64", 2)]), [value("i32", 0)]);
+// ./test/core/float_exprs.wast:867
+assert_return(() => invoke($42, `f64.ule`, [value("f64", 3), value("f64", 2)]), [value("i32", 0)]);
 
-// ./test/core/float_exprs.wast:922
-assert_return(() => invoke($44, `f64.ule`, [value("f64", 2), value("f64", 2)]), [value("i32", 1)]);
+// ./test/core/float_exprs.wast:868
+assert_return(() => invoke($42, `f64.ule`, [value("f64", 2), value("f64", 2)]), [value("i32", 1)]);
 
-// ./test/core/float_exprs.wast:923
-assert_return(() => invoke($44, `f64.ule`, [value("f64", 2), value("f64", 3)]), [value("i32", 1)]);
+// ./test/core/float_exprs.wast:869
+assert_return(() => invoke($42, `f64.ule`, [value("f64", 2), value("f64", 3)]), [value("i32", 1)]);
 
-// ./test/core/float_exprs.wast:924
+// ./test/core/float_exprs.wast:870
 assert_return(
-  () => invoke($44, `f64.ule`, [
+  () => invoke($42, `f64.ule`, [
     value("f64", 2),
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
   ]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:925
-assert_return(() => invoke($44, `f64.ugt`, [value("f64", 3), value("f64", 2)]), [value("i32", 1)]);
+// ./test/core/float_exprs.wast:871
+assert_return(() => invoke($42, `f64.ugt`, [value("f64", 3), value("f64", 2)]), [value("i32", 1)]);
 
-// ./test/core/float_exprs.wast:926
-assert_return(() => invoke($44, `f64.ugt`, [value("f64", 2), value("f64", 2)]), [value("i32", 0)]);
+// ./test/core/float_exprs.wast:872
+assert_return(() => invoke($42, `f64.ugt`, [value("f64", 2), value("f64", 2)]), [value("i32", 0)]);
 
-// ./test/core/float_exprs.wast:927
-assert_return(() => invoke($44, `f64.ugt`, [value("f64", 2), value("f64", 3)]), [value("i32", 0)]);
+// ./test/core/float_exprs.wast:873
+assert_return(() => invoke($42, `f64.ugt`, [value("f64", 2), value("f64", 3)]), [value("i32", 0)]);
 
-// ./test/core/float_exprs.wast:928
+// ./test/core/float_exprs.wast:874
 assert_return(
-  () => invoke($44, `f64.ugt`, [
+  () => invoke($42, `f64.ugt`, [
     value("f64", 2),
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
   ]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:929
-assert_return(() => invoke($44, `f64.uge`, [value("f64", 3), value("f64", 2)]), [value("i32", 1)]);
+// ./test/core/float_exprs.wast:875
+assert_return(() => invoke($42, `f64.uge`, [value("f64", 3), value("f64", 2)]), [value("i32", 1)]);
 
-// ./test/core/float_exprs.wast:930
-assert_return(() => invoke($44, `f64.uge`, [value("f64", 2), value("f64", 2)]), [value("i32", 1)]);
+// ./test/core/float_exprs.wast:876
+assert_return(() => invoke($42, `f64.uge`, [value("f64", 2), value("f64", 2)]), [value("i32", 1)]);
 
-// ./test/core/float_exprs.wast:931
-assert_return(() => invoke($44, `f64.uge`, [value("f64", 2), value("f64", 3)]), [value("i32", 0)]);
+// ./test/core/float_exprs.wast:877
+assert_return(() => invoke($42, `f64.uge`, [value("f64", 2), value("f64", 3)]), [value("i32", 0)]);
 
-// ./test/core/float_exprs.wast:932
+// ./test/core/float_exprs.wast:878
 assert_return(
-  () => invoke($44, `f64.uge`, [
+  () => invoke($42, `f64.uge`, [
     value("f64", 2),
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
   ]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:936
-let $45 = instantiate(`(module
+// ./test/core/float_exprs.wast:882
+let $43 = instantiate(`(module
   (func (export "f32.no_fold_lt_select") (param \$x f32) (param \$y f32) (result f32) (select (local.get \$x) (local.get \$y) (f32.lt (local.get \$x) (local.get \$y))))
   (func (export "f32.no_fold_le_select") (param \$x f32) (param \$y f32) (result f32) (select (local.get \$x) (local.get \$y) (f32.le (local.get \$x) (local.get \$y))))
   (func (export "f32.no_fold_gt_select") (param \$x f32) (param \$y f32) (result f32) (select (local.get \$x) (local.get \$y) (f32.gt (local.get \$x) (local.get \$y))))
@@ -3393,248 +3150,248 @@ let $45 = instantiate(`(module
   (func (export "f64.no_fold_ge_select") (param \$x f64) (param \$y f64) (result f64) (select (local.get \$x) (local.get \$y) (f64.ge (local.get \$x) (local.get \$y))))
 )`);
 
-// ./test/core/float_exprs.wast:948
+// ./test/core/float_exprs.wast:894
 assert_return(
-  () => invoke($45, `f32.no_fold_lt_select`, [
+  () => invoke($43, `f32.no_fold_lt_select`, [
     value("f32", 0),
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
   ]),
   [bytes("f32", [0x0, 0x0, 0xc0, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:949
+// ./test/core/float_exprs.wast:895
 assert_return(
-  () => invoke($45, `f32.no_fold_lt_select`, [
+  () => invoke($43, `f32.no_fold_lt_select`, [
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
     value("f32", 0),
   ]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:950
+// ./test/core/float_exprs.wast:896
 assert_return(
-  () => invoke($45, `f32.no_fold_lt_select`, [value("f32", 0), value("f32", -0)]),
+  () => invoke($43, `f32.no_fold_lt_select`, [value("f32", 0), value("f32", -0)]),
   [value("f32", -0)],
 );
 
-// ./test/core/float_exprs.wast:951
+// ./test/core/float_exprs.wast:897
 assert_return(
-  () => invoke($45, `f32.no_fold_lt_select`, [value("f32", -0), value("f32", 0)]),
+  () => invoke($43, `f32.no_fold_lt_select`, [value("f32", -0), value("f32", 0)]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:952
+// ./test/core/float_exprs.wast:898
 assert_return(
-  () => invoke($45, `f32.no_fold_le_select`, [
+  () => invoke($43, `f32.no_fold_le_select`, [
     value("f32", 0),
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
   ]),
   [bytes("f32", [0x0, 0x0, 0xc0, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:953
+// ./test/core/float_exprs.wast:899
 assert_return(
-  () => invoke($45, `f32.no_fold_le_select`, [
+  () => invoke($43, `f32.no_fold_le_select`, [
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
     value("f32", 0),
   ]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:954
+// ./test/core/float_exprs.wast:900
 assert_return(
-  () => invoke($45, `f32.no_fold_le_select`, [value("f32", 0), value("f32", -0)]),
+  () => invoke($43, `f32.no_fold_le_select`, [value("f32", 0), value("f32", -0)]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:955
+// ./test/core/float_exprs.wast:901
 assert_return(
-  () => invoke($45, `f32.no_fold_le_select`, [value("f32", -0), value("f32", 0)]),
+  () => invoke($43, `f32.no_fold_le_select`, [value("f32", -0), value("f32", 0)]),
   [value("f32", -0)],
 );
 
-// ./test/core/float_exprs.wast:956
+// ./test/core/float_exprs.wast:902
 assert_return(
-  () => invoke($45, `f32.no_fold_gt_select`, [
+  () => invoke($43, `f32.no_fold_gt_select`, [
     value("f32", 0),
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
   ]),
   [bytes("f32", [0x0, 0x0, 0xc0, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:957
+// ./test/core/float_exprs.wast:903
 assert_return(
-  () => invoke($45, `f32.no_fold_gt_select`, [
+  () => invoke($43, `f32.no_fold_gt_select`, [
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
     value("f32", 0),
   ]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:958
+// ./test/core/float_exprs.wast:904
 assert_return(
-  () => invoke($45, `f32.no_fold_gt_select`, [value("f32", 0), value("f32", -0)]),
+  () => invoke($43, `f32.no_fold_gt_select`, [value("f32", 0), value("f32", -0)]),
   [value("f32", -0)],
 );
 
-// ./test/core/float_exprs.wast:959
+// ./test/core/float_exprs.wast:905
 assert_return(
-  () => invoke($45, `f32.no_fold_gt_select`, [value("f32", -0), value("f32", 0)]),
+  () => invoke($43, `f32.no_fold_gt_select`, [value("f32", -0), value("f32", 0)]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:960
+// ./test/core/float_exprs.wast:906
 assert_return(
-  () => invoke($45, `f32.no_fold_ge_select`, [
+  () => invoke($43, `f32.no_fold_ge_select`, [
     value("f32", 0),
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
   ]),
   [bytes("f32", [0x0, 0x0, 0xc0, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:961
+// ./test/core/float_exprs.wast:907
 assert_return(
-  () => invoke($45, `f32.no_fold_ge_select`, [
+  () => invoke($43, `f32.no_fold_ge_select`, [
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
     value("f32", 0),
   ]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:962
+// ./test/core/float_exprs.wast:908
 assert_return(
-  () => invoke($45, `f32.no_fold_ge_select`, [value("f32", 0), value("f32", -0)]),
+  () => invoke($43, `f32.no_fold_ge_select`, [value("f32", 0), value("f32", -0)]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:963
+// ./test/core/float_exprs.wast:909
 assert_return(
-  () => invoke($45, `f32.no_fold_ge_select`, [value("f32", -0), value("f32", 0)]),
+  () => invoke($43, `f32.no_fold_ge_select`, [value("f32", -0), value("f32", 0)]),
   [value("f32", -0)],
 );
 
-// ./test/core/float_exprs.wast:964
+// ./test/core/float_exprs.wast:910
 assert_return(
-  () => invoke($45, `f64.no_fold_lt_select`, [
+  () => invoke($43, `f64.no_fold_lt_select`, [
     value("f64", 0),
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:965
+// ./test/core/float_exprs.wast:911
 assert_return(
-  () => invoke($45, `f64.no_fold_lt_select`, [
+  () => invoke($43, `f64.no_fold_lt_select`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
     value("f64", 0),
   ]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:966
+// ./test/core/float_exprs.wast:912
 assert_return(
-  () => invoke($45, `f64.no_fold_lt_select`, [value("f64", 0), value("f64", -0)]),
+  () => invoke($43, `f64.no_fold_lt_select`, [value("f64", 0), value("f64", -0)]),
   [value("f64", -0)],
 );
 
-// ./test/core/float_exprs.wast:967
+// ./test/core/float_exprs.wast:913
 assert_return(
-  () => invoke($45, `f64.no_fold_lt_select`, [value("f64", -0), value("f64", 0)]),
+  () => invoke($43, `f64.no_fold_lt_select`, [value("f64", -0), value("f64", 0)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:968
+// ./test/core/float_exprs.wast:914
 assert_return(
-  () => invoke($45, `f64.no_fold_le_select`, [
+  () => invoke($43, `f64.no_fold_le_select`, [
     value("f64", 0),
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:969
+// ./test/core/float_exprs.wast:915
 assert_return(
-  () => invoke($45, `f64.no_fold_le_select`, [
+  () => invoke($43, `f64.no_fold_le_select`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
     value("f64", 0),
   ]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:970
+// ./test/core/float_exprs.wast:916
 assert_return(
-  () => invoke($45, `f64.no_fold_le_select`, [value("f64", 0), value("f64", -0)]),
+  () => invoke($43, `f64.no_fold_le_select`, [value("f64", 0), value("f64", -0)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:971
+// ./test/core/float_exprs.wast:917
 assert_return(
-  () => invoke($45, `f64.no_fold_le_select`, [value("f64", -0), value("f64", 0)]),
+  () => invoke($43, `f64.no_fold_le_select`, [value("f64", -0), value("f64", 0)]),
   [value("f64", -0)],
 );
 
-// ./test/core/float_exprs.wast:972
+// ./test/core/float_exprs.wast:918
 assert_return(
-  () => invoke($45, `f64.no_fold_gt_select`, [
+  () => invoke($43, `f64.no_fold_gt_select`, [
     value("f64", 0),
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:973
+// ./test/core/float_exprs.wast:919
 assert_return(
-  () => invoke($45, `f64.no_fold_gt_select`, [
+  () => invoke($43, `f64.no_fold_gt_select`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
     value("f64", 0),
   ]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:974
+// ./test/core/float_exprs.wast:920
 assert_return(
-  () => invoke($45, `f64.no_fold_gt_select`, [value("f64", 0), value("f64", -0)]),
+  () => invoke($43, `f64.no_fold_gt_select`, [value("f64", 0), value("f64", -0)]),
   [value("f64", -0)],
 );
 
-// ./test/core/float_exprs.wast:975
+// ./test/core/float_exprs.wast:921
 assert_return(
-  () => invoke($45, `f64.no_fold_gt_select`, [value("f64", -0), value("f64", 0)]),
+  () => invoke($43, `f64.no_fold_gt_select`, [value("f64", -0), value("f64", 0)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:976
+// ./test/core/float_exprs.wast:922
 assert_return(
-  () => invoke($45, `f64.no_fold_ge_select`, [
+  () => invoke($43, `f64.no_fold_ge_select`, [
     value("f64", 0),
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:977
+// ./test/core/float_exprs.wast:923
 assert_return(
-  () => invoke($45, `f64.no_fold_ge_select`, [
+  () => invoke($43, `f64.no_fold_ge_select`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
     value("f64", 0),
   ]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:978
+// ./test/core/float_exprs.wast:924
 assert_return(
-  () => invoke($45, `f64.no_fold_ge_select`, [value("f64", 0), value("f64", -0)]),
+  () => invoke($43, `f64.no_fold_ge_select`, [value("f64", 0), value("f64", -0)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:979
+// ./test/core/float_exprs.wast:925
 assert_return(
-  () => invoke($45, `f64.no_fold_ge_select`, [value("f64", -0), value("f64", 0)]),
+  () => invoke($43, `f64.no_fold_ge_select`, [value("f64", -0), value("f64", 0)]),
   [value("f64", -0)],
 );
 
-// ./test/core/float_exprs.wast:983
-let $46 = instantiate(`(module
+// ./test/core/float_exprs.wast:929
+let $44 = instantiate(`(module
   (func (export "f32.no_fold_lt_if") (param \$x f32) (param \$y f32) (result f32)
     (if (result f32) (f32.lt (local.get \$x) (local.get \$y))
       (then (local.get \$x)) (else (local.get \$y))
@@ -3678,248 +3435,248 @@ let $46 = instantiate(`(module
   )
 )`);
 
-// ./test/core/float_exprs.wast:1027
+// ./test/core/float_exprs.wast:973
 assert_return(
-  () => invoke($46, `f32.no_fold_lt_if`, [
+  () => invoke($44, `f32.no_fold_lt_if`, [
     value("f32", 0),
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
   ]),
   [bytes("f32", [0x0, 0x0, 0xc0, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1028
+// ./test/core/float_exprs.wast:974
 assert_return(
-  () => invoke($46, `f32.no_fold_lt_if`, [
+  () => invoke($44, `f32.no_fold_lt_if`, [
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
     value("f32", 0),
   ]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:1029
+// ./test/core/float_exprs.wast:975
 assert_return(
-  () => invoke($46, `f32.no_fold_lt_if`, [value("f32", 0), value("f32", -0)]),
+  () => invoke($44, `f32.no_fold_lt_if`, [value("f32", 0), value("f32", -0)]),
   [value("f32", -0)],
 );
 
-// ./test/core/float_exprs.wast:1030
+// ./test/core/float_exprs.wast:976
 assert_return(
-  () => invoke($46, `f32.no_fold_lt_if`, [value("f32", -0), value("f32", 0)]),
+  () => invoke($44, `f32.no_fold_lt_if`, [value("f32", -0), value("f32", 0)]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:1031
+// ./test/core/float_exprs.wast:977
 assert_return(
-  () => invoke($46, `f32.no_fold_le_if`, [
+  () => invoke($44, `f32.no_fold_le_if`, [
     value("f32", 0),
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
   ]),
   [bytes("f32", [0x0, 0x0, 0xc0, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1032
+// ./test/core/float_exprs.wast:978
 assert_return(
-  () => invoke($46, `f32.no_fold_le_if`, [
+  () => invoke($44, `f32.no_fold_le_if`, [
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
     value("f32", 0),
   ]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:1033
+// ./test/core/float_exprs.wast:979
 assert_return(
-  () => invoke($46, `f32.no_fold_le_if`, [value("f32", 0), value("f32", -0)]),
+  () => invoke($44, `f32.no_fold_le_if`, [value("f32", 0), value("f32", -0)]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:1034
+// ./test/core/float_exprs.wast:980
 assert_return(
-  () => invoke($46, `f32.no_fold_le_if`, [value("f32", -0), value("f32", 0)]),
+  () => invoke($44, `f32.no_fold_le_if`, [value("f32", -0), value("f32", 0)]),
   [value("f32", -0)],
 );
 
-// ./test/core/float_exprs.wast:1035
+// ./test/core/float_exprs.wast:981
 assert_return(
-  () => invoke($46, `f32.no_fold_gt_if`, [
+  () => invoke($44, `f32.no_fold_gt_if`, [
     value("f32", 0),
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
   ]),
   [bytes("f32", [0x0, 0x0, 0xc0, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1036
+// ./test/core/float_exprs.wast:982
 assert_return(
-  () => invoke($46, `f32.no_fold_gt_if`, [
+  () => invoke($44, `f32.no_fold_gt_if`, [
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
     value("f32", 0),
   ]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:1037
+// ./test/core/float_exprs.wast:983
 assert_return(
-  () => invoke($46, `f32.no_fold_gt_if`, [value("f32", 0), value("f32", -0)]),
+  () => invoke($44, `f32.no_fold_gt_if`, [value("f32", 0), value("f32", -0)]),
   [value("f32", -0)],
 );
 
-// ./test/core/float_exprs.wast:1038
+// ./test/core/float_exprs.wast:984
 assert_return(
-  () => invoke($46, `f32.no_fold_gt_if`, [value("f32", -0), value("f32", 0)]),
+  () => invoke($44, `f32.no_fold_gt_if`, [value("f32", -0), value("f32", 0)]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:1039
+// ./test/core/float_exprs.wast:985
 assert_return(
-  () => invoke($46, `f32.no_fold_ge_if`, [
+  () => invoke($44, `f32.no_fold_ge_if`, [
     value("f32", 0),
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
   ]),
   [bytes("f32", [0x0, 0x0, 0xc0, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1040
+// ./test/core/float_exprs.wast:986
 assert_return(
-  () => invoke($46, `f32.no_fold_ge_if`, [
+  () => invoke($44, `f32.no_fold_ge_if`, [
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
     value("f32", 0),
   ]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:1041
+// ./test/core/float_exprs.wast:987
 assert_return(
-  () => invoke($46, `f32.no_fold_ge_if`, [value("f32", 0), value("f32", -0)]),
+  () => invoke($44, `f32.no_fold_ge_if`, [value("f32", 0), value("f32", -0)]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:1042
+// ./test/core/float_exprs.wast:988
 assert_return(
-  () => invoke($46, `f32.no_fold_ge_if`, [value("f32", -0), value("f32", 0)]),
+  () => invoke($44, `f32.no_fold_ge_if`, [value("f32", -0), value("f32", 0)]),
   [value("f32", -0)],
 );
 
-// ./test/core/float_exprs.wast:1043
+// ./test/core/float_exprs.wast:989
 assert_return(
-  () => invoke($46, `f64.no_fold_lt_if`, [
+  () => invoke($44, `f64.no_fold_lt_if`, [
     value("f64", 0),
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1044
+// ./test/core/float_exprs.wast:990
 assert_return(
-  () => invoke($46, `f64.no_fold_lt_if`, [
+  () => invoke($44, `f64.no_fold_lt_if`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
     value("f64", 0),
   ]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:1045
+// ./test/core/float_exprs.wast:991
 assert_return(
-  () => invoke($46, `f64.no_fold_lt_if`, [value("f64", 0), value("f64", -0)]),
+  () => invoke($44, `f64.no_fold_lt_if`, [value("f64", 0), value("f64", -0)]),
   [value("f64", -0)],
 );
 
-// ./test/core/float_exprs.wast:1046
+// ./test/core/float_exprs.wast:992
 assert_return(
-  () => invoke($46, `f64.no_fold_lt_if`, [value("f64", -0), value("f64", 0)]),
+  () => invoke($44, `f64.no_fold_lt_if`, [value("f64", -0), value("f64", 0)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:1047
+// ./test/core/float_exprs.wast:993
 assert_return(
-  () => invoke($46, `f64.no_fold_le_if`, [
+  () => invoke($44, `f64.no_fold_le_if`, [
     value("f64", 0),
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1048
+// ./test/core/float_exprs.wast:994
 assert_return(
-  () => invoke($46, `f64.no_fold_le_if`, [
+  () => invoke($44, `f64.no_fold_le_if`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
     value("f64", 0),
   ]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:1049
+// ./test/core/float_exprs.wast:995
 assert_return(
-  () => invoke($46, `f64.no_fold_le_if`, [value("f64", 0), value("f64", -0)]),
+  () => invoke($44, `f64.no_fold_le_if`, [value("f64", 0), value("f64", -0)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:1050
+// ./test/core/float_exprs.wast:996
 assert_return(
-  () => invoke($46, `f64.no_fold_le_if`, [value("f64", -0), value("f64", 0)]),
+  () => invoke($44, `f64.no_fold_le_if`, [value("f64", -0), value("f64", 0)]),
   [value("f64", -0)],
 );
 
-// ./test/core/float_exprs.wast:1051
+// ./test/core/float_exprs.wast:997
 assert_return(
-  () => invoke($46, `f64.no_fold_gt_if`, [
+  () => invoke($44, `f64.no_fold_gt_if`, [
     value("f64", 0),
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1052
+// ./test/core/float_exprs.wast:998
 assert_return(
-  () => invoke($46, `f64.no_fold_gt_if`, [
+  () => invoke($44, `f64.no_fold_gt_if`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
     value("f64", 0),
   ]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:1053
+// ./test/core/float_exprs.wast:999
 assert_return(
-  () => invoke($46, `f64.no_fold_gt_if`, [value("f64", 0), value("f64", -0)]),
+  () => invoke($44, `f64.no_fold_gt_if`, [value("f64", 0), value("f64", -0)]),
   [value("f64", -0)],
 );
 
-// ./test/core/float_exprs.wast:1054
+// ./test/core/float_exprs.wast:1000
 assert_return(
-  () => invoke($46, `f64.no_fold_gt_if`, [value("f64", -0), value("f64", 0)]),
+  () => invoke($44, `f64.no_fold_gt_if`, [value("f64", -0), value("f64", 0)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:1055
+// ./test/core/float_exprs.wast:1001
 assert_return(
-  () => invoke($46, `f64.no_fold_ge_if`, [
+  () => invoke($44, `f64.no_fold_ge_if`, [
     value("f64", 0),
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1056
+// ./test/core/float_exprs.wast:1002
 assert_return(
-  () => invoke($46, `f64.no_fold_ge_if`, [
+  () => invoke($44, `f64.no_fold_ge_if`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
     value("f64", 0),
   ]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:1057
+// ./test/core/float_exprs.wast:1003
 assert_return(
-  () => invoke($46, `f64.no_fold_ge_if`, [value("f64", 0), value("f64", -0)]),
+  () => invoke($44, `f64.no_fold_ge_if`, [value("f64", 0), value("f64", -0)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:1058
+// ./test/core/float_exprs.wast:1004
 assert_return(
-  () => invoke($46, `f64.no_fold_ge_if`, [value("f64", -0), value("f64", 0)]),
+  () => invoke($44, `f64.no_fold_ge_if`, [value("f64", -0), value("f64", 0)]),
   [value("f64", -0)],
 );
 
-// ./test/core/float_exprs.wast:1062
-let $47 = instantiate(`(module
+// ./test/core/float_exprs.wast:1008
+let $45 = instantiate(`(module
   (func (export "f32.no_fold_lt_select_to_abs") (param \$x f32) (result f32) (select (f32.neg (local.get \$x)) (local.get \$x) (f32.lt (local.get \$x) (f32.const 0.0))))
   (func (export "f32.no_fold_le_select_to_abs") (param \$x f32) (result f32) (select (f32.neg (local.get \$x)) (local.get \$x) (f32.le (local.get \$x) (f32.const -0.0))))
   (func (export "f32.no_fold_gt_select_to_abs") (param \$x f32) (result f32) (select (local.get \$x) (f32.neg (local.get \$x)) (f32.gt (local.get \$x) (f32.const -0.0))))
@@ -3931,184 +3688,184 @@ let $47 = instantiate(`(module
   (func (export "f64.no_fold_ge_select_to_abs") (param \$x f64) (result f64) (select (local.get \$x) (f64.neg (local.get \$x)) (f64.ge (local.get \$x) (f64.const 0.0))))
 )`);
 
-// ./test/core/float_exprs.wast:1074
+// ./test/core/float_exprs.wast:1020
 assert_return(
-  () => invoke($47, `f32.no_fold_lt_select_to_abs`, [
+  () => invoke($45, `f32.no_fold_lt_select_to_abs`, [
     bytes("f32", [0x0, 0x0, 0xa0, 0x7f]),
   ]),
   [bytes("f32", [0x0, 0x0, 0xa0, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1075
+// ./test/core/float_exprs.wast:1021
 assert_return(
-  () => invoke($47, `f32.no_fold_lt_select_to_abs`, [
+  () => invoke($45, `f32.no_fold_lt_select_to_abs`, [
     bytes("f32", [0x0, 0x0, 0xc0, 0xff]),
   ]),
   [bytes("f32", [0x0, 0x0, 0xc0, 0xff])],
 );
 
-// ./test/core/float_exprs.wast:1076
-assert_return(() => invoke($47, `f32.no_fold_lt_select_to_abs`, [value("f32", 0)]), [value("f32", 0)]);
+// ./test/core/float_exprs.wast:1022
+assert_return(() => invoke($45, `f32.no_fold_lt_select_to_abs`, [value("f32", 0)]), [value("f32", 0)]);
 
-// ./test/core/float_exprs.wast:1077
-assert_return(() => invoke($47, `f32.no_fold_lt_select_to_abs`, [value("f32", -0)]), [value("f32", -0)]);
+// ./test/core/float_exprs.wast:1023
+assert_return(() => invoke($45, `f32.no_fold_lt_select_to_abs`, [value("f32", -0)]), [value("f32", -0)]);
 
-// ./test/core/float_exprs.wast:1078
+// ./test/core/float_exprs.wast:1024
 assert_return(
-  () => invoke($47, `f32.no_fold_le_select_to_abs`, [
+  () => invoke($45, `f32.no_fold_le_select_to_abs`, [
     bytes("f32", [0x0, 0x0, 0xa0, 0x7f]),
   ]),
   [bytes("f32", [0x0, 0x0, 0xa0, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1079
+// ./test/core/float_exprs.wast:1025
 assert_return(
-  () => invoke($47, `f32.no_fold_le_select_to_abs`, [
+  () => invoke($45, `f32.no_fold_le_select_to_abs`, [
     bytes("f32", [0x0, 0x0, 0xc0, 0xff]),
   ]),
   [bytes("f32", [0x0, 0x0, 0xc0, 0xff])],
 );
 
-// ./test/core/float_exprs.wast:1080
-assert_return(() => invoke($47, `f32.no_fold_le_select_to_abs`, [value("f32", 0)]), [value("f32", -0)]);
+// ./test/core/float_exprs.wast:1026
+assert_return(() => invoke($45, `f32.no_fold_le_select_to_abs`, [value("f32", 0)]), [value("f32", -0)]);
 
-// ./test/core/float_exprs.wast:1081
-assert_return(() => invoke($47, `f32.no_fold_le_select_to_abs`, [value("f32", -0)]), [value("f32", 0)]);
+// ./test/core/float_exprs.wast:1027
+assert_return(() => invoke($45, `f32.no_fold_le_select_to_abs`, [value("f32", -0)]), [value("f32", 0)]);
 
-// ./test/core/float_exprs.wast:1082
+// ./test/core/float_exprs.wast:1028
 assert_return(
-  () => invoke($47, `f32.no_fold_gt_select_to_abs`, [
+  () => invoke($45, `f32.no_fold_gt_select_to_abs`, [
     bytes("f32", [0x0, 0x0, 0xa0, 0x7f]),
   ]),
   [bytes("f32", [0x0, 0x0, 0xa0, 0xff])],
 );
 
-// ./test/core/float_exprs.wast:1083
+// ./test/core/float_exprs.wast:1029
 assert_return(
-  () => invoke($47, `f32.no_fold_gt_select_to_abs`, [
+  () => invoke($45, `f32.no_fold_gt_select_to_abs`, [
     bytes("f32", [0x0, 0x0, 0xc0, 0xff]),
   ]),
   [bytes("f32", [0x0, 0x0, 0xc0, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1084
-assert_return(() => invoke($47, `f32.no_fold_gt_select_to_abs`, [value("f32", 0)]), [value("f32", -0)]);
+// ./test/core/float_exprs.wast:1030
+assert_return(() => invoke($45, `f32.no_fold_gt_select_to_abs`, [value("f32", 0)]), [value("f32", -0)]);
 
-// ./test/core/float_exprs.wast:1085
-assert_return(() => invoke($47, `f32.no_fold_gt_select_to_abs`, [value("f32", -0)]), [value("f32", 0)]);
+// ./test/core/float_exprs.wast:1031
+assert_return(() => invoke($45, `f32.no_fold_gt_select_to_abs`, [value("f32", -0)]), [value("f32", 0)]);
 
-// ./test/core/float_exprs.wast:1086
+// ./test/core/float_exprs.wast:1032
 assert_return(
-  () => invoke($47, `f32.no_fold_ge_select_to_abs`, [
+  () => invoke($45, `f32.no_fold_ge_select_to_abs`, [
     bytes("f32", [0x0, 0x0, 0xa0, 0x7f]),
   ]),
   [bytes("f32", [0x0, 0x0, 0xa0, 0xff])],
 );
 
-// ./test/core/float_exprs.wast:1087
+// ./test/core/float_exprs.wast:1033
 assert_return(
-  () => invoke($47, `f32.no_fold_ge_select_to_abs`, [
+  () => invoke($45, `f32.no_fold_ge_select_to_abs`, [
     bytes("f32", [0x0, 0x0, 0xc0, 0xff]),
   ]),
   [bytes("f32", [0x0, 0x0, 0xc0, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1088
-assert_return(() => invoke($47, `f32.no_fold_ge_select_to_abs`, [value("f32", 0)]), [value("f32", 0)]);
+// ./test/core/float_exprs.wast:1034
+assert_return(() => invoke($45, `f32.no_fold_ge_select_to_abs`, [value("f32", 0)]), [value("f32", 0)]);
 
-// ./test/core/float_exprs.wast:1089
-assert_return(() => invoke($47, `f32.no_fold_ge_select_to_abs`, [value("f32", -0)]), [value("f32", -0)]);
+// ./test/core/float_exprs.wast:1035
+assert_return(() => invoke($45, `f32.no_fold_ge_select_to_abs`, [value("f32", -0)]), [value("f32", -0)]);
 
-// ./test/core/float_exprs.wast:1090
+// ./test/core/float_exprs.wast:1036
 assert_return(
-  () => invoke($47, `f64.no_fold_lt_select_to_abs`, [
+  () => invoke($45, `f64.no_fold_lt_select_to_abs`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf4, 0x7f]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf4, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1091
+// ./test/core/float_exprs.wast:1037
 assert_return(
-  () => invoke($47, `f64.no_fold_lt_select_to_abs`, [
+  () => invoke($45, `f64.no_fold_lt_select_to_abs`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0xff]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0xff])],
 );
 
-// ./test/core/float_exprs.wast:1092
-assert_return(() => invoke($47, `f64.no_fold_lt_select_to_abs`, [value("f64", 0)]), [value("f64", 0)]);
+// ./test/core/float_exprs.wast:1038
+assert_return(() => invoke($45, `f64.no_fold_lt_select_to_abs`, [value("f64", 0)]), [value("f64", 0)]);
 
-// ./test/core/float_exprs.wast:1093
-assert_return(() => invoke($47, `f64.no_fold_lt_select_to_abs`, [value("f64", -0)]), [value("f64", -0)]);
+// ./test/core/float_exprs.wast:1039
+assert_return(() => invoke($45, `f64.no_fold_lt_select_to_abs`, [value("f64", -0)]), [value("f64", -0)]);
 
-// ./test/core/float_exprs.wast:1094
+// ./test/core/float_exprs.wast:1040
 assert_return(
-  () => invoke($47, `f64.no_fold_le_select_to_abs`, [
+  () => invoke($45, `f64.no_fold_le_select_to_abs`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf4, 0x7f]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf4, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1095
+// ./test/core/float_exprs.wast:1041
 assert_return(
-  () => invoke($47, `f64.no_fold_le_select_to_abs`, [
+  () => invoke($45, `f64.no_fold_le_select_to_abs`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0xff]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0xff])],
 );
 
-// ./test/core/float_exprs.wast:1096
-assert_return(() => invoke($47, `f64.no_fold_le_select_to_abs`, [value("f64", 0)]), [value("f64", -0)]);
+// ./test/core/float_exprs.wast:1042
+assert_return(() => invoke($45, `f64.no_fold_le_select_to_abs`, [value("f64", 0)]), [value("f64", -0)]);
 
-// ./test/core/float_exprs.wast:1097
-assert_return(() => invoke($47, `f64.no_fold_le_select_to_abs`, [value("f64", -0)]), [value("f64", 0)]);
+// ./test/core/float_exprs.wast:1043
+assert_return(() => invoke($45, `f64.no_fold_le_select_to_abs`, [value("f64", -0)]), [value("f64", 0)]);
 
-// ./test/core/float_exprs.wast:1098
+// ./test/core/float_exprs.wast:1044
 assert_return(
-  () => invoke($47, `f64.no_fold_gt_select_to_abs`, [
+  () => invoke($45, `f64.no_fold_gt_select_to_abs`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf4, 0x7f]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf4, 0xff])],
 );
 
-// ./test/core/float_exprs.wast:1099
+// ./test/core/float_exprs.wast:1045
 assert_return(
-  () => invoke($47, `f64.no_fold_gt_select_to_abs`, [
+  () => invoke($45, `f64.no_fold_gt_select_to_abs`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0xff]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1100
-assert_return(() => invoke($47, `f64.no_fold_gt_select_to_abs`, [value("f64", 0)]), [value("f64", -0)]);
+// ./test/core/float_exprs.wast:1046
+assert_return(() => invoke($45, `f64.no_fold_gt_select_to_abs`, [value("f64", 0)]), [value("f64", -0)]);
 
-// ./test/core/float_exprs.wast:1101
-assert_return(() => invoke($47, `f64.no_fold_gt_select_to_abs`, [value("f64", -0)]), [value("f64", 0)]);
+// ./test/core/float_exprs.wast:1047
+assert_return(() => invoke($45, `f64.no_fold_gt_select_to_abs`, [value("f64", -0)]), [value("f64", 0)]);
 
-// ./test/core/float_exprs.wast:1102
+// ./test/core/float_exprs.wast:1048
 assert_return(
-  () => invoke($47, `f64.no_fold_ge_select_to_abs`, [
+  () => invoke($45, `f64.no_fold_ge_select_to_abs`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf4, 0x7f]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf4, 0xff])],
 );
 
-// ./test/core/float_exprs.wast:1103
+// ./test/core/float_exprs.wast:1049
 assert_return(
-  () => invoke($47, `f64.no_fold_ge_select_to_abs`, [
+  () => invoke($45, `f64.no_fold_ge_select_to_abs`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0xff]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1104
-assert_return(() => invoke($47, `f64.no_fold_ge_select_to_abs`, [value("f64", 0)]), [value("f64", 0)]);
+// ./test/core/float_exprs.wast:1050
+assert_return(() => invoke($45, `f64.no_fold_ge_select_to_abs`, [value("f64", 0)]), [value("f64", 0)]);
 
-// ./test/core/float_exprs.wast:1105
-assert_return(() => invoke($47, `f64.no_fold_ge_select_to_abs`, [value("f64", -0)]), [value("f64", -0)]);
+// ./test/core/float_exprs.wast:1051
+assert_return(() => invoke($45, `f64.no_fold_ge_select_to_abs`, [value("f64", -0)]), [value("f64", -0)]);
 
-// ./test/core/float_exprs.wast:1109
-let $48 = instantiate(`(module
+// ./test/core/float_exprs.wast:1055
+let $46 = instantiate(`(module
   (func (export "f32.no_fold_lt_if_to_abs") (param \$x f32) (result f32)
     (if (result f32) (f32.lt (local.get \$x) (f32.const 0.0))
       (then (f32.neg (local.get \$x))) (else (local.get \$x))
@@ -4152,168 +3909,168 @@ let $48 = instantiate(`(module
   )
 )`);
 
-// ./test/core/float_exprs.wast:1153
+// ./test/core/float_exprs.wast:1099
 assert_return(
-  () => invoke($48, `f32.no_fold_lt_if_to_abs`, [bytes("f32", [0x0, 0x0, 0xa0, 0x7f])]),
+  () => invoke($46, `f32.no_fold_lt_if_to_abs`, [bytes("f32", [0x0, 0x0, 0xa0, 0x7f])]),
   [bytes("f32", [0x0, 0x0, 0xa0, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1154
+// ./test/core/float_exprs.wast:1100
 assert_return(
-  () => invoke($48, `f32.no_fold_lt_if_to_abs`, [bytes("f32", [0x0, 0x0, 0xc0, 0xff])]),
+  () => invoke($46, `f32.no_fold_lt_if_to_abs`, [bytes("f32", [0x0, 0x0, 0xc0, 0xff])]),
   [bytes("f32", [0x0, 0x0, 0xc0, 0xff])],
 );
 
-// ./test/core/float_exprs.wast:1155
-assert_return(() => invoke($48, `f32.no_fold_lt_if_to_abs`, [value("f32", 0)]), [value("f32", 0)]);
+// ./test/core/float_exprs.wast:1101
+assert_return(() => invoke($46, `f32.no_fold_lt_if_to_abs`, [value("f32", 0)]), [value("f32", 0)]);
 
-// ./test/core/float_exprs.wast:1156
-assert_return(() => invoke($48, `f32.no_fold_lt_if_to_abs`, [value("f32", -0)]), [value("f32", -0)]);
+// ./test/core/float_exprs.wast:1102
+assert_return(() => invoke($46, `f32.no_fold_lt_if_to_abs`, [value("f32", -0)]), [value("f32", -0)]);
 
-// ./test/core/float_exprs.wast:1157
+// ./test/core/float_exprs.wast:1103
 assert_return(
-  () => invoke($48, `f32.no_fold_le_if_to_abs`, [bytes("f32", [0x0, 0x0, 0xa0, 0x7f])]),
+  () => invoke($46, `f32.no_fold_le_if_to_abs`, [bytes("f32", [0x0, 0x0, 0xa0, 0x7f])]),
   [bytes("f32", [0x0, 0x0, 0xa0, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1158
+// ./test/core/float_exprs.wast:1104
 assert_return(
-  () => invoke($48, `f32.no_fold_le_if_to_abs`, [bytes("f32", [0x0, 0x0, 0xc0, 0xff])]),
+  () => invoke($46, `f32.no_fold_le_if_to_abs`, [bytes("f32", [0x0, 0x0, 0xc0, 0xff])]),
   [bytes("f32", [0x0, 0x0, 0xc0, 0xff])],
 );
 
-// ./test/core/float_exprs.wast:1159
-assert_return(() => invoke($48, `f32.no_fold_le_if_to_abs`, [value("f32", 0)]), [value("f32", -0)]);
+// ./test/core/float_exprs.wast:1105
+assert_return(() => invoke($46, `f32.no_fold_le_if_to_abs`, [value("f32", 0)]), [value("f32", -0)]);
 
-// ./test/core/float_exprs.wast:1160
-assert_return(() => invoke($48, `f32.no_fold_le_if_to_abs`, [value("f32", -0)]), [value("f32", 0)]);
+// ./test/core/float_exprs.wast:1106
+assert_return(() => invoke($46, `f32.no_fold_le_if_to_abs`, [value("f32", -0)]), [value("f32", 0)]);
 
-// ./test/core/float_exprs.wast:1161
+// ./test/core/float_exprs.wast:1107
 assert_return(
-  () => invoke($48, `f32.no_fold_gt_if_to_abs`, [bytes("f32", [0x0, 0x0, 0xa0, 0x7f])]),
+  () => invoke($46, `f32.no_fold_gt_if_to_abs`, [bytes("f32", [0x0, 0x0, 0xa0, 0x7f])]),
   [bytes("f32", [0x0, 0x0, 0xa0, 0xff])],
 );
 
-// ./test/core/float_exprs.wast:1162
+// ./test/core/float_exprs.wast:1108
 assert_return(
-  () => invoke($48, `f32.no_fold_gt_if_to_abs`, [bytes("f32", [0x0, 0x0, 0xc0, 0xff])]),
+  () => invoke($46, `f32.no_fold_gt_if_to_abs`, [bytes("f32", [0x0, 0x0, 0xc0, 0xff])]),
   [bytes("f32", [0x0, 0x0, 0xc0, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1163
-assert_return(() => invoke($48, `f32.no_fold_gt_if_to_abs`, [value("f32", 0)]), [value("f32", -0)]);
+// ./test/core/float_exprs.wast:1109
+assert_return(() => invoke($46, `f32.no_fold_gt_if_to_abs`, [value("f32", 0)]), [value("f32", -0)]);
 
-// ./test/core/float_exprs.wast:1164
-assert_return(() => invoke($48, `f32.no_fold_gt_if_to_abs`, [value("f32", -0)]), [value("f32", 0)]);
+// ./test/core/float_exprs.wast:1110
+assert_return(() => invoke($46, `f32.no_fold_gt_if_to_abs`, [value("f32", -0)]), [value("f32", 0)]);
 
-// ./test/core/float_exprs.wast:1165
+// ./test/core/float_exprs.wast:1111
 assert_return(
-  () => invoke($48, `f32.no_fold_ge_if_to_abs`, [bytes("f32", [0x0, 0x0, 0xa0, 0x7f])]),
+  () => invoke($46, `f32.no_fold_ge_if_to_abs`, [bytes("f32", [0x0, 0x0, 0xa0, 0x7f])]),
   [bytes("f32", [0x0, 0x0, 0xa0, 0xff])],
 );
 
-// ./test/core/float_exprs.wast:1166
+// ./test/core/float_exprs.wast:1112
 assert_return(
-  () => invoke($48, `f32.no_fold_ge_if_to_abs`, [bytes("f32", [0x0, 0x0, 0xc0, 0xff])]),
+  () => invoke($46, `f32.no_fold_ge_if_to_abs`, [bytes("f32", [0x0, 0x0, 0xc0, 0xff])]),
   [bytes("f32", [0x0, 0x0, 0xc0, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1167
-assert_return(() => invoke($48, `f32.no_fold_ge_if_to_abs`, [value("f32", 0)]), [value("f32", 0)]);
+// ./test/core/float_exprs.wast:1113
+assert_return(() => invoke($46, `f32.no_fold_ge_if_to_abs`, [value("f32", 0)]), [value("f32", 0)]);
 
-// ./test/core/float_exprs.wast:1168
-assert_return(() => invoke($48, `f32.no_fold_ge_if_to_abs`, [value("f32", -0)]), [value("f32", -0)]);
+// ./test/core/float_exprs.wast:1114
+assert_return(() => invoke($46, `f32.no_fold_ge_if_to_abs`, [value("f32", -0)]), [value("f32", -0)]);
 
-// ./test/core/float_exprs.wast:1169
+// ./test/core/float_exprs.wast:1115
 assert_return(
-  () => invoke($48, `f64.no_fold_lt_if_to_abs`, [
+  () => invoke($46, `f64.no_fold_lt_if_to_abs`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf4, 0x7f]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf4, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1170
+// ./test/core/float_exprs.wast:1116
 assert_return(
-  () => invoke($48, `f64.no_fold_lt_if_to_abs`, [
+  () => invoke($46, `f64.no_fold_lt_if_to_abs`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0xff]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0xff])],
 );
 
-// ./test/core/float_exprs.wast:1171
-assert_return(() => invoke($48, `f64.no_fold_lt_if_to_abs`, [value("f64", 0)]), [value("f64", 0)]);
+// ./test/core/float_exprs.wast:1117
+assert_return(() => invoke($46, `f64.no_fold_lt_if_to_abs`, [value("f64", 0)]), [value("f64", 0)]);
 
-// ./test/core/float_exprs.wast:1172
-assert_return(() => invoke($48, `f64.no_fold_lt_if_to_abs`, [value("f64", -0)]), [value("f64", -0)]);
+// ./test/core/float_exprs.wast:1118
+assert_return(() => invoke($46, `f64.no_fold_lt_if_to_abs`, [value("f64", -0)]), [value("f64", -0)]);
 
-// ./test/core/float_exprs.wast:1173
+// ./test/core/float_exprs.wast:1119
 assert_return(
-  () => invoke($48, `f64.no_fold_le_if_to_abs`, [
+  () => invoke($46, `f64.no_fold_le_if_to_abs`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf4, 0x7f]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf4, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1174
+// ./test/core/float_exprs.wast:1120
 assert_return(
-  () => invoke($48, `f64.no_fold_le_if_to_abs`, [
+  () => invoke($46, `f64.no_fold_le_if_to_abs`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0xff]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0xff])],
 );
 
-// ./test/core/float_exprs.wast:1175
-assert_return(() => invoke($48, `f64.no_fold_le_if_to_abs`, [value("f64", 0)]), [value("f64", -0)]);
+// ./test/core/float_exprs.wast:1121
+assert_return(() => invoke($46, `f64.no_fold_le_if_to_abs`, [value("f64", 0)]), [value("f64", -0)]);
 
-// ./test/core/float_exprs.wast:1176
-assert_return(() => invoke($48, `f64.no_fold_le_if_to_abs`, [value("f64", -0)]), [value("f64", 0)]);
+// ./test/core/float_exprs.wast:1122
+assert_return(() => invoke($46, `f64.no_fold_le_if_to_abs`, [value("f64", -0)]), [value("f64", 0)]);
 
-// ./test/core/float_exprs.wast:1177
+// ./test/core/float_exprs.wast:1123
 assert_return(
-  () => invoke($48, `f64.no_fold_gt_if_to_abs`, [
+  () => invoke($46, `f64.no_fold_gt_if_to_abs`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf4, 0x7f]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf4, 0xff])],
 );
 
-// ./test/core/float_exprs.wast:1178
+// ./test/core/float_exprs.wast:1124
 assert_return(
-  () => invoke($48, `f64.no_fold_gt_if_to_abs`, [
+  () => invoke($46, `f64.no_fold_gt_if_to_abs`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0xff]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1179
-assert_return(() => invoke($48, `f64.no_fold_gt_if_to_abs`, [value("f64", 0)]), [value("f64", -0)]);
+// ./test/core/float_exprs.wast:1125
+assert_return(() => invoke($46, `f64.no_fold_gt_if_to_abs`, [value("f64", 0)]), [value("f64", -0)]);
 
-// ./test/core/float_exprs.wast:1180
-assert_return(() => invoke($48, `f64.no_fold_gt_if_to_abs`, [value("f64", -0)]), [value("f64", 0)]);
+// ./test/core/float_exprs.wast:1126
+assert_return(() => invoke($46, `f64.no_fold_gt_if_to_abs`, [value("f64", -0)]), [value("f64", 0)]);
 
-// ./test/core/float_exprs.wast:1181
+// ./test/core/float_exprs.wast:1127
 assert_return(
-  () => invoke($48, `f64.no_fold_ge_if_to_abs`, [
+  () => invoke($46, `f64.no_fold_ge_if_to_abs`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf4, 0x7f]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf4, 0xff])],
 );
 
-// ./test/core/float_exprs.wast:1182
+// ./test/core/float_exprs.wast:1128
 assert_return(
-  () => invoke($48, `f64.no_fold_ge_if_to_abs`, [
+  () => invoke($46, `f64.no_fold_ge_if_to_abs`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0xff]),
   ]),
   [bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f])],
 );
 
-// ./test/core/float_exprs.wast:1183
-assert_return(() => invoke($48, `f64.no_fold_ge_if_to_abs`, [value("f64", 0)]), [value("f64", 0)]);
+// ./test/core/float_exprs.wast:1129
+assert_return(() => invoke($46, `f64.no_fold_ge_if_to_abs`, [value("f64", 0)]), [value("f64", 0)]);
 
-// ./test/core/float_exprs.wast:1184
-assert_return(() => invoke($48, `f64.no_fold_ge_if_to_abs`, [value("f64", -0)]), [value("f64", -0)]);
+// ./test/core/float_exprs.wast:1130
+assert_return(() => invoke($46, `f64.no_fold_ge_if_to_abs`, [value("f64", -0)]), [value("f64", -0)]);
 
-// ./test/core/float_exprs.wast:1189
-let $49 = instantiate(`(module
+// ./test/core/float_exprs.wast:1135
+let $47 = instantiate(`(module
   (func (export "f32.incorrect_correction") (result f32)
     (f32.sub (f32.sub (f32.add (f32.const 1.333) (f32.const 1.225)) (f32.const 1.333)) (f32.const 1.225))
   )
@@ -4322,17 +4079,17 @@ let $49 = instantiate(`(module
   )
 )`);
 
-// ./test/core/float_exprs.wast:1198
-assert_return(() => invoke($49, `f32.incorrect_correction`, []), [value("f32", 0.00000011920929)]);
+// ./test/core/float_exprs.wast:1144
+assert_return(() => invoke($47, `f32.incorrect_correction`, []), [value("f32", 0.00000011920929)]);
 
-// ./test/core/float_exprs.wast:1199
+// ./test/core/float_exprs.wast:1145
 assert_return(
-  () => invoke($49, `f64.incorrect_correction`, []),
+  () => invoke($47, `f64.incorrect_correction`, []),
   [value("f64", -0.0000000000000002220446049250313)],
 );
 
-// ./test/core/float_exprs.wast:1204
-let $50 = instantiate(`(module
+// ./test/core/float_exprs.wast:1150
+let $48 = instantiate(`(module
   (func (export "calculate") (result f32)
     (local \$x f32)
     (local \$r f32)
@@ -4349,11 +4106,11 @@ let $50 = instantiate(`(module
   )
 )`);
 
-// ./test/core/float_exprs.wast:1221
-assert_return(() => invoke($50, `calculate`, []), [value("f32", -466.92685)]);
+// ./test/core/float_exprs.wast:1167
+assert_return(() => invoke($48, `calculate`, []), [value("f32", -466.92685)]);
 
-// ./test/core/float_exprs.wast:1223
-let $51 = instantiate(`(module
+// ./test/core/float_exprs.wast:1169
+let $49 = instantiate(`(module
   (func (export "calculate") (result f64)
     (local \$x f64)
     (local \$r f64)
@@ -4370,42 +4127,42 @@ let $51 = instantiate(`(module
   )
 )`);
 
-// ./test/core/float_exprs.wast:1240
-assert_return(() => invoke($51, `calculate`, []), [value("f64", -466.926956301738)]);
+// ./test/core/float_exprs.wast:1186
+assert_return(() => invoke($49, `calculate`, []), [value("f64", -466.926956301738)]);
 
-// ./test/core/float_exprs.wast:1245
-let $52 = instantiate(`(module
+// ./test/core/float_exprs.wast:1191
+let $50 = instantiate(`(module
   (func (export "llvm_pr26746") (param \$x f32) (result f32)
     (f32.sub (f32.const 0.0) (f32.sub (f32.const -0.0) (local.get \$x)))
   )
 )`);
 
-// ./test/core/float_exprs.wast:1251
-assert_return(() => invoke($52, `llvm_pr26746`, [value("f32", -0)]), [value("f32", 0)]);
+// ./test/core/float_exprs.wast:1197
+assert_return(() => invoke($50, `llvm_pr26746`, [value("f32", -0)]), [value("f32", 0)]);
 
-// ./test/core/float_exprs.wast:1256
-let $53 = instantiate(`(module
+// ./test/core/float_exprs.wast:1202
+let $51 = instantiate(`(module
   (func (export "llvm_pr27153") (param \$x i32) (result f32)
     (f32.add (f32.convert_i32_s (i32.and (local.get \$x) (i32.const 268435455))) (f32.const -8388608.0))
   )
 )`);
 
-// ./test/core/float_exprs.wast:1262
-assert_return(() => invoke($53, `llvm_pr27153`, [33554434]), [value("f32", 25165824)]);
+// ./test/core/float_exprs.wast:1208
+assert_return(() => invoke($51, `llvm_pr27153`, [33554434]), [value("f32", 25165824)]);
 
-// ./test/core/float_exprs.wast:1267
-let $54 = instantiate(`(module
+// ./test/core/float_exprs.wast:1213
+let $52 = instantiate(`(module
   (func (export "llvm_pr27036") (param \$x i32) (param \$y i32) (result f32)
     (f32.add (f32.convert_i32_s (i32.or (local.get \$x) (i32.const -25034805)))
              (f32.convert_i32_s (i32.and (local.get \$y) (i32.const 14942208))))
   )
 )`);
 
-// ./test/core/float_exprs.wast:1274
-assert_return(() => invoke($54, `llvm_pr27036`, [-25034805, 14942208]), [value("f32", -10092596)]);
+// ./test/core/float_exprs.wast:1220
+assert_return(() => invoke($52, `llvm_pr27036`, [-25034805, 14942208]), [value("f32", -10092596)]);
 
-// ./test/core/float_exprs.wast:1284
-let $55 = instantiate(`(module
+// ./test/core/float_exprs.wast:1230
+let $53 = instantiate(`(module
   (func (export "thepast0") (param \$a f64) (param \$b f64) (param \$c f64) (param \$d f64) (result f64)
     (f64.div (f64.mul (local.get \$a) (local.get \$b)) (f64.mul (local.get \$c) (local.get \$d)))
   )
@@ -4419,9 +4176,9 @@ let $55 = instantiate(`(module
   )
 )`);
 
-// ./test/core/float_exprs.wast:1298
+// ./test/core/float_exprs.wast:1244
 assert_return(
-  () => invoke($55, `thepast0`, [
+  () => invoke($53, `thepast0`, [
     value("f64", 0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004450147717014403),
     value("f64", 0.9999999999999999),
     value("f64", 2),
@@ -4432,9 +4189,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1299
+// ./test/core/float_exprs.wast:1245
 assert_return(
-  () => invoke($55, `thepast1`, [
+  () => invoke($53, `thepast1`, [
     value("f64", 0.00000000000000005551115123125783),
     value("f64", 0.9999999999999999),
     value("f64", 0.00000000000000005551115123125783),
@@ -4442,9 +4199,9 @@ assert_return(
   [value("f64", -0.000000000000000000000000000000006162975822039155)],
 );
 
-// ./test/core/float_exprs.wast:1300
+// ./test/core/float_exprs.wast:1246
 assert_return(
-  () => invoke($55, `thepast2`, [
+  () => invoke($53, `thepast2`, [
     value("f32", 0.000000000000000000000000000000000000023509887),
     value("f32", 0.5),
     value("f32", 1),
@@ -4452,18 +4209,18 @@ assert_return(
   [value("f32", 0.000000000000000000000000000000000000011754944)],
 );
 
-// ./test/core/float_exprs.wast:1305
-let $56 = instantiate(`(module
+// ./test/core/float_exprs.wast:1251
+let $54 = instantiate(`(module
   (func (export "inverse") (param \$x f32) (result f32)
     (f32.div (f32.const 1.0) (local.get \$x))
   )
 )`);
 
-// ./test/core/float_exprs.wast:1311
-assert_return(() => invoke($56, `inverse`, [value("f32", 96)]), [value("f32", 0.010416667)]);
+// ./test/core/float_exprs.wast:1257
+assert_return(() => invoke($54, `inverse`, [value("f32", 96)]), [value("f32", 0.010416667)]);
 
-// ./test/core/float_exprs.wast:1316
-let $57 = instantiate(`(module
+// ./test/core/float_exprs.wast:1262
+let $55 = instantiate(`(module
   (func (export "f32_sqrt_minus_2") (param \$x f32) (result f32)
     (f32.sub (f32.sqrt (local.get \$x)) (f32.const 2.0))
   )
@@ -4473,14 +4230,14 @@ let $57 = instantiate(`(module
   )
 )`);
 
-// ./test/core/float_exprs.wast:1326
-assert_return(() => invoke($57, `f32_sqrt_minus_2`, [value("f32", 4)]), [value("f32", 0)]);
+// ./test/core/float_exprs.wast:1272
+assert_return(() => invoke($55, `f32_sqrt_minus_2`, [value("f32", 4)]), [value("f32", 0)]);
 
-// ./test/core/float_exprs.wast:1327
-assert_return(() => invoke($57, `f64_sqrt_minus_2`, [value("f64", 4)]), [value("f64", 0)]);
+// ./test/core/float_exprs.wast:1273
+assert_return(() => invoke($55, `f64_sqrt_minus_2`, [value("f64", 4)]), [value("f64", 0)]);
 
-// ./test/core/float_exprs.wast:1331
-let $58 = instantiate(`(module
+// ./test/core/float_exprs.wast:1277
+let $56 = instantiate(`(module
   (func (export "f32.no_fold_recip_recip") (param \$x f32) (result f32)
     (f32.div (f32.const 1.0) (f32.div (f32.const 1.0) (local.get \$x))))
 
@@ -4488,83 +4245,83 @@ let $58 = instantiate(`(module
     (f64.div (f64.const 1.0) (f64.div (f64.const 1.0) (local.get \$x))))
 )`);
 
-// ./test/core/float_exprs.wast:1339
+// ./test/core/float_exprs.wast:1285
 assert_return(
-  () => invoke($58, `f32.no_fold_recip_recip`, [value("f32", -70435790000000000000)]),
+  () => invoke($56, `f32.no_fold_recip_recip`, [value("f32", -70435790000000000000)]),
   [value("f32", -70435784000000000000)],
 );
 
-// ./test/core/float_exprs.wast:1340
+// ./test/core/float_exprs.wast:1286
 assert_return(
-  () => invoke($58, `f32.no_fold_recip_recip`, [
+  () => invoke($56, `f32.no_fold_recip_recip`, [
     value("f32", 0.000000000000000000000012466101),
   ]),
   [value("f32", 0.0000000000000000000000124661)],
 );
 
-// ./test/core/float_exprs.wast:1341
+// ./test/core/float_exprs.wast:1287
 assert_return(
-  () => invoke($58, `f32.no_fold_recip_recip`, [
+  () => invoke($56, `f32.no_fold_recip_recip`, [
     value("f32", 0.000000000000000000097184545),
   ]),
   [value("f32", 0.00000000000000000009718455)],
 );
 
-// ./test/core/float_exprs.wast:1342
+// ./test/core/float_exprs.wast:1288
 assert_return(
-  () => invoke($58, `f32.no_fold_recip_recip`, [value("f32", -30.400759)]),
+  () => invoke($56, `f32.no_fold_recip_recip`, [value("f32", -30.400759)]),
   [value("f32", -30.40076)],
 );
 
-// ./test/core/float_exprs.wast:1343
+// ./test/core/float_exprs.wast:1289
 assert_return(
-  () => invoke($58, `f32.no_fold_recip_recip`, [value("f32", 2331659200000000000000)]),
+  () => invoke($56, `f32.no_fold_recip_recip`, [value("f32", 2331659200000000000000)]),
   [value("f32", 2331659000000000000000)],
 );
 
-// ./test/core/float_exprs.wast:1345
-assert_return(() => invoke($58, `f32.no_fold_recip_recip`, [value("f32", -0)]), [value("f32", -0)]);
+// ./test/core/float_exprs.wast:1291
+assert_return(() => invoke($56, `f32.no_fold_recip_recip`, [value("f32", -0)]), [value("f32", -0)]);
 
-// ./test/core/float_exprs.wast:1346
-assert_return(() => invoke($58, `f32.no_fold_recip_recip`, [value("f32", 0)]), [value("f32", 0)]);
+// ./test/core/float_exprs.wast:1292
+assert_return(() => invoke($56, `f32.no_fold_recip_recip`, [value("f32", 0)]), [value("f32", 0)]);
 
-// ./test/core/float_exprs.wast:1347
+// ./test/core/float_exprs.wast:1293
 assert_return(
-  () => invoke($58, `f32.no_fold_recip_recip`, [value("f32", -Infinity)]),
+  () => invoke($56, `f32.no_fold_recip_recip`, [value("f32", -Infinity)]),
   [value("f32", -Infinity)],
 );
 
-// ./test/core/float_exprs.wast:1348
+// ./test/core/float_exprs.wast:1294
 assert_return(
-  () => invoke($58, `f32.no_fold_recip_recip`, [value("f32", Infinity)]),
+  () => invoke($56, `f32.no_fold_recip_recip`, [value("f32", Infinity)]),
   [value("f32", Infinity)],
 );
 
-// ./test/core/float_exprs.wast:1350
+// ./test/core/float_exprs.wast:1296
 assert_return(
-  () => invoke($58, `f64.no_fold_recip_recip`, [
+  () => invoke($56, `f64.no_fold_recip_recip`, [
     value("f64", -657971534362886860000000000000000000000000000),
   ]),
   [value("f64", -657971534362886900000000000000000000000000000)],
 );
 
-// ./test/core/float_exprs.wast:1351
+// ./test/core/float_exprs.wast:1297
 assert_return(
-  () => invoke($58, `f64.no_fold_recip_recip`, [value("f64", -144246931868576430000)]),
+  () => invoke($56, `f64.no_fold_recip_recip`, [value("f64", -144246931868576430000)]),
   [value("f64", -144246931868576420000)],
 );
 
-// ./test/core/float_exprs.wast:1352
+// ./test/core/float_exprs.wast:1298
 assert_return(
-  () => invoke($58, `f64.no_fold_recip_recip`, [
+  () => invoke($56, `f64.no_fold_recip_recip`, [
     value("f64", 184994689206231350000000000000000000000000000000000),
   ]),
   [value("f64", 184994689206231330000000000000000000000000000000000)],
 );
 
-// ./test/core/float_exprs.wast:1353
+// ./test/core/float_exprs.wast:1299
 assert_return(
-  () => invoke($58, `f64.no_fold_recip_recip`, [
+  () => invoke($56, `f64.no_fold_recip_recip`, [
     value("f64", 0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005779584288006583),
   ]),
   [
@@ -4572,9 +4329,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1354
+// ./test/core/float_exprs.wast:1300
 assert_return(
-  () => invoke($58, `f64.no_fold_recip_recip`, [
+  () => invoke($56, `f64.no_fold_recip_recip`, [
     value("f64", 51501178696141640000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
   ]),
   [
@@ -4582,26 +4339,26 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1356
-assert_return(() => invoke($58, `f64.no_fold_recip_recip`, [value("f64", -0)]), [value("f64", -0)]);
+// ./test/core/float_exprs.wast:1302
+assert_return(() => invoke($56, `f64.no_fold_recip_recip`, [value("f64", -0)]), [value("f64", -0)]);
 
-// ./test/core/float_exprs.wast:1357
-assert_return(() => invoke($58, `f64.no_fold_recip_recip`, [value("f64", 0)]), [value("f64", 0)]);
+// ./test/core/float_exprs.wast:1303
+assert_return(() => invoke($56, `f64.no_fold_recip_recip`, [value("f64", 0)]), [value("f64", 0)]);
 
-// ./test/core/float_exprs.wast:1358
+// ./test/core/float_exprs.wast:1304
 assert_return(
-  () => invoke($58, `f64.no_fold_recip_recip`, [value("f64", -Infinity)]),
+  () => invoke($56, `f64.no_fold_recip_recip`, [value("f64", -Infinity)]),
   [value("f64", -Infinity)],
 );
 
-// ./test/core/float_exprs.wast:1359
+// ./test/core/float_exprs.wast:1305
 assert_return(
-  () => invoke($58, `f64.no_fold_recip_recip`, [value("f64", Infinity)]),
+  () => invoke($56, `f64.no_fold_recip_recip`, [value("f64", Infinity)]),
   [value("f64", Infinity)],
 );
 
-// ./test/core/float_exprs.wast:1363
-let $59 = instantiate(`(module
+// ./test/core/float_exprs.wast:1309
+let $57 = instantiate(`(module
   (func (export "f32.no_algebraic_factoring") (param \$x f32) (param \$y f32) (result f32)
     (f32.mul (f32.add (local.get \$x) (local.get \$y))
              (f32.sub (local.get \$x) (local.get \$y))))
@@ -4611,54 +4368,54 @@ let $59 = instantiate(`(module
              (f64.sub (local.get \$x) (local.get \$y))))
 )`);
 
-// ./test/core/float_exprs.wast:1373
+// ./test/core/float_exprs.wast:1319
 assert_return(
-  () => invoke($59, `f32.no_algebraic_factoring`, [
+  () => invoke($57, `f32.no_algebraic_factoring`, [
     value("f32", -0.000000000000000053711865),
     value("f32", 0.00000000000000009744328),
   ]),
   [value("f32", -0.000000000000000000000000000000006610229)],
 );
 
-// ./test/core/float_exprs.wast:1374
+// ./test/core/float_exprs.wast:1320
 assert_return(
-  () => invoke($59, `f32.no_algebraic_factoring`, [
+  () => invoke($57, `f32.no_algebraic_factoring`, [
     value("f32", -19756732),
     value("f32", 32770204),
   ]),
   [value("f32", -683557800000000)],
 );
 
-// ./test/core/float_exprs.wast:1375
+// ./test/core/float_exprs.wast:1321
 assert_return(
-  () => invoke($59, `f32.no_algebraic_factoring`, [
+  () => invoke($57, `f32.no_algebraic_factoring`, [
     value("f32", 52314150000000),
     value("f32", -145309980000000),
   ]),
   [value("f32", -18378221000000000000000000000)],
 );
 
-// ./test/core/float_exprs.wast:1376
+// ./test/core/float_exprs.wast:1322
 assert_return(
-  () => invoke($59, `f32.no_algebraic_factoring`, [
+  () => invoke($57, `f32.no_algebraic_factoring`, [
     value("f32", 195260.38),
     value("f32", -227.75723),
   ]),
   [value("f32", 38126563000)],
 );
 
-// ./test/core/float_exprs.wast:1377
+// ./test/core/float_exprs.wast:1323
 assert_return(
-  () => invoke($59, `f32.no_algebraic_factoring`, [
+  () => invoke($57, `f32.no_algebraic_factoring`, [
     value("f32", -237.48706),
     value("f32", -972341.5),
   ]),
   [value("f32", -945447960000)],
 );
 
-// ./test/core/float_exprs.wast:1379
+// ./test/core/float_exprs.wast:1325
 assert_return(
-  () => invoke($59, `f64.no_algebraic_factoring`, [
+  () => invoke($57, `f64.no_algebraic_factoring`, [
     value("f64", 0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000009639720335949767),
     value("f64", 0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008019175443606207),
   ]),
@@ -4667,9 +4424,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1380
+// ./test/core/float_exprs.wast:1326
 assert_return(
-  () => invoke($59, `f64.no_algebraic_factoring`, [
+  () => invoke($57, `f64.no_algebraic_factoring`, [
     value("f64", 0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005166066590392027),
     value("f64", 0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001494333315888213),
   ]),
@@ -4678,9 +4435,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1381
+// ./test/core/float_exprs.wast:1327
 assert_return(
-  () => invoke($59, `f64.no_algebraic_factoring`, [
+  () => invoke($57, `f64.no_algebraic_factoring`, [
     value("f64", -0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002866135870517635),
     value("f64", -0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000012114355254268516),
   ]),
@@ -4689,9 +4446,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1382
+// ./test/core/float_exprs.wast:1328
 assert_return(
-  () => invoke($59, `f64.no_algebraic_factoring`, [
+  () => invoke($57, `f64.no_algebraic_factoring`, [
     value("f64", -1292099281007814900000000000000000000000000000000000000),
     value("f64", 662717187728034000000000000000000000000000000000000000000),
   ]),
@@ -4700,9 +4457,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1383
+// ./test/core/float_exprs.wast:1329
 assert_return(
-  () => invoke($59, `f64.no_algebraic_factoring`, [
+  () => invoke($57, `f64.no_algebraic_factoring`, [
     value("f64", 26242795689010570000000000000000000),
     value("f64", -1625023398605080200000000000),
   ]),
@@ -4711,8 +4468,8 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1387
-let $60 = instantiate(`(module
+// ./test/core/float_exprs.wast:1333
+let $58 = instantiate(`(module
   (func (export "f32.no_algebraic_factoring") (param \$x f32) (param \$y f32) (result f32)
     (f32.sub (f32.mul (local.get \$x) (local.get \$x))
              (f32.mul (local.get \$y) (local.get \$y))))
@@ -4722,54 +4479,54 @@ let $60 = instantiate(`(module
              (f64.mul (local.get \$y) (local.get \$y))))
 )`);
 
-// ./test/core/float_exprs.wast:1397
+// ./test/core/float_exprs.wast:1343
 assert_return(
-  () => invoke($60, `f32.no_algebraic_factoring`, [
+  () => invoke($58, `f32.no_algebraic_factoring`, [
     value("f32", 0.000000000000022102996),
     value("f32", 0.0000000000031465275),
   ]),
   [value("f32", -0.0000000000000000000000099001476)],
 );
 
-// ./test/core/float_exprs.wast:1398
+// ./test/core/float_exprs.wast:1344
 assert_return(
-  () => invoke($60, `f32.no_algebraic_factoring`, [
+  () => invoke($58, `f32.no_algebraic_factoring`, [
     value("f32", -3289460800000),
     value("f32", -15941539000),
   ]),
   [value("f32", 10820299000000000000000000)],
 );
 
-// ./test/core/float_exprs.wast:1399
+// ./test/core/float_exprs.wast:1345
 assert_return(
-  () => invoke($60, `f32.no_algebraic_factoring`, [
+  () => invoke($58, `f32.no_algebraic_factoring`, [
     value("f32", 0.00036497542),
     value("f32", -0.00016153714),
   ]),
   [value("f32", 0.000000107112804)],
 );
 
-// ./test/core/float_exprs.wast:1400
+// ./test/core/float_exprs.wast:1346
 assert_return(
-  () => invoke($60, `f32.no_algebraic_factoring`, [
+  () => invoke($58, `f32.no_algebraic_factoring`, [
     value("f32", 0.000000000000065383266),
     value("f32", -0.000000000000027412773),
   ]),
   [value("f32", 0.000000000000000000000000003523511)],
 );
 
-// ./test/core/float_exprs.wast:1401
+// ./test/core/float_exprs.wast:1347
 assert_return(
-  () => invoke($60, `f32.no_algebraic_factoring`, [
+  () => invoke($58, `f32.no_algebraic_factoring`, [
     value("f32", 3609682000000000),
     value("f32", -5260104400000000),
   ]),
   [value("f32", -14638896000000000000000000000000)],
 );
 
-// ./test/core/float_exprs.wast:1403
+// ./test/core/float_exprs.wast:1349
 assert_return(
-  () => invoke($60, `f64.no_algebraic_factoring`, [
+  () => invoke($58, `f64.no_algebraic_factoring`, [
     value("f64", 213640454349895100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
     value("f64", -292858755839442800000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
   ]),
@@ -4778,9 +4535,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1404
+// ./test/core/float_exprs.wast:1350
 assert_return(
-  () => invoke($60, `f64.no_algebraic_factoring`, [
+  () => invoke($58, `f64.no_algebraic_factoring`, [
     value("f64", -1229017115924435800000000000000000000000000000000000000000000000000000000000000000000000000000),
     value("f64", -8222158919016600000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
   ]),
@@ -4789,18 +4546,18 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1405
+// ./test/core/float_exprs.wast:1351
 assert_return(
-  () => invoke($60, `f64.no_algebraic_factoring`, [
+  () => invoke($58, `f64.no_algebraic_factoring`, [
     value("f64", 5477733829752.252),
     value("f64", -970738900948.5906),
   ]),
   [value("f64", 29063233895797397000000000)],
 );
 
-// ./test/core/float_exprs.wast:1406
+// ./test/core/float_exprs.wast:1352
 assert_return(
-  () => invoke($60, `f64.no_algebraic_factoring`, [
+  () => invoke($58, `f64.no_algebraic_factoring`, [
     value("f64", -10689141744923551000000000000000000000000000000000000000),
     value("f64", -173378393593738040000000000000000000000000000000000),
   ]),
@@ -4809,9 +4566,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1407
+// ./test/core/float_exprs.wast:1353
 assert_return(
-  () => invoke($60, `f64.no_algebraic_factoring`, [
+  () => invoke($58, `f64.no_algebraic_factoring`, [
     value("f64", -0.000000000000000000000000000000000000000000000000000000000000000000000010295699877022106),
     value("f64", -0.000000000000000000000000000000000000000000000000000000000000000000000008952274637805908),
   ]),
@@ -4820,8 +4577,8 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1412
-let $61 = instantiate(`(module
+// ./test/core/float_exprs.wast:1358
+let $59 = instantiate(`(module
   (memory (data
     "\\01\\00\\00\\00\\01\\00\\00\\80\\01\\00\\00\\00\\01\\00\\00\\80"
     "\\01\\00\\00\\00\\01\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00"
@@ -4854,32 +4611,32 @@ let $61 = instantiate(`(module
   )
 )`);
 
-// ./test/core/float_exprs.wast:1445
-assert_return(() => invoke($61, `f32.simple_x4_sum`, [0, 16, 32]), []);
+// ./test/core/float_exprs.wast:1391
+assert_return(() => invoke($59, `f32.simple_x4_sum`, [0, 16, 32]), []);
 
-// ./test/core/float_exprs.wast:1446
+// ./test/core/float_exprs.wast:1392
 assert_return(
-  () => invoke($61, `f32.load`, [32]),
+  () => invoke($59, `f32.load`, [32]),
   [value("f32", 0.000000000000000000000000000000000000000000003)],
 );
 
-// ./test/core/float_exprs.wast:1447
-assert_return(() => invoke($61, `f32.load`, [36]), [value("f32", 0)]);
+// ./test/core/float_exprs.wast:1393
+assert_return(() => invoke($59, `f32.load`, [36]), [value("f32", 0)]);
 
-// ./test/core/float_exprs.wast:1448
+// ./test/core/float_exprs.wast:1394
 assert_return(
-  () => invoke($61, `f32.load`, [40]),
+  () => invoke($59, `f32.load`, [40]),
   [value("f32", 0.000000000000000000000000000000000000000000001)],
 );
 
-// ./test/core/float_exprs.wast:1449
+// ./test/core/float_exprs.wast:1395
 assert_return(
-  () => invoke($61, `f32.load`, [44]),
+  () => invoke($59, `f32.load`, [44]),
   [value("f32", -0.000000000000000000000000000000000000000000001)],
 );
 
-// ./test/core/float_exprs.wast:1451
-let $62 = instantiate(`(module
+// ./test/core/float_exprs.wast:1397
+let $60 = instantiate(`(module
   (memory (data
     "\\01\\00\\00\\00\\00\\00\\00\\00\\01\\00\\00\\00\\00\\00\\00\\80\\01\\00\\00\\00\\00\\00\\00\\00\\01\\00\\00\\00\\00\\00\\00\\80"
     "\\01\\00\\00\\00\\00\\00\\00\\00\\01\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00"
@@ -4912,38 +4669,38 @@ let $62 = instantiate(`(module
   )
 )`);
 
-// ./test/core/float_exprs.wast:1484
-assert_return(() => invoke($62, `f64.simple_x4_sum`, [0, 32, 64]), []);
+// ./test/core/float_exprs.wast:1430
+assert_return(() => invoke($60, `f64.simple_x4_sum`, [0, 32, 64]), []);
 
-// ./test/core/float_exprs.wast:1485
+// ./test/core/float_exprs.wast:1431
 assert_return(
-  () => invoke($62, `f64.load`, [64]),
+  () => invoke($60, `f64.load`, [64]),
   [
     value("f64", 0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001),
   ],
 );
 
-// ./test/core/float_exprs.wast:1486
-assert_return(() => invoke($62, `f64.load`, [72]), [value("f64", 0)]);
+// ./test/core/float_exprs.wast:1432
+assert_return(() => invoke($60, `f64.load`, [72]), [value("f64", 0)]);
 
-// ./test/core/float_exprs.wast:1487
+// ./test/core/float_exprs.wast:1433
 assert_return(
-  () => invoke($62, `f64.load`, [80]),
+  () => invoke($60, `f64.load`, [80]),
   [
     value("f64", 0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005),
   ],
 );
 
-// ./test/core/float_exprs.wast:1488
+// ./test/core/float_exprs.wast:1434
 assert_return(
-  () => invoke($62, `f64.load`, [88]),
+  () => invoke($60, `f64.load`, [88]),
   [
     value("f64", -0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005),
   ],
 );
 
-// ./test/core/float_exprs.wast:1493
-let $63 = instantiate(`(module
+// ./test/core/float_exprs.wast:1439
+let $61 = instantiate(`(module
   (memory (data
     "\\c4\\c5\\57\\24\\a5\\84\\c8\\0b\\6d\\b8\\4b\\2e\\f2\\76\\17\\1c\\ca\\4a\\56\\1e\\1b\\6e\\71\\22"
     "\\5d\\17\\1e\\6e\\bf\\cd\\14\\5c\\c7\\21\\55\\51\\39\\9c\\1f\\b2\\51\\f0\\a3\\93\\d7\\c1\\2c\\ae"
@@ -5034,20 +4791,20 @@ let $63 = instantiate(`(module
   )
 )`);
 
-// ./test/core/float_exprs.wast:1584
+// ./test/core/float_exprs.wast:1530
 assert_return(
-  () => invoke($63, `f32.kahan_sum`, [0, 256]),
+  () => invoke($61, `f32.kahan_sum`, [0, 256]),
   [value("f32", -21558138000000000000000000000000)],
 );
 
-// ./test/core/float_exprs.wast:1585
+// ./test/core/float_exprs.wast:1531
 assert_return(
-  () => invoke($63, `f32.plain_sum`, [0, 256]),
+  () => invoke($61, `f32.plain_sum`, [0, 256]),
   [value("f32", -16487540000000000000000000000000)],
 );
 
-// ./test/core/float_exprs.wast:1587
-let $64 = instantiate(`(module
+// ./test/core/float_exprs.wast:1533
+let $62 = instantiate(`(module
   (memory (data "\\13\\05\\84\\42\\5d\\a2\\2c\\c6\\43\\db\\55\\a9\\cd\\da\\55\\e3\\73\\fc\\58\\d6\\ba\\d5\\00\\fd\\83\\35\\42\\88\\8b\\13\\5d\\38\\4a\\47\\0d\\72\\73\\a1\\1a\\ef\\c4\\45\\17\\57\\d8\\c9\\46\\e0\\8d\\6c\\e1\\37\\70\\c8\\83\\5b\\55\\5e\\5a\\2d\\73\\1e\\56\\c8\\e1\\6d\\69\\14\\78\\0a\\8a\\5a\\64\\3a\\09\\c7\\a8\\87\\c5\\f0\\d3\\5d\\e6\\03\\fc\\93\\be\\26\\ca\\d6\\a9\\91\\60\\bd\\b0\\ed\\ae\\f7\\30\\7e\\92\\3a\\6f\\a7\\59\\8e\\aa\\7d\\bf\\67\\58\\2a\\54\\f8\\4e\\fe\\ed\\35\\58\\a6\\51\\bf\\42\\e5\\4b\\66\\27\\24\\6d\\7f\\42\\2d\\28\\92\\18\\ec\\08\\ae\\e7\\55\\da\\b1\\a6\\65\\a5\\72\\50\\47\\1b\\b8\\a9\\54\\d7\\a6\\06\\5b\\0f\\42\\58\\83\\8a\\17\\82\\c6\\10\\43\\a0\\c0\\2e\\6d\\bc\\5a\\85\\53\\72\\7f\\ad\\44\\bc\\30\\3c\\55\\b2\\24\\9a\\74\\3a\\9e\\e1\\d8\\0f\\70\\fc\\a9\\3a\\cd\\93\\4b\\ec\\e3\\7e\\dd\\5d\\27\\cd\\f8\\a0\\9d\\1c\\11\\c0\\57\\2e\\fd\\c8\\13\\32\\cc\\3a\\1a\\7d\\a3\\41\\55\\ed\\c3\\82\\49\\2a\\04\\1e\\ef\\73\\b9\\2e\\2e\\e3\\5f\\f4\\df\\e6\\b2\\33\\0c\\39\\3f\\6f\\44\\6a\\03\\c1\\42\\b9\\fa\\b1\\c8\\ed\\a5\\58\\99\\7f\\ed\\b4\\72\\9e\\79\\eb\\fb\\43\\82\\45\\aa\\bb\\95\\d2\\ff\\28\\9e\\f6\\a1\\ad\\95\\d6\\55\\95\\0d\\6f\\60\\11\\c7\\78\\3e\\49\\f2\\7e\\48\\f4\\a2\\71\\d0\\13\\8e\\b3\\de\\99\\52\\e3\\45\\74\\ea\\76\\0e\\1b\\2a\\c8\\ee\\14\\01\\c4\\50\\5b\\36\\3c\\ef\\ba\\72\\a2\\a6\\08\\f8\\7b\\36\\9d\\f9\\ef\\0b\\c7\\56\\2d\\5c\\f0\\9d\\5d\\de\\fc\\b8\\ad\\0f\\64\\0e\\97\\15\\32\\26\\c2\\31\\e6\\05\\1e\\ef\\cb\\17\\1b\\6d\\15\\0b\\74\\5d\\d3\\2e\\f8\\6b\\86\\b4\\ba\\73\\52\\53\\99\\a9\\76\\20\\45\\c9\\40\\80\\6b\\14\\ed\\a1\\fa\\80\\46\\e6\\26\\d2\\e6\\98\\c4\\57\\bf\\c4\\1c\\a4\\90\\7a\\36\\94\\14\\ba\\15\\89\\6e\\e6\\9c\\37\\8c\\f4\\de\\12\\22\\5d\\a1\\79\\50\\67\\0d\\3d\\7a\\e9\\d4\\aa\\2e\\7f\\2a\\7a\\30\\3d\\ea\\5d\\12\\48\\fe\\e1\\18\\cd\\a4\\57\\a2\\87\\3e\\b6\\9a\\8b\\db\\da\\9d\\78\\9c\\cf\\8d\\b1\\4f\\90\\b4\\34\\e0\\9d\\f6\\ca\\fe\\4c\\3b\\78\\6d\\0a\\5c\\18\\9f\\61\\b9\\dd\\b4\\e0\\0f\\76\\e0\\1b\\69\\0d\\5e\\58\\73\\70\\5e\\0e\\2d\\a1\\7d\\ff\\20\\eb\\91\\34\\92\\ac\\38\\72\\2a\\1f\\8e\\71\\2e\\6a\\f1\\af\\c7\\27\\70\\d9\\c4\\57\\f7\\d2\\3c\\1d\\b8\\f0\\f0\\64\\cf\\dc\\ae\\be\\a3\\cc\\3e\\22\\7d\\4e\\69\\21\\63\\17\\ed\\03\\02\\54\\9a\\0f\\50\\4e\\13\\5a\\35\\a1\\22\\a4\\df\\86\\c2\\74\\79\\16\\b8\\69\\69\\a0\\52\\5d\\11\\64\\bd\\5b\\93\\fc\\69\\a0\\f4\\13\\d0\\81\\51\\dd\\fa\\0c\\15\\c3\\7a\\c9\\62\\7a\\a9\\1d\\c9\\e6\\5a\\b3\\5b\\97\\02\\3c\\64\\22\\12\\3c\\22\\90\\64\\2d\\30\\54\\4c\\b4\\a1\\22\\09\\57\\22\\5e\\8e\\38\\2b\\02\\a8\\ae\\f6\\be\\0d\\2b\\f2\\03\\ad\\fa\\10\\01\\71\\77\\2a\\30\\02\\95\\f6\\00\\3e\\d0\\c4\\8d\\34\\19\\50\\21\\0a\\bc\\50\\da\\3c\\30\\d6\\3a\\31\\94\\8d\\3a\\fe\\ef\\14\\57\\9d\\4b\\93\\00\\96\\24\\0c\\6f\\fd\\bc\\23\\76\\02\\6c\\eb\\52\\72\\80\\11\\7e\\80\\3a\\13\\12\\38\\1d\\38\\49\\95\\40\\27\\8a\\44\\7b\\e8\\dc\\6d\\8c\\8c\\8e\\3c\\b5\\b3\\18\\0e\\f6\\08\\1a\\84\\41\\35\\ff\\8b\\b8\\93\\40\\ea\\e1\\51\\1d\\89\\a5\\8d\\42\\68\\29\\ea\\2f\\c1\\7a\\52\\eb\\90\\5d\\4d\\d6\\80\\e3\\d7\\75\\48\\ce\\ed\\d3\\01\\1c\\8d\\5b\\a5\\94\\0d\\78\\cf\\f1\\06\\13\\2f\\98\\02\\a4\\6d\\2e\\6c\\f2\\d5\\74\\29\\89\\4c\\f9\\03\\f5\\c7\\18\\ad\\7a\\f0\\68\\f8\\5c\\d6\\59\\87\\6e\\d6\\3f\\06\\be\\86\\20\\e3\\41\\91\\22\\f3\\6e\\8b\\f0\\68\\1c\\57\\a7\\fc\\b0\\7c\\9e\\99\\0b\\96\\1a\\89\\5f\\e6\\0d\\7c\\08\\51\\a0\\a2\\67\\9a\\47\\00\\93\\6b\\f9\\28\\f0\\68\\db\\62\\f1\\e0\\65\\2c\\53\\33\\e0\\a7\\ca\\11\\42\\30\\f6\\af\\01\\c1\\65\\3d\\32\\01\\6f\\ab\\2e\\be\\d3\\8b\\be\\14\\c3\\ff\\ec\\fb\\f0\\f9\\c5\\0c\\05\\6f\\01\\09\\6b\\e3\\34\\31\\0c\\1f\\66\\a6\\42\\bc\\1a\\87\\49\\16\\16\\8c\\b0\\90\\0d\\34\\8c\\0a\\e1\\09\\5e\\10\\a4\\6b\\56\\cc\\f0\\c9\\bb\\dc\\b8\\5c\\ce\\f6\\cc\\8d\\75\\7e\\b3\\07\\88\\04\\2f\\b4\\5e\\c9\\e3\\4a\\23\\73\\19\\62\\6c\\9a\\03\\76\\44\\86\\9c\\60\\fc\\db\\72\\8f\\27\\a0\\dd\\b3\\c5\\da\\ff\\f9\\ec\\6a\\b1\\7b\\d3\\cf\\50\\37\\c9\\7a\\78\\0c\\e4\\3a\\b6\\f5\\e6\\f4\\98\\6e\\42\\7d\\35\\73\\8b\\45\\c0\\56\\97\\cd\\6d\\ce\\cf\\ad\\31\\b3\\c3\\54\\fa\\ef\\d5\\c0\\f4\\6a\\5f\\54\\e7\\49\\3e\\33\\0a\\30\\38\\fd\\d9\\05\\ff\\a5\\3f\\57\\46\\14\\b5\\91\\17\\ca\\6b\\98\\23\\7a\\65\\b3\\6c\\02\\b4\\cc\\79\\5d\\58\\d8\\b3\\d5\\94\\ae\\f4\\6d\\75\\65\\f7\\92\\bf\\7e\\47\\4c\\3c\\ee\\db\\ac\\f1\\32\\5d\\fb\\6f\\41\\1c\\34\\c8\\83\\4f\\c2\\58\\01\\be\\05\\3e\\66\\16\\a6\\04\\6d\\5d\\4f\\86\\09\\27\\82\\25\\12\\cd\\3a\\cd\\ce\\6b\\bc\\ca\\ac\\28\\9b\\ee\\6a\\25\\86\\9e\\45\\70\\c6\\d2\\bd\\3b\\7d\\42\\e5\\27\\af\\c7\\1d\\f4\\81\\c8\\b3\\76\\8a\\a8\\36\\a3\\ae\\2a\\e6\\18\\e1\\36\\22\\ad\\f6\\25\\72\\b0\\39\\8b\\01\\9a\\22\\7b\\84\\c3\\2d\\5f\\72\\a4\\98\\ac\\15\\70\\e7\\d4\\18\\e2\\7d\\d2\\30\\7c\\33\\08\\cd\\ca\\c4\\22\\85\\88\\75\\81\\c6\\4a\\74\\58\\8d\\e0\\e8\\ac\\c5\\ab\\75\\5a\\f4\\28\\12\\f0\\18\\45\\52\\f2\\97\\b2\\93\\41\\6f\\8d\\7f\\db\\70\\fb\\a3\\5d\\1f\\a7\\8d\\98\\20\\2b\\22\\9f\\3a\\01\\b5\\8b\\1b\\d2\\cb\\14\\03\\0e\\14\\14\\d2\\19\\5a\\1f\\ce\\5e\\cd\\81\\79\\15\\01\\ca\\de\\73\\74\\8c\\56\\20\\9f\\77\\2d\\25\\16\\f6\\61\\51\\1d\\a4\\8e\\9b\\98\\a5\\c6\\ec\\a8\\45\\57\\82\\59\\78\\0d\\90\\b4\\df\\51\\b0\\c3\\82\\94\\cc\\b3\\53\\09\\15\\6d\\96\\6c\\3a\\40\\47\\b7\\4a\\7a\\05\\2f\\a1\\1e\\8c\\9d\\a0\\20\\88\\fb\\52\\b7\\9f\\f3\\f3\\bb\\5f\\e7\\8a\\61\\a7\\21\\b1\\ac\\fa\\09\\aa\\a4\\6c\\bc\\24\\80\\ba\\2a\\e9\\65\\ff\\70\\ff\\cc\\fa\\65\\87\\76\\f3\\c5\\15\\ce\\cb\\e8\\42\\31\\00\\0c\\91\\57\\d9\\e0\\9d\\35\\54\\24\\ad\\a4\\d8\\f9\\08\\67\\63\\c8\\cf\\81\\dd\\90\\a2\\d7\\c4\\07\\4a\\e6\\10\\6f\\67\\e7\\27\\d4\\23\\59\\18\\f2\\a8\\9d\\5f\\d8\\94\\30\\aa\\54\\86\\4f\\87\\9d\\82\\b5\\26\\ca\\a6\\96\\bf\\cf\\55\\f9\\9d\\37\\01\\19\\48\\43\\c5\\94\\6c\\f3\\74\\97\\58\\4c\\3c\\9d\\08\\e8\\04\\c2\\58\\30\\76\\e1\\a0\\f8\\ea\\e9\\c5\\ae\\cf\\78\\9e\\a9\\0c\\ac\\b3\\44\\42\\e0\\bc\\5d\\1b\\9c\\49\\58\\4a\\1c\\19\\49\\c1\\3a\\ea\\f5\\eb\\3b\\81\\a9\\4b\\70\\0c\\cc\\9e\\1a\\d3\\2f\\b7\\52\\2f\\20\\3b\\eb\\64\\51\\1d\\a0\\2d\\b2\\3e\\be\\13\\85\\48\\92\\32\\2e\\db\\5c\\a1\\e7\\8c\\45\\91\\35\\01\\0a\\93\\c2\\eb\\09\\ce\\f3\\d2\\22\\24\\d0\\8c\\cc\\1d\\9d\\38\\c8\\4d\\e3\\82\\cc\\64\\15\\06\\2d\\e7\\01\\2f\\ab\\bb\\b5\\04\\4c\\92\\1c\\7a\\d6\\3f\\e8\\5f\\31\\15\\0c\\dc\\e4\\31\\b4\\c4\\25\\3e\\2a\\aa\\00\\9e\\c8\\e5\\21\\7a\\7f\\29\\f1\\c0\\af\\1d\\5e\\e8\\63\\39\\ad\\f8\\7e\\6c\\c8\\c5\\7f\\c2\\a8\\97\\27\\0a\\d9\\f4\\21\\6a\\ea\\03\\09\\fb\\f7\\96\\3b\\83\\79\\5f\\7c\\4b\\30\\9f\\56\\35\\de\\b4\\73\\d4\\95\\f0\\14\\c3\\74\\2f\\0d\\a3\\1d\\4e\\8d\\31\\24\\b3\\1a\\84\\85\\62\\5a\\7b\\3c\\14\\39\\17\\e6\\6d\\eb\\37\\c2\\00\\58\\5b\\0b\\e3\\3c\\8a\\62\\e1\\f8\\35\\4b\\56\\e2\\87\\60\\8b\\be\\a7\\38\\91\\77\\54\\a9\\5a\\24\\25\\90\\9f\\a5\\42\\77\\f3\\5c\\39\\df\\ff\\74\\07\\76\\a1\\cd\\1f\\62\\0b\\81\\81\\68\\af\\05\\c1\\c0\\7f\\26\\ee\\c0\\91\\a3\\6a\\7d\\29\\61\\45\\27\\e5\\57\\88\\dc\\0d\\97\\04\\1a\\33\\a9\\44\\8a\\da\\02\\10\\45\\3f\\8e\\55\\a6\\76\\8c\\4d\\e3\\f1\\89\\83\\c8\\d0\\f8\\9b\\50\\77\\9f\\47\\df\\4c\\9c\\66\\0d\\aa\\18\\b8\\5f\\4f\\c4\\01\\ce\\dc\\84\\ac\\46\\9e\\69\\e1\\76\\45\\6b\\61\\89\\e4\\5d\\94\\bb\\11\\83\\9f\\78\\d8\\0a\\d2\\f5\\7e\\5d\\43\\ea\\bc\\10\\f1\\3a\\c9\\e2\\64\\fb\\53\\65\\d0\\c7\\b4\\a7\\fb\\d4\\05\\53\\25\\d0\\cd\\29\\88\\00\\56\\25\\24\\7d\\5d\\b4\\f3\\41\\9f\\e9\\b5\\f7\\ae\\64\\2c\\e3\\c9\\6d\\d5\\84\\3a\\72\\12\\b8\\7a\\d9\\1b\\09\\e8\\38\\da\\26\\4f\\04\\ce\\03\\71\\6e\\8a\\44\\7b\\5c\\81\\59\\9c\\d2\\e4\\c3\\ba\\59\\a6\\e5\\28\\a7\\8f\\9a\\e4\\d5\\4e\\b9\\ca\\7f\\cb\\75\\b8\\2b\\43\\3e\\b3\\15\\46\\b1\\a5\\bc\\9d\\9e\\38\\15\\f1\\bd\\1b\\21\\aa\\f1\\82\\00\\95\\fc\\a7\\77\\47\\39\\a7\\33\\43\\92\\d7\\52\\40\\4b\\06\\81\\8a\\a0\\bd\\f1\\6b\\99\\84\\42\\5b\\e2\\3b\\c5\\5e\\12\\5c\\28\\4d\\b6\\0e\\4e\\c8\\5c\\e8\\01\\8a\\c5\\e7\\e4\\9d\\42\\ee\\5d\\9c\\c4\\eb\\eb\\68\\09\\27\\92\\95\\9a\\11\\54\\73\\c4\\12\\80\\fb\\7d\\fe\\c5\\08\\60\\7f\\36\\41\\e0\\10\\ba\\d6\\2b\\6c\\f1\\b4\\17\\fe\\26\\34\\e3\\4b\\f8\\a8\\e3\\91\\be\\4f\\2a\\fc\\da\\81\\b8\\e7\\fe\\d5\\26\\50\\47\\f3\\1a\\65\\32\\81\\e0\\05\\b8\\4f\\32\\31\\26\\00\\4a\\53\\97\\c2\\c3\\0e\\2e\\a1\\26\\54\\ab\\05\\8e\\56\\2f\\7d\\af\\22\\84\\68\\a5\\8b\\97\\f6\\a4\\fd\\a8\\cc\\75\\41\\96\\86\\fd\\27\\3d\\29\\86\\8d\\7f\\4c\\d4\\8e\\73\\41\\f4\\1e\\e2\\dd\\58\\27\\97\\ce\\9c\\94\\cf\\7a\\04\\2f\\dc\\ed"
   ))
 
@@ -5095,24 +4852,24 @@ let $64 = instantiate(`(module
   )
 )`);
 
-// ./test/core/float_exprs.wast:1635
+// ./test/core/float_exprs.wast:1581
 assert_return(
-  () => invoke($64, `f64.kahan_sum`, [0, 256]),
+  () => invoke($62, `f64.kahan_sum`, [0, 256]),
   [
     value("f64", 4996401743142033000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
   ],
 );
 
-// ./test/core/float_exprs.wast:1636
+// ./test/core/float_exprs.wast:1582
 assert_return(
-  () => invoke($64, `f64.plain_sum`, [0, 256]),
+  () => invoke($62, `f64.plain_sum`, [0, 256]),
   [
     value("f64", 4996401743297957600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
   ],
 );
 
-// ./test/core/float_exprs.wast:1640
-let $65 = instantiate(`(module
+// ./test/core/float_exprs.wast:1586
+let $63 = instantiate(`(module
   (func (export "f32.no_fold_neg_sub") (param \$x f32) (param \$y f32) (result f32)
     (f32.neg (f32.sub (local.get \$x) (local.get \$y))))
 
@@ -5120,56 +4877,56 @@ let $65 = instantiate(`(module
     (f64.neg (f64.sub (local.get \$x) (local.get \$y))))
 )`);
 
-// ./test/core/float_exprs.wast:1648
+// ./test/core/float_exprs.wast:1594
 assert_return(
-  () => invoke($65, `f32.no_fold_neg_sub`, [value("f32", -0), value("f32", -0)]),
+  () => invoke($63, `f32.no_fold_neg_sub`, [value("f32", -0), value("f32", -0)]),
   [value("f32", -0)],
 );
 
-// ./test/core/float_exprs.wast:1649
+// ./test/core/float_exprs.wast:1595
 assert_return(
-  () => invoke($65, `f32.no_fold_neg_sub`, [value("f32", 0), value("f32", -0)]),
+  () => invoke($63, `f32.no_fold_neg_sub`, [value("f32", 0), value("f32", -0)]),
   [value("f32", -0)],
 );
 
-// ./test/core/float_exprs.wast:1650
+// ./test/core/float_exprs.wast:1596
 assert_return(
-  () => invoke($65, `f32.no_fold_neg_sub`, [value("f32", -0), value("f32", 0)]),
+  () => invoke($63, `f32.no_fold_neg_sub`, [value("f32", -0), value("f32", 0)]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:1651
+// ./test/core/float_exprs.wast:1597
 assert_return(
-  () => invoke($65, `f32.no_fold_neg_sub`, [value("f32", 0), value("f32", 0)]),
+  () => invoke($63, `f32.no_fold_neg_sub`, [value("f32", 0), value("f32", 0)]),
   [value("f32", -0)],
 );
 
-// ./test/core/float_exprs.wast:1653
+// ./test/core/float_exprs.wast:1599
 assert_return(
-  () => invoke($65, `f64.no_fold_neg_sub`, [value("f64", -0), value("f64", -0)]),
+  () => invoke($63, `f64.no_fold_neg_sub`, [value("f64", -0), value("f64", -0)]),
   [value("f64", -0)],
 );
 
-// ./test/core/float_exprs.wast:1654
+// ./test/core/float_exprs.wast:1600
 assert_return(
-  () => invoke($65, `f64.no_fold_neg_sub`, [value("f64", 0), value("f64", -0)]),
+  () => invoke($63, `f64.no_fold_neg_sub`, [value("f64", 0), value("f64", -0)]),
   [value("f64", -0)],
 );
 
-// ./test/core/float_exprs.wast:1655
+// ./test/core/float_exprs.wast:1601
 assert_return(
-  () => invoke($65, `f64.no_fold_neg_sub`, [value("f64", -0), value("f64", 0)]),
+  () => invoke($63, `f64.no_fold_neg_sub`, [value("f64", -0), value("f64", 0)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:1656
+// ./test/core/float_exprs.wast:1602
 assert_return(
-  () => invoke($65, `f64.no_fold_neg_sub`, [value("f64", 0), value("f64", 0)]),
+  () => invoke($63, `f64.no_fold_neg_sub`, [value("f64", 0), value("f64", 0)]),
   [value("f64", -0)],
 );
 
-// ./test/core/float_exprs.wast:1660
-let $66 = instantiate(`(module
+// ./test/core/float_exprs.wast:1606
+let $64 = instantiate(`(module
   (func (export "f32.no_fold_neg_add") (param \$x f32) (param \$y f32) (result f32)
     (f32.neg (f32.add (local.get \$x) (local.get \$y))))
 
@@ -5177,56 +4934,56 @@ let $66 = instantiate(`(module
     (f64.neg (f64.add (local.get \$x) (local.get \$y))))
 )`);
 
-// ./test/core/float_exprs.wast:1668
+// ./test/core/float_exprs.wast:1614
 assert_return(
-  () => invoke($66, `f32.no_fold_neg_add`, [value("f32", -0), value("f32", -0)]),
+  () => invoke($64, `f32.no_fold_neg_add`, [value("f32", -0), value("f32", -0)]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:1669
+// ./test/core/float_exprs.wast:1615
 assert_return(
-  () => invoke($66, `f32.no_fold_neg_add`, [value("f32", 0), value("f32", -0)]),
+  () => invoke($64, `f32.no_fold_neg_add`, [value("f32", 0), value("f32", -0)]),
   [value("f32", -0)],
 );
 
-// ./test/core/float_exprs.wast:1670
+// ./test/core/float_exprs.wast:1616
 assert_return(
-  () => invoke($66, `f32.no_fold_neg_add`, [value("f32", -0), value("f32", 0)]),
+  () => invoke($64, `f32.no_fold_neg_add`, [value("f32", -0), value("f32", 0)]),
   [value("f32", -0)],
 );
 
-// ./test/core/float_exprs.wast:1671
+// ./test/core/float_exprs.wast:1617
 assert_return(
-  () => invoke($66, `f32.no_fold_neg_add`, [value("f32", 0), value("f32", 0)]),
+  () => invoke($64, `f32.no_fold_neg_add`, [value("f32", 0), value("f32", 0)]),
   [value("f32", -0)],
 );
 
-// ./test/core/float_exprs.wast:1673
+// ./test/core/float_exprs.wast:1619
 assert_return(
-  () => invoke($66, `f64.no_fold_neg_add`, [value("f64", -0), value("f64", -0)]),
+  () => invoke($64, `f64.no_fold_neg_add`, [value("f64", -0), value("f64", -0)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:1674
+// ./test/core/float_exprs.wast:1620
 assert_return(
-  () => invoke($66, `f64.no_fold_neg_add`, [value("f64", 0), value("f64", -0)]),
+  () => invoke($64, `f64.no_fold_neg_add`, [value("f64", 0), value("f64", -0)]),
   [value("f64", -0)],
 );
 
-// ./test/core/float_exprs.wast:1675
+// ./test/core/float_exprs.wast:1621
 assert_return(
-  () => invoke($66, `f64.no_fold_neg_add`, [value("f64", -0), value("f64", 0)]),
+  () => invoke($64, `f64.no_fold_neg_add`, [value("f64", -0), value("f64", 0)]),
   [value("f64", -0)],
 );
 
-// ./test/core/float_exprs.wast:1676
+// ./test/core/float_exprs.wast:1622
 assert_return(
-  () => invoke($66, `f64.no_fold_neg_add`, [value("f64", 0), value("f64", 0)]),
+  () => invoke($64, `f64.no_fold_neg_add`, [value("f64", 0), value("f64", 0)]),
   [value("f64", -0)],
 );
 
-// ./test/core/float_exprs.wast:1680
-let $67 = instantiate(`(module
+// ./test/core/float_exprs.wast:1626
+let $65 = instantiate(`(module
   (func (export "f32.no_fold_add_neg_neg") (param \$x f32) (param \$y f32) (result f32)
     (f32.add (f32.neg (local.get \$x)) (f32.neg (local.get \$y))))
 
@@ -5234,56 +4991,56 @@ let $67 = instantiate(`(module
     (f64.add (f64.neg (local.get \$x)) (f64.neg (local.get \$y))))
 )`);
 
-// ./test/core/float_exprs.wast:1688
+// ./test/core/float_exprs.wast:1634
 assert_return(
-  () => invoke($67, `f32.no_fold_add_neg_neg`, [value("f32", -0), value("f32", -0)]),
+  () => invoke($65, `f32.no_fold_add_neg_neg`, [value("f32", -0), value("f32", -0)]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:1689
+// ./test/core/float_exprs.wast:1635
 assert_return(
-  () => invoke($67, `f32.no_fold_add_neg_neg`, [value("f32", 0), value("f32", -0)]),
+  () => invoke($65, `f32.no_fold_add_neg_neg`, [value("f32", 0), value("f32", -0)]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:1690
+// ./test/core/float_exprs.wast:1636
 assert_return(
-  () => invoke($67, `f32.no_fold_add_neg_neg`, [value("f32", -0), value("f32", 0)]),
+  () => invoke($65, `f32.no_fold_add_neg_neg`, [value("f32", -0), value("f32", 0)]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:1691
+// ./test/core/float_exprs.wast:1637
 assert_return(
-  () => invoke($67, `f32.no_fold_add_neg_neg`, [value("f32", 0), value("f32", 0)]),
+  () => invoke($65, `f32.no_fold_add_neg_neg`, [value("f32", 0), value("f32", 0)]),
   [value("f32", -0)],
 );
 
-// ./test/core/float_exprs.wast:1693
+// ./test/core/float_exprs.wast:1639
 assert_return(
-  () => invoke($67, `f64.no_fold_add_neg_neg`, [value("f64", -0), value("f64", -0)]),
+  () => invoke($65, `f64.no_fold_add_neg_neg`, [value("f64", -0), value("f64", -0)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:1694
+// ./test/core/float_exprs.wast:1640
 assert_return(
-  () => invoke($67, `f64.no_fold_add_neg_neg`, [value("f64", 0), value("f64", -0)]),
+  () => invoke($65, `f64.no_fold_add_neg_neg`, [value("f64", 0), value("f64", -0)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:1695
+// ./test/core/float_exprs.wast:1641
 assert_return(
-  () => invoke($67, `f64.no_fold_add_neg_neg`, [value("f64", -0), value("f64", 0)]),
+  () => invoke($65, `f64.no_fold_add_neg_neg`, [value("f64", -0), value("f64", 0)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:1696
+// ./test/core/float_exprs.wast:1642
 assert_return(
-  () => invoke($67, `f64.no_fold_add_neg_neg`, [value("f64", 0), value("f64", 0)]),
+  () => invoke($65, `f64.no_fold_add_neg_neg`, [value("f64", 0), value("f64", 0)]),
   [value("f64", -0)],
 );
 
-// ./test/core/float_exprs.wast:1700
-let $68 = instantiate(`(module
+// ./test/core/float_exprs.wast:1646
+let $66 = instantiate(`(module
   (func (export "f32.no_fold_add_neg") (param \$x f32) (result f32)
     (f32.add (f32.neg (local.get \$x)) (local.get \$x)))
 
@@ -5291,32 +5048,32 @@ let $68 = instantiate(`(module
     (f64.add (f64.neg (local.get \$x)) (local.get \$x)))
 )`);
 
-// ./test/core/float_exprs.wast:1708
-assert_return(() => invoke($68, `f32.no_fold_add_neg`, [value("f32", 0)]), [value("f32", 0)]);
+// ./test/core/float_exprs.wast:1654
+assert_return(() => invoke($66, `f32.no_fold_add_neg`, [value("f32", 0)]), [value("f32", 0)]);
 
-// ./test/core/float_exprs.wast:1709
-assert_return(() => invoke($68, `f32.no_fold_add_neg`, [value("f32", -0)]), [value("f32", 0)]);
+// ./test/core/float_exprs.wast:1655
+assert_return(() => invoke($66, `f32.no_fold_add_neg`, [value("f32", -0)]), [value("f32", 0)]);
 
-// ./test/core/float_exprs.wast:1710
-assert_return(() => invoke($68, `f32.no_fold_add_neg`, [value("f32", Infinity)]), [`canonical_nan`]);
+// ./test/core/float_exprs.wast:1656
+assert_return(() => invoke($66, `f32.no_fold_add_neg`, [value("f32", Infinity)]), [`canonical_nan`]);
 
-// ./test/core/float_exprs.wast:1711
-assert_return(() => invoke($68, `f32.no_fold_add_neg`, [value("f32", -Infinity)]), [`canonical_nan`]);
+// ./test/core/float_exprs.wast:1657
+assert_return(() => invoke($66, `f32.no_fold_add_neg`, [value("f32", -Infinity)]), [`canonical_nan`]);
 
-// ./test/core/float_exprs.wast:1713
-assert_return(() => invoke($68, `f64.no_fold_add_neg`, [value("f64", 0)]), [value("f64", 0)]);
+// ./test/core/float_exprs.wast:1659
+assert_return(() => invoke($66, `f64.no_fold_add_neg`, [value("f64", 0)]), [value("f64", 0)]);
 
-// ./test/core/float_exprs.wast:1714
-assert_return(() => invoke($68, `f64.no_fold_add_neg`, [value("f64", -0)]), [value("f64", 0)]);
+// ./test/core/float_exprs.wast:1660
+assert_return(() => invoke($66, `f64.no_fold_add_neg`, [value("f64", -0)]), [value("f64", 0)]);
 
-// ./test/core/float_exprs.wast:1715
-assert_return(() => invoke($68, `f64.no_fold_add_neg`, [value("f64", Infinity)]), [`canonical_nan`]);
+// ./test/core/float_exprs.wast:1661
+assert_return(() => invoke($66, `f64.no_fold_add_neg`, [value("f64", Infinity)]), [`canonical_nan`]);
 
-// ./test/core/float_exprs.wast:1716
-assert_return(() => invoke($68, `f64.no_fold_add_neg`, [value("f64", -Infinity)]), [`canonical_nan`]);
+// ./test/core/float_exprs.wast:1662
+assert_return(() => invoke($66, `f64.no_fold_add_neg`, [value("f64", -Infinity)]), [`canonical_nan`]);
 
-// ./test/core/float_exprs.wast:1720
-let $69 = instantiate(`(module
+// ./test/core/float_exprs.wast:1666
+let $67 = instantiate(`(module
   (func (export "f32.no_fold_6x_via_add") (param \$x f32) (result f32)
     (f32.add (f32.add (f32.add (f32.add (f32.add
     (local.get \$x)
@@ -5330,53 +5087,53 @@ let $69 = instantiate(`(module
     (local.get \$x)) (local.get \$x)))
 )`);
 
-// ./test/core/float_exprs.wast:1734
+// ./test/core/float_exprs.wast:1680
 assert_return(
-  () => invoke($69, `f32.no_fold_6x_via_add`, [
+  () => invoke($67, `f32.no_fold_6x_via_add`, [
     value("f32", -855513700000000000000000000000),
   ]),
   [value("f32", -5133083000000000000000000000000)],
 );
 
-// ./test/core/float_exprs.wast:1735
+// ./test/core/float_exprs.wast:1681
 assert_return(
-  () => invoke($69, `f32.no_fold_6x_via_add`, [
+  () => invoke($67, `f32.no_fold_6x_via_add`, [
     value("f32", -0.00000000000000000000001209506),
   ]),
   [value("f32", -0.00000000000000000000007257036)],
 );
 
-// ./test/core/float_exprs.wast:1736
+// ./test/core/float_exprs.wast:1682
 assert_return(
-  () => invoke($69, `f32.no_fold_6x_via_add`, [
+  () => invoke($67, `f32.no_fold_6x_via_add`, [
     value("f32", 0.000000000000000000000006642689),
   ]),
   [value("f32", 0.000000000000000000000039856134)],
 );
 
-// ./test/core/float_exprs.wast:1737
+// ./test/core/float_exprs.wast:1683
 assert_return(
-  () => invoke($69, `f32.no_fold_6x_via_add`, [value("f32", -0.0000000006147346)]),
+  () => invoke($67, `f32.no_fold_6x_via_add`, [value("f32", -0.0000000006147346)]),
   [value("f32", -0.0000000036884074)],
 );
 
-// ./test/core/float_exprs.wast:1738
+// ./test/core/float_exprs.wast:1684
 assert_return(
-  () => invoke($69, `f32.no_fold_6x_via_add`, [
+  () => invoke($67, `f32.no_fold_6x_via_add`, [
     value("f32", -1209858100000000000000000),
   ]),
   [value("f32", -7259148300000000000000000)],
 );
 
-// ./test/core/float_exprs.wast:1740
+// ./test/core/float_exprs.wast:1686
 assert_return(
-  () => invoke($69, `f64.no_fold_6x_via_add`, [value("f64", -351704490602771400000)]),
+  () => invoke($67, `f64.no_fold_6x_via_add`, [value("f64", -351704490602771400000)]),
   [value("f64", -2110226943616628600000)],
 );
 
-// ./test/core/float_exprs.wast:1741
+// ./test/core/float_exprs.wast:1687
 assert_return(
-  () => invoke($69, `f64.no_fold_6x_via_add`, [
+  () => invoke($67, `f64.no_fold_6x_via_add`, [
     value("f64", -0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000014824294109868734),
   ]),
   [
@@ -5384,9 +5141,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1742
+// ./test/core/float_exprs.wast:1688
 assert_return(
-  () => invoke($69, `f64.no_fold_6x_via_add`, [
+  () => invoke($67, `f64.no_fold_6x_via_add`, [
     value("f64", -7484567838781003000000000000000000000000000000000000000000000000000000000000000000),
   ]),
   [
@@ -5394,9 +5151,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1743
+// ./test/core/float_exprs.wast:1689
 assert_return(
-  () => invoke($69, `f64.no_fold_6x_via_add`, [
+  () => invoke($67, `f64.no_fold_6x_via_add`, [
     value("f64", 17277868192936067000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
   ]),
   [
@@ -5404,9 +5161,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1744
+// ./test/core/float_exprs.wast:1690
 assert_return(
-  () => invoke($69, `f64.no_fold_6x_via_add`, [
+  () => invoke($67, `f64.no_fold_6x_via_add`, [
     value("f64", -43116397525195610000000000000000000000000000000000000000000000000000000),
   ]),
   [
@@ -5414,8 +5171,8 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1749
-let $70 = instantiate(`(module
+// ./test/core/float_exprs.wast:1695
+let $68 = instantiate(`(module
   (func (export "f32.no_fold_div_div") (param \$x f32) (param \$y f32) (param \$z f32) (result f32)
     (f32.div (f32.div (local.get \$x) (local.get \$y)) (local.get \$z)))
 
@@ -5423,9 +5180,9 @@ let $70 = instantiate(`(module
     (f64.div (f64.div (local.get \$x) (local.get \$y)) (local.get \$z)))
 )`);
 
-// ./test/core/float_exprs.wast:1757
+// ./test/core/float_exprs.wast:1703
 assert_return(
-  () => invoke($70, `f32.no_fold_div_div`, [
+  () => invoke($68, `f32.no_fold_div_div`, [
     value("f32", -593847530000000000000000),
     value("f32", -0.000030265672),
     value("f32", -1584.8682),
@@ -5433,9 +5190,9 @@ assert_return(
   [value("f32", -12380309000000000000000000)],
 );
 
-// ./test/core/float_exprs.wast:1758
+// ./test/core/float_exprs.wast:1704
 assert_return(
-  () => invoke($70, `f32.no_fold_div_div`, [
+  () => invoke($68, `f32.no_fold_div_div`, [
     value("f32", 0.0000000000000000000015438962),
     value("f32", 2533429300000000000000000000000000),
     value("f32", -0.00000000000000000000000000000000026844783),
@@ -5443,9 +5200,9 @@ assert_return(
   [value("f32", -0)],
 );
 
-// ./test/core/float_exprs.wast:1759
+// ./test/core/float_exprs.wast:1705
 assert_return(
-  () => invoke($70, `f32.no_fold_div_div`, [
+  () => invoke($68, `f32.no_fold_div_div`, [
     value("f32", 13417423000000),
     value("f32", 0.000000000000000000000000000000029339205),
     value("f32", 76386374000000000000000000000000),
@@ -5453,9 +5210,9 @@ assert_return(
   [value("f32", Infinity)],
 );
 
-// ./test/core/float_exprs.wast:1760
+// ./test/core/float_exprs.wast:1706
 assert_return(
-  () => invoke($70, `f32.no_fold_div_div`, [
+  () => invoke($68, `f32.no_fold_div_div`, [
     value("f32", -0.00010776529),
     value("f32", -34220943000000000000000000000000000000),
     value("f32", -0.00000000000016562324),
@@ -5463,9 +5220,9 @@ assert_return(
   [value("f32", -0.000000000000000000000000000019011327)],
 );
 
-// ./test/core/float_exprs.wast:1761
+// ./test/core/float_exprs.wast:1707
 assert_return(
-  () => invoke($70, `f32.no_fold_div_div`, [
+  () => invoke($68, `f32.no_fold_div_div`, [
     value("f32", 130582500000000),
     value("f32", 96245350000000000),
     value("f32", -41461545000000000000000000000000000000),
@@ -5473,9 +5230,9 @@ assert_return(
   [value("f32", -0.000000000000000000000000000000000000000032723)],
 );
 
-// ./test/core/float_exprs.wast:1763
+// ./test/core/float_exprs.wast:1709
 assert_return(
-  () => invoke($70, `f64.no_fold_div_div`, [
+  () => invoke($68, `f64.no_fold_div_div`, [
     value("f64", 477762874671014340000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
     value("f64", 102786720420404010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
     value("f64", -0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000718999894988884),
@@ -5485,9 +5242,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1764
+// ./test/core/float_exprs.wast:1710
 assert_return(
-  () => invoke($70, `f64.no_fold_div_div`, [
+  () => invoke($68, `f64.no_fold_div_div`, [
     value("f64", -21790236783875714000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
     value("f64", 0.0000000028324436844616576),
     value("f64", 186110768259868700000000000000000000000000000000000000000000000000000000000000000000000000000000),
@@ -5497,9 +5254,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1765
+// ./test/core/float_exprs.wast:1711
 assert_return(
-  () => invoke($70, `f64.no_fold_div_div`, [
+  () => invoke($68, `f64.no_fold_div_div`, [
     value("f64", -7.287619347826683),
     value("f64", -13467607316739855000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
     value("f64", 2462719007013688000000000000000000000000000000000000),
@@ -5509,9 +5266,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1766
+// ./test/core/float_exprs.wast:1712
 assert_return(
-  () => invoke($70, `f64.no_fold_div_div`, [
+  () => invoke($68, `f64.no_fold_div_div`, [
     value("f64", -286552397862963300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
     value("f64", 0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010211980370639414),
     value("f64", 28764586483324010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
@@ -5519,9 +5276,9 @@ assert_return(
   [value("f64", -Infinity)],
 );
 
-// ./test/core/float_exprs.wast:1767
+// ./test/core/float_exprs.wast:1713
 assert_return(
-  () => invoke($70, `f64.no_fold_div_div`, [
+  () => invoke($68, `f64.no_fold_div_div`, [
     value("f64", -0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000009525735602663874),
     value("f64", 0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000050233948816631796),
     value("f64", -0.0000000000000000000000000000000000000000028304570228221077),
@@ -5531,8 +5288,8 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1773
-let $71 = instantiate(`(module
+// ./test/core/float_exprs.wast:1719
+let $69 = instantiate(`(module
   (func (export "f32.no_fold_mul_divs") (param \$x f32) (param \$y f32) (param \$z f32) (param \$w f32) (result f32)
     (f32.mul (f32.div (local.get \$x) (local.get \$y)) (f32.div (local.get \$z) (local.get \$w))))
 
@@ -5540,9 +5297,9 @@ let $71 = instantiate(`(module
     (f64.mul (f64.div (local.get \$x) (local.get \$y)) (f64.div (local.get \$z) (local.get \$w))))
 )`);
 
-// ./test/core/float_exprs.wast:1781
+// ./test/core/float_exprs.wast:1727
 assert_return(
-  () => invoke($71, `f32.no_fold_mul_divs`, [
+  () => invoke($69, `f32.no_fold_mul_divs`, [
     value("f32", -0.0000000000000000000000000000000027234733),
     value("f32", 0.0000000000000000000000000003897843),
     value("f32", 0.000000000000000000000000004847123),
@@ -5551,9 +5308,9 @@ assert_return(
   [value("f32", 0.0000000000000000000000000000000013355855)],
 );
 
-// ./test/core/float_exprs.wast:1782
+// ./test/core/float_exprs.wast:1728
 assert_return(
-  () => invoke($71, `f32.no_fold_mul_divs`, [
+  () => invoke($69, `f32.no_fold_mul_divs`, [
     value("f32", -5372844000000000000000000000000),
     value("f32", 38340910),
     value("f32", 0.000014973162),
@@ -5562,9 +5319,9 @@ assert_return(
   [value("f32", -10920475000000000000)],
 );
 
-// ./test/core/float_exprs.wast:1783
+// ./test/core/float_exprs.wast:1729
 assert_return(
-  () => invoke($71, `f32.no_fold_mul_divs`, [
+  () => invoke($69, `f32.no_fold_mul_divs`, [
     value("f32", -16085042000),
     value("f32", -1092920200000),
     value("f32", -869606000),
@@ -5573,9 +5330,9 @@ assert_return(
   [value("f32", 10654.639)],
 );
 
-// ./test/core/float_exprs.wast:1784
+// ./test/core/float_exprs.wast:1730
 assert_return(
-  () => invoke($71, `f32.no_fold_mul_divs`, [
+  () => invoke($69, `f32.no_fold_mul_divs`, [
     value("f32", -1271223140000000000000000000000000),
     value("f32", 0.00000000010768114),
     value("f32", 0.000018576271),
@@ -5584,9 +5341,9 @@ assert_return(
   [value("f32", -Infinity)],
 );
 
-// ./test/core/float_exprs.wast:1785
+// ./test/core/float_exprs.wast:1731
 assert_return(
-  () => invoke($71, `f32.no_fold_mul_divs`, [
+  () => invoke($69, `f32.no_fold_mul_divs`, [
     value("f32", 0.00000000000000013783864),
     value("f32", -0.000000000000000000065046285),
     value("f32", 0.00000000000000000000000000068167684),
@@ -5595,9 +5352,9 @@ assert_return(
   [value("f32", -0.000000000000063100295)],
 );
 
-// ./test/core/float_exprs.wast:1787
+// ./test/core/float_exprs.wast:1733
 assert_return(
-  () => invoke($71, `f64.no_fold_mul_divs`, [
+  () => invoke($69, `f64.no_fold_mul_divs`, [
     value("f64", -0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003466499805233369),
     value("f64", -0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004045567512248635),
     value("f64", -646234107060759200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
@@ -5606,9 +5363,9 @@ assert_return(
   [value("f64", -55.12215321310017)],
 );
 
-// ./test/core/float_exprs.wast:1788
+// ./test/core/float_exprs.wast:1734
 assert_return(
-  () => invoke($71, `f64.no_fold_mul_divs`, [
+  () => invoke($69, `f64.no_fold_mul_divs`, [
     value("f64", -50548839076363250000000000000000000),
     value("f64", 0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022223781649976275),
     value("f64", -15029790371100852000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
@@ -5617,9 +5374,9 @@ assert_return(
   [value("f64", -Infinity)],
 );
 
-// ./test/core/float_exprs.wast:1789
+// ./test/core/float_exprs.wast:1735
 assert_return(
-  () => invoke($71, `f64.no_fold_mul_divs`, [
+  () => invoke($69, `f64.no_fold_mul_divs`, [
     value("f64", -836111653634494700000000000000000000000000000000000000000000000000000000000000000000000000000),
     value("f64", -10029528876067567000000000000000000000000000000000000000000),
     value("f64", -0.0000000000000000000000000000000000000000012867801766038772),
@@ -5630,9 +5387,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1790
+// ./test/core/float_exprs.wast:1736
 assert_return(
-  () => invoke($71, `f64.no_fold_mul_divs`, [
+  () => invoke($69, `f64.no_fold_mul_divs`, [
     value("f64", -1202003211641119300000000000000000000000),
     value("f64", -0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004667409771338769),
     value("f64", 0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010888652376540085),
@@ -5641,9 +5398,9 @@ assert_return(
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:1791
+// ./test/core/float_exprs.wast:1737
 assert_return(
-  () => invoke($71, `f64.no_fold_mul_divs`, [
+  () => invoke($69, `f64.no_fold_mul_divs`, [
     value("f64", 0.000006331839568840419),
     value("f64", 0.000000000000000000000000000000000000000000000000000000000000000000000000000000000005544474241905778),
     value("f64", 0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000027822472480359097),
@@ -5654,8 +5411,8 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1795
-let $72 = instantiate(`(module
+// ./test/core/float_exprs.wast:1741
+let $70 = instantiate(`(module
   (func (export "f32.no_fold_add_divs") (param \$x f32) (param \$y f32) (param \$z f32) (result f32)
     (f32.add (f32.div (local.get \$x) (local.get \$z)) (f32.div (local.get \$y) (local.get \$z))))
 
@@ -5663,9 +5420,9 @@ let $72 = instantiate(`(module
     (f64.add (f64.div (local.get \$x) (local.get \$z)) (f64.div (local.get \$y) (local.get \$z))))
 )`);
 
-// ./test/core/float_exprs.wast:1803
+// ./test/core/float_exprs.wast:1749
 assert_return(
-  () => invoke($72, `f32.no_fold_add_divs`, [
+  () => invoke($70, `f32.no_fold_add_divs`, [
     value("f32", 377.3689),
     value("f32", -0.040118184),
     value("f32", -136292990000000000000000000000000000000),
@@ -5673,9 +5430,9 @@ assert_return(
   [value("f32", -0.0000000000000000000000000000000000027685121)],
 );
 
-// ./test/core/float_exprs.wast:1804
+// ./test/core/float_exprs.wast:1750
 assert_return(
-  () => invoke($72, `f32.no_fold_add_divs`, [
+  () => invoke($70, `f32.no_fold_add_divs`, [
     value("f32", -0.00000000000000000018234023),
     value("f32", -0.0000000000000033970288),
     value("f32", -170996700000000),
@@ -5683,9 +5440,9 @@ assert_return(
   [value("f32", 0.000000000000000000000000000019867115)],
 );
 
-// ./test/core/float_exprs.wast:1805
+// ./test/core/float_exprs.wast:1751
 assert_return(
-  () => invoke($72, `f32.no_fold_add_divs`, [
+  () => invoke($70, `f32.no_fold_add_divs`, [
     value("f32", -0.000000000000019672638),
     value("f32", 0.00000000000000000006414099),
     value("f32", -541989070000000),
@@ -5693,9 +5450,9 @@ assert_return(
   [value("f32", 0.000000000000000000000000000036296997)],
 );
 
-// ./test/core/float_exprs.wast:1806
+// ./test/core/float_exprs.wast:1752
 assert_return(
-  () => invoke($72, `f32.no_fold_add_divs`, [
+  () => invoke($70, `f32.no_fold_add_divs`, [
     value("f32", -0.0000000000000000000000000000004038506),
     value("f32", 0.000000000000000000000000000003848228),
     value("f32", -345237200000000000000000000),
@@ -5703,9 +5460,9 @@ assert_return(
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:1807
+// ./test/core/float_exprs.wast:1753
 assert_return(
-  () => invoke($72, `f32.no_fold_add_divs`, [
+  () => invoke($70, `f32.no_fold_add_divs`, [
     value("f32", 0.0010934415),
     value("f32", 0.20703124),
     value("f32", 0.00000000000000000000000000000000000013509784),
@@ -5713,9 +5470,9 @@ assert_return(
   [value("f32", 1540547700000000000000000000000000000)],
 );
 
-// ./test/core/float_exprs.wast:1809
+// ./test/core/float_exprs.wast:1755
 assert_return(
-  () => invoke($72, `f64.no_fold_add_divs`, [
+  () => invoke($70, `f64.no_fold_add_divs`, [
     value("f64", -4917019432143760000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
     value("f64", 68132156322019020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
     value("f64", 26125410100237784000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
@@ -5725,9 +5482,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1810
+// ./test/core/float_exprs.wast:1756
 assert_return(
-  () => invoke($72, `f64.no_fold_add_divs`, [
+  () => invoke($70, `f64.no_fold_add_divs`, [
     value("f64", -10206467953224550),
     value("f64", 63.422616671746226),
     value("f64", -0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000016024747869814892),
@@ -5737,9 +5494,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1811
+// ./test/core/float_exprs.wast:1757
 assert_return(
-  () => invoke($72, `f64.no_fold_add_divs`, [
+  () => invoke($70, `f64.no_fold_add_divs`, [
     value("f64", -0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000015270569633109837),
     value("f64", 0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000025755503329232514),
     value("f64", 58826939164214920000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
@@ -5747,9 +5504,9 @@ assert_return(
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:1812
+// ./test/core/float_exprs.wast:1758
 assert_return(
-  () => invoke($72, `f64.no_fold_add_divs`, [
+  () => invoke($70, `f64.no_fold_add_divs`, [
     value("f64", 26667964874394640000000000000000000000000000000000000000000000000000000000000000000000000000000),
     value("f64", -2131569252493657800000000000000000000000000000000000000000000000000000000000000000000000000000000000),
     value("f64", 0.000000000000000000000000000000000000012377004518680012),
@@ -5759,9 +5516,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1813
+// ./test/core/float_exprs.wast:1759
 assert_return(
-  () => invoke($72, `f64.no_fold_add_divs`, [
+  () => invoke($70, `f64.no_fold_add_divs`, [
     value("f64", -0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000012952888377288216),
     value("f64", 0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005808769259900048),
     value("f64", 0.0000000000000000000016745741699443756),
@@ -5771,8 +5528,8 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1817
-let $73 = instantiate(`(module
+// ./test/core/float_exprs.wast:1763
+let $71 = instantiate(`(module
   (func (export "f32.no_fold_sqrt_square") (param \$x f32) (result f32)
     (f32.sqrt (f32.mul (local.get \$x) (local.get \$x))))
 
@@ -5780,49 +5537,49 @@ let $73 = instantiate(`(module
     (f64.sqrt (f64.mul (local.get \$x) (local.get \$x))))
 )`);
 
-// ./test/core/float_exprs.wast:1825
+// ./test/core/float_exprs.wast:1771
 assert_return(
-  () => invoke($73, `f32.no_fold_sqrt_square`, [
+  () => invoke($71, `f32.no_fold_sqrt_square`, [
     value("f32", -0.00000000000000000001846),
   ]),
   [value("f32", 0.00000000000000000001846001)],
 );
 
-// ./test/core/float_exprs.wast:1826
+// ./test/core/float_exprs.wast:1772
 assert_return(
-  () => invoke($73, `f32.no_fold_sqrt_square`, [
+  () => invoke($71, `f32.no_fold_sqrt_square`, [
     value("f32", -0.00000000000000000000017907473),
   ]),
   [value("f32", 0.00000000000000000000017952678)],
 );
 
-// ./test/core/float_exprs.wast:1827
+// ./test/core/float_exprs.wast:1773
 assert_return(
-  () => invoke($73, `f32.no_fold_sqrt_square`, [
+  () => invoke($71, `f32.no_fold_sqrt_square`, [
     value("f32", -0.00000000000000000000079120785),
   ]),
   [value("f32", 0.000000000000000000000791442)],
 );
 
-// ./test/core/float_exprs.wast:1828
+// ./test/core/float_exprs.wast:1774
 assert_return(
-  () => invoke($73, `f32.no_fold_sqrt_square`, [
+  () => invoke($71, `f32.no_fold_sqrt_square`, [
     value("f32", 0.000000000000000000000000018012938),
   ]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:1829
+// ./test/core/float_exprs.wast:1775
 assert_return(
-  () => invoke($73, `f32.no_fold_sqrt_square`, [
+  () => invoke($71, `f32.no_fold_sqrt_square`, [
     value("f32", 610501970000000000000000000000000),
   ]),
   [value("f32", Infinity)],
 );
 
-// ./test/core/float_exprs.wast:1831
+// ./test/core/float_exprs.wast:1777
 assert_return(
-  () => invoke($73, `f64.no_fold_sqrt_square`, [
+  () => invoke($71, `f64.no_fold_sqrt_square`, [
     value("f64", 0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006209297167747496),
   ]),
   [
@@ -5830,9 +5587,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1832
+// ./test/core/float_exprs.wast:1778
 assert_return(
-  () => invoke($73, `f64.no_fold_sqrt_square`, [
+  () => invoke($71, `f64.no_fold_sqrt_square`, [
     value("f64", -0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000024211175303738945),
   ]),
   [
@@ -5840,9 +5597,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1833
+// ./test/core/float_exprs.wast:1779
 assert_return(
-  () => invoke($73, `f64.no_fold_sqrt_square`, [
+  () => invoke($71, `f64.no_fold_sqrt_square`, [
     value("f64", -0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000016460687611875645),
   ]),
   [
@@ -5850,24 +5607,24 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1834
+// ./test/core/float_exprs.wast:1780
 assert_return(
-  () => invoke($73, `f64.no_fold_sqrt_square`, [
+  () => invoke($71, `f64.no_fold_sqrt_square`, [
     value("f64", -0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003797811613378828),
   ]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:1835
+// ./test/core/float_exprs.wast:1781
 assert_return(
-  () => invoke($73, `f64.no_fold_sqrt_square`, [
+  () => invoke($71, `f64.no_fold_sqrt_square`, [
     value("f64", 815808428460559200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
   ]),
   [value("f64", Infinity)],
 );
 
-// ./test/core/float_exprs.wast:1839
-let $74 = instantiate(`(module
+// ./test/core/float_exprs.wast:1785
+let $72 = instantiate(`(module
   (func (export "f32.no_fold_mul_sqrts") (param \$x f32) (param \$y f32) (result f32)
     (f32.mul (f32.sqrt (local.get \$x)) (f32.sqrt (local.get \$y))))
 
@@ -5875,63 +5632,63 @@ let $74 = instantiate(`(module
     (f64.mul (f64.sqrt (local.get \$x)) (f64.sqrt (local.get \$y))))
 )`);
 
-// ./test/core/float_exprs.wast:1847
+// ./test/core/float_exprs.wast:1793
 assert_return(
-  () => invoke($74, `f32.no_fold_mul_sqrts`, [
+  () => invoke($72, `f32.no_fold_mul_sqrts`, [
     value("f32", 0.000000000000000000000000000000000000043885047),
     value("f32", -0.00000000000000000000000011867334),
   ]),
   [`canonical_nan`],
 );
 
-// ./test/core/float_exprs.wast:1848
+// ./test/core/float_exprs.wast:1794
 assert_return(
-  () => invoke($74, `f32.no_fold_mul_sqrts`, [
+  () => invoke($72, `f32.no_fold_mul_sqrts`, [
     value("f32", 0.00000000000000000000000000025365908),
     value("f32", 0.00000000041320675),
   ]),
   [value("f32", 0.00000000000000000032374932)],
 );
 
-// ./test/core/float_exprs.wast:1849
+// ./test/core/float_exprs.wast:1795
 assert_return(
-  () => invoke($74, `f32.no_fold_mul_sqrts`, [
+  () => invoke($72, `f32.no_fold_mul_sqrts`, [
     value("f32", 0.0000000000000000000000000042144832),
     value("f32", 97.249115),
   ]),
   [value("f32", 0.00000000000064019905)],
 );
 
-// ./test/core/float_exprs.wast:1850
+// ./test/core/float_exprs.wast:1796
 assert_return(
-  () => invoke($74, `f32.no_fold_mul_sqrts`, [
+  () => invoke($72, `f32.no_fold_mul_sqrts`, [
     value("f32", 3724076300000000000000000000000),
     value("f32", 0.002944908),
   ]),
   [value("f32", 104723750000000)],
 );
 
-// ./test/core/float_exprs.wast:1851
+// ./test/core/float_exprs.wast:1797
 assert_return(
-  () => invoke($74, `f32.no_fold_mul_sqrts`, [
+  () => invoke($72, `f32.no_fold_mul_sqrts`, [
     value("f32", 0.00000000000000001866056),
     value("f32", 0.002111261),
   ]),
   [value("f32", 0.00000000019848755)],
 );
 
-// ./test/core/float_exprs.wast:1853
+// ./test/core/float_exprs.wast:1799
 assert_return(
-  () => invoke($74, `f64.no_fold_mul_sqrts`, [
+  () => invoke($72, `f64.no_fold_mul_sqrts`, [
     value("f64", -0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000012742064369772862),
     value("f64", -0.006829962938197246),
   ]),
   [`canonical_nan`],
 );
 
-// ./test/core/float_exprs.wast:1854
+// ./test/core/float_exprs.wast:1800
 assert_return(
-  () => invoke($74, `f64.no_fold_mul_sqrts`, [
+  () => invoke($72, `f64.no_fold_mul_sqrts`, [
     value("f64", 0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000037082569269527534),
     value("f64", 0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000047183002857015043),
   ]),
@@ -5940,9 +5697,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1855
+// ./test/core/float_exprs.wast:1801
 assert_return(
-  () => invoke($74, `f64.no_fold_mul_sqrts`, [
+  () => invoke($72, `f64.no_fold_mul_sqrts`, [
     value("f64", 0.000000000000000000000000002329359505918655),
     value("f64", 0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020743399642806364),
   ]),
@@ -5951,9 +5708,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1856
+// ./test/core/float_exprs.wast:1802
 assert_return(
-  () => invoke($74, `f64.no_fold_mul_sqrts`, [
+  () => invoke($72, `f64.no_fold_mul_sqrts`, [
     value("f64", 0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010541899336289437),
     value("f64", 0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000598123819872803),
   ]),
@@ -5962,9 +5719,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1857
+// ./test/core/float_exprs.wast:1803
 assert_return(
-  () => invoke($74, `f64.no_fold_mul_sqrts`, [
+  () => invoke($72, `f64.no_fold_mul_sqrts`, [
     value("f64", 25589482.717358638),
     value("f64", 39138912071199020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
   ]),
@@ -5973,8 +5730,8 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1861
-let $75 = instantiate(`(module
+// ./test/core/float_exprs.wast:1807
+let $73 = instantiate(`(module
   (func (export "f32.no_fold_div_sqrts") (param \$x f32) (param \$y f32) (result f32)
     (f32.div (f32.sqrt (local.get \$x)) (f32.sqrt (local.get \$y))))
 
@@ -5982,63 +5739,63 @@ let $75 = instantiate(`(module
     (f64.div (f64.sqrt (local.get \$x)) (f64.sqrt (local.get \$y))))
 )`);
 
-// ./test/core/float_exprs.wast:1869
+// ./test/core/float_exprs.wast:1815
 assert_return(
-  () => invoke($75, `f32.no_fold_div_sqrts`, [
+  () => invoke($73, `f32.no_fold_div_sqrts`, [
     value("f32", -58545012),
     value("f32", -0.000000000000000006443773),
   ]),
   [`canonical_nan`],
 );
 
-// ./test/core/float_exprs.wast:1870
+// ./test/core/float_exprs.wast:1816
 assert_return(
-  () => invoke($75, `f32.no_fold_div_sqrts`, [
+  () => invoke($73, `f32.no_fold_div_sqrts`, [
     value("f32", 7407384000),
     value("f32", 209778930),
   ]),
   [value("f32", 5.9422584)],
 );
 
-// ./test/core/float_exprs.wast:1871
+// ./test/core/float_exprs.wast:1817
 assert_return(
-  () => invoke($75, `f32.no_fold_div_sqrts`, [
+  () => invoke($73, `f32.no_fold_div_sqrts`, [
     value("f32", 0.0000000000000000000000000000000000013764126),
     value("f32", 54692.9),
   ]),
   [value("f32", 0.0000000000000000000050165927)],
 );
 
-// ./test/core/float_exprs.wast:1872
+// ./test/core/float_exprs.wast:1818
 assert_return(
-  () => invoke($75, `f32.no_fold_div_sqrts`, [
+  () => invoke($73, `f32.no_fold_div_sqrts`, [
     value("f32", 979288960000000000),
     value("f32", 0.0000000012643552),
   ]),
   [value("f32", 27830490000000)],
 );
 
-// ./test/core/float_exprs.wast:1873
+// ./test/core/float_exprs.wast:1819
 assert_return(
-  () => invoke($75, `f32.no_fold_div_sqrts`, [
+  () => invoke($73, `f32.no_fold_div_sqrts`, [
     value("f32", 0.00000000000000000000000000000000029141283),
     value("f32", 0.00000000000000000000000000000017928174),
   ]),
   [value("f32", 0.04031682)],
 );
 
-// ./test/core/float_exprs.wast:1875
+// ./test/core/float_exprs.wast:1821
 assert_return(
-  () => invoke($75, `f64.no_fold_div_sqrts`, [
+  () => invoke($73, `f64.no_fold_div_sqrts`, [
     value("f64", -0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000012206137319883022),
     value("f64", -0.000000000000000000000000000000000000000000000000000000008209583449676083),
   ]),
   [`canonical_nan`],
 );
 
-// ./test/core/float_exprs.wast:1876
+// ./test/core/float_exprs.wast:1822
 assert_return(
-  () => invoke($75, `f64.no_fold_div_sqrts`, [
+  () => invoke($73, `f64.no_fold_div_sqrts`, [
     value("f64", 0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000033818852462305824),
     value("f64", 7655783976315048000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
   ]),
@@ -6047,9 +5804,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1877
+// ./test/core/float_exprs.wast:1823
 assert_return(
-  () => invoke($75, `f64.no_fold_div_sqrts`, [
+  () => invoke($73, `f64.no_fold_div_sqrts`, [
     value("f64", 45963335670647510000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
     value("f64", 0.0000000000000000000000000000000023932467846883046),
   ]),
@@ -6058,9 +5815,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1878
+// ./test/core/float_exprs.wast:1824
 assert_return(
-  () => invoke($75, `f64.no_fold_div_sqrts`, [
+  () => invoke($73, `f64.no_fold_div_sqrts`, [
     value("f64", 0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000025327340978668086),
     value("f64", 4475305129961258000000000000000000000000000000000000000000000000000000000000000000000000),
   ]),
@@ -6069,9 +5826,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1879
+// ./test/core/float_exprs.wast:1825
 assert_return(
-  () => invoke($75, `f64.no_fold_div_sqrts`, [
+  () => invoke($73, `f64.no_fold_div_sqrts`, [
     value("f64", 0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005103070160197939),
     value("f64", 460157669098082500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
   ]),
@@ -6080,8 +5837,8 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1883
-let $76 = instantiate(`(module
+// ./test/core/float_exprs.wast:1829
+let $74 = instantiate(`(module
   (func (export "f32.no_fold_mul_sqrt_div") (param \$x f32) (param \$y f32) (result f32)
     (f32.div (f32.mul (local.get \$x) (f32.sqrt (local.get \$y))) (local.get \$y)))
 
@@ -6089,72 +5846,72 @@ let $76 = instantiate(`(module
     (f64.div (f64.mul (local.get \$x) (f64.sqrt (local.get \$y))) (local.get \$y)))
 )`);
 
-// ./test/core/float_exprs.wast:1891
+// ./test/core/float_exprs.wast:1837
 assert_return(
-  () => invoke($76, `f32.no_fold_mul_sqrt_div`, [
+  () => invoke($74, `f32.no_fold_mul_sqrt_div`, [
     value("f32", -4728556800000000000000000),
     value("f32", 8677282000000000000000000000),
   ]),
   [value("f32", -Infinity)],
 );
 
-// ./test/core/float_exprs.wast:1892
+// ./test/core/float_exprs.wast:1838
 assert_return(
-  () => invoke($76, `f32.no_fold_mul_sqrt_div`, [
+  () => invoke($74, `f32.no_fold_mul_sqrt_div`, [
     value("f32", -0.0000000000000000000000000000000000011776882),
     value("f32", 0.000000000000000000000000000009805153),
   ]),
   [value("f32", -0)],
 );
 
-// ./test/core/float_exprs.wast:1893
+// ./test/core/float_exprs.wast:1839
 assert_return(
-  () => invoke($76, `f32.no_fold_mul_sqrt_div`, [
+  () => invoke($74, `f32.no_fold_mul_sqrt_div`, [
     value("f32", 816717060),
     value("f32", 0.000000000000000000000000000000000000003323171),
   ]),
   [value("f32", 14167568000000000000000000000)],
 );
 
-// ./test/core/float_exprs.wast:1894
+// ./test/core/float_exprs.wast:1840
 assert_return(
-  () => invoke($76, `f32.no_fold_mul_sqrt_div`, [
+  () => invoke($74, `f32.no_fold_mul_sqrt_div`, [
     value("f32", -11932267000000),
     value("f32", 8637067000000000000000000000000000),
   ]),
   [value("f32", -0.00012839255)],
 );
 
-// ./test/core/float_exprs.wast:1895
+// ./test/core/float_exprs.wast:1841
 assert_return(
-  () => invoke($76, `f32.no_fold_mul_sqrt_div`, [
+  () => invoke($74, `f32.no_fold_mul_sqrt_div`, [
     value("f32", -401.0235),
     value("f32", 134.33022),
   ]),
   [value("f32", -34.600548)],
 );
 
-// ./test/core/float_exprs.wast:1897
+// ./test/core/float_exprs.wast:1843
 assert_return(
-  () => invoke($76, `f64.no_fold_mul_sqrt_div`, [
+  () => invoke($74, `f64.no_fold_mul_sqrt_div`, [
     value("f64", 1468134622910490500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
     value("f64", 2466074582285183000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
   ]),
   [value("f64", Infinity)],
 );
 
-// ./test/core/float_exprs.wast:1898
+// ./test/core/float_exprs.wast:1844
 assert_return(
-  () => invoke($76, `f64.no_fold_mul_sqrt_div`, [
+  () => invoke($74, `f64.no_fold_mul_sqrt_div`, [
     value("f64", -0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000017254022016758028),
     value("f64", 0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000055835540747130025),
   ]),
   [value("f64", -0)],
 );
 
-// ./test/core/float_exprs.wast:1899
+// ./test/core/float_exprs.wast:1845
 assert_return(
-  () => invoke($76, `f64.no_fold_mul_sqrt_div`, [
+  () => invoke($74, `f64.no_fold_mul_sqrt_div`, [
     value("f64", 0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000016812810256029166),
     value("f64", 7362783602442129000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
   ]),
@@ -6163,9 +5920,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1900
+// ./test/core/float_exprs.wast:1846
 assert_return(
-  () => invoke($76, `f64.no_fold_mul_sqrt_div`, [
+  () => invoke($74, `f64.no_fold_mul_sqrt_div`, [
     value("f64", -10605483729939836000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
     value("f64", 0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000622591783694072),
   ]),
@@ -6174,9 +5931,9 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1901
+// ./test/core/float_exprs.wast:1847
 assert_return(
-  () => invoke($76, `f64.no_fold_mul_sqrt_div`, [
+  () => invoke($74, `f64.no_fold_mul_sqrt_div`, [
     value("f64", 26336349695373093000000000000000),
     value("f64", 30791413285853300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
   ]),
@@ -6185,8 +5942,8 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1906
-let $77 = instantiate(`(module
+// ./test/core/float_exprs.wast:1852
+let $75 = instantiate(`(module
   (func (export "f32.no_flush_intermediate_subnormal") (param \$x f32) (param \$y f32) (param \$z f32) (result f32)
     (f32.mul (f32.mul (local.get \$x) (local.get \$y)) (local.get \$z)))
 
@@ -6194,9 +5951,9 @@ let $77 = instantiate(`(module
     (f64.mul (f64.mul (local.get \$x) (local.get \$y)) (local.get \$z)))
 )`);
 
-// ./test/core/float_exprs.wast:1914
+// ./test/core/float_exprs.wast:1860
 assert_return(
-  () => invoke($77, `f32.no_flush_intermediate_subnormal`, [
+  () => invoke($75, `f32.no_flush_intermediate_subnormal`, [
     value("f32", 0.000000000000000000000000000000000000011754944),
     value("f32", 0.00000011920929),
     value("f32", 8388608),
@@ -6204,9 +5961,9 @@ assert_return(
   [value("f32", 0.000000000000000000000000000000000000011754944)],
 );
 
-// ./test/core/float_exprs.wast:1915
+// ./test/core/float_exprs.wast:1861
 assert_return(
-  () => invoke($77, `f64.no_flush_intermediate_subnormal`, [
+  () => invoke($75, `f64.no_flush_intermediate_subnormal`, [
     value("f64", 0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014),
     value("f64", 0.0000000000000002220446049250313),
     value("f64", 4503599627370496),
@@ -6216,8 +5973,8 @@ assert_return(
   ],
 );
 
-// ./test/core/float_exprs.wast:1920
-let $78 = instantiate(`(module
+// ./test/core/float_exprs.wast:1866
+let $76 = instantiate(`(module
   (func (export "f32.recoding_eq") (param \$x f32) (param \$y f32) (result i32)
     (f32.eq (f32.mul (local.get \$x) (local.get \$y)) (local.get \$x)))
 
@@ -6240,89 +5997,89 @@ let $78 = instantiate(`(module
     (f32.mul (f32.demote_f64 (local.get \$x)) (local.get \$y)))
 )`);
 
-// ./test/core/float_exprs.wast:1943
+// ./test/core/float_exprs.wast:1889
 assert_return(
-  () => invoke($78, `f32.recoding_eq`, [value("f32", -Infinity), value("f32", 3)]),
+  () => invoke($76, `f32.recoding_eq`, [value("f32", -Infinity), value("f32", 3)]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:1944
+// ./test/core/float_exprs.wast:1890
 assert_return(
-  () => invoke($78, `f32.recoding_le`, [value("f32", -Infinity), value("f32", 3)]),
+  () => invoke($76, `f32.recoding_le`, [value("f32", -Infinity), value("f32", 3)]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:1945
+// ./test/core/float_exprs.wast:1891
 assert_return(
-  () => invoke($78, `f32.recoding_lt`, [value("f32", -Infinity), value("f32", 3)]),
+  () => invoke($76, `f32.recoding_lt`, [value("f32", -Infinity), value("f32", 3)]),
   [value("i32", 0)],
 );
 
-// ./test/core/float_exprs.wast:1947
+// ./test/core/float_exprs.wast:1893
 assert_return(
-  () => invoke($78, `f32.recoding_eq`, [value("f32", 0), value("f32", 1)]),
+  () => invoke($76, `f32.recoding_eq`, [value("f32", 0), value("f32", 1)]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:1948
+// ./test/core/float_exprs.wast:1894
 assert_return(
-  () => invoke($78, `f32.recoding_le`, [value("f32", 0), value("f32", 1)]),
+  () => invoke($76, `f32.recoding_le`, [value("f32", 0), value("f32", 1)]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:1949
+// ./test/core/float_exprs.wast:1895
 assert_return(
-  () => invoke($78, `f32.recoding_lt`, [value("f32", 0), value("f32", 1)]),
+  () => invoke($76, `f32.recoding_lt`, [value("f32", 0), value("f32", 1)]),
   [value("i32", 0)],
 );
 
-// ./test/core/float_exprs.wast:1951
+// ./test/core/float_exprs.wast:1897
 assert_return(
-  () => invoke($78, `f64.recoding_eq`, [value("f64", -Infinity), value("f64", 3)]),
+  () => invoke($76, `f64.recoding_eq`, [value("f64", -Infinity), value("f64", 3)]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:1952
+// ./test/core/float_exprs.wast:1898
 assert_return(
-  () => invoke($78, `f64.recoding_le`, [value("f64", -Infinity), value("f64", 3)]),
+  () => invoke($76, `f64.recoding_le`, [value("f64", -Infinity), value("f64", 3)]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:1953
+// ./test/core/float_exprs.wast:1899
 assert_return(
-  () => invoke($78, `f64.recoding_lt`, [value("f64", -Infinity), value("f64", 3)]),
+  () => invoke($76, `f64.recoding_lt`, [value("f64", -Infinity), value("f64", 3)]),
   [value("i32", 0)],
 );
 
-// ./test/core/float_exprs.wast:1955
+// ./test/core/float_exprs.wast:1901
 assert_return(
-  () => invoke($78, `f64.recoding_eq`, [value("f64", 0), value("f64", 1)]),
+  () => invoke($76, `f64.recoding_eq`, [value("f64", 0), value("f64", 1)]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:1956
+// ./test/core/float_exprs.wast:1902
 assert_return(
-  () => invoke($78, `f64.recoding_le`, [value("f64", 0), value("f64", 1)]),
+  () => invoke($76, `f64.recoding_le`, [value("f64", 0), value("f64", 1)]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:1957
+// ./test/core/float_exprs.wast:1903
 assert_return(
-  () => invoke($78, `f64.recoding_lt`, [value("f64", 0), value("f64", 1)]),
+  () => invoke($76, `f64.recoding_lt`, [value("f64", 0), value("f64", 1)]),
   [value("i32", 0)],
 );
 
-// ./test/core/float_exprs.wast:1959
+// ./test/core/float_exprs.wast:1905
 assert_return(
-  () => invoke($78, `recoding_demote`, [
+  () => invoke($76, `recoding_demote`, [
     value("f64", 0.00000000000000000000000000000000000000023860049081905093),
     value("f32", 1221),
   ]),
   [value("f32", 0.0000000000000000000000000000000000002913312)],
 );
 
-// ./test/core/float_exprs.wast:1964
-let $79 = instantiate(`(module
+// ./test/core/float_exprs.wast:1910
+let $77 = instantiate(`(module
   (func (export "f32.no_extended_precision_div") (param \$x f32) (param \$y f32) (param \$z f32) (result i32)
     (f32.eq (f32.div (local.get \$x) (local.get \$y)) (local.get \$z)))
 
@@ -6330,9 +6087,9 @@ let $79 = instantiate(`(module
     (f64.eq (f64.div (local.get \$x) (local.get \$y)) (local.get \$z)))
 )`);
 
-// ./test/core/float_exprs.wast:1972
+// ./test/core/float_exprs.wast:1918
 assert_return(
-  () => invoke($79, `f32.no_extended_precision_div`, [
+  () => invoke($77, `f32.no_extended_precision_div`, [
     value("f32", 3),
     value("f32", 7),
     value("f32", 0.42857143),
@@ -6340,9 +6097,9 @@ assert_return(
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:1973
+// ./test/core/float_exprs.wast:1919
 assert_return(
-  () => invoke($79, `f64.no_extended_precision_div`, [
+  () => invoke($77, `f64.no_extended_precision_div`, [
     value("f64", 3),
     value("f64", 7),
     value("f64", 0.42857142857142855),
@@ -6350,8 +6107,8 @@ assert_return(
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:1980
-let $80 = instantiate(`(module
+// ./test/core/float_exprs.wast:1926
+let $78 = instantiate(`(module
   (func (export "f32.no_distribute_exact") (param \$x f32) (result f32)
     (f32.add (f32.mul (f32.const -8.0) (local.get \$x)) (f32.mul (f32.const 8.0) (local.get \$x))))
 
@@ -6359,14 +6116,14 @@ let $80 = instantiate(`(module
     (f64.add (f64.mul (f64.const -8.0) (local.get \$x)) (f64.mul (f64.const 8.0) (local.get \$x))))
 )`);
 
-// ./test/core/float_exprs.wast:1988
-assert_return(() => invoke($80, `f32.no_distribute_exact`, [value("f32", -0)]), [value("f32", 0)]);
+// ./test/core/float_exprs.wast:1934
+assert_return(() => invoke($78, `f32.no_distribute_exact`, [value("f32", -0)]), [value("f32", 0)]);
 
-// ./test/core/float_exprs.wast:1989
-assert_return(() => invoke($80, `f64.no_distribute_exact`, [value("f64", -0)]), [value("f64", 0)]);
+// ./test/core/float_exprs.wast:1935
+assert_return(() => invoke($78, `f64.no_distribute_exact`, [value("f64", -0)]), [value("f64", 0)]);
 
-// ./test/core/float_exprs.wast:1994
-let $81 = instantiate(`(module
+// ./test/core/float_exprs.wast:1940
+let $79 = instantiate(`(module
   (func (export "f32.sqrt") (param f32) (result f32)
     (f32.sqrt (local.get 0)))
 
@@ -6398,12 +6155,12 @@ let $81 = instantiate(`(module
     (f64.div (f64.add (local.get 0) (f64.mul (local.get 1) (local.get 2))) (f64.sub (local.get 3) (f64.mul (local.get 1) (local.get 2)))))
 )`);
 
-// ./test/core/float_exprs.wast:2026
-assert_return(() => invoke($81, `f32.sqrt`, [value("f32", 2)]), [value("f32", 1.4142135)]);
+// ./test/core/float_exprs.wast:1972
+assert_return(() => invoke($79, `f32.sqrt`, [value("f32", 2)]), [value("f32", 1.4142135)]);
 
-// ./test/core/float_exprs.wast:2027
+// ./test/core/float_exprs.wast:1973
 assert_return(
-  () => invoke($81, `f32.xkcd_sqrt_2`, [
+  () => invoke($79, `f32.xkcd_sqrt_2`, [
     value("f32", 3),
     value("f32", 5),
     value("f32", 3.1415927),
@@ -6412,12 +6169,12 @@ assert_return(
   [value("f32", 1.4142201)],
 );
 
-// ./test/core/float_exprs.wast:2028
-assert_return(() => invoke($81, `f32.sqrt`, [value("f32", 3)]), [value("f32", 1.7320508)]);
+// ./test/core/float_exprs.wast:1974
+assert_return(() => invoke($79, `f32.sqrt`, [value("f32", 3)]), [value("f32", 1.7320508)]);
 
-// ./test/core/float_exprs.wast:2029
+// ./test/core/float_exprs.wast:1975
 assert_return(
-  () => invoke($81, `f32.xkcd_sqrt_3`, [
+  () => invoke($79, `f32.xkcd_sqrt_3`, [
     value("f32", 2),
     value("f32", 2.7182817),
     value("f32", 3.1415927),
@@ -6425,12 +6182,12 @@ assert_return(
   [value("f32", 1.7305119)],
 );
 
-// ./test/core/float_exprs.wast:2030
-assert_return(() => invoke($81, `f32.sqrt`, [value("f32", 5)]), [value("f32", 2.236068)]);
+// ./test/core/float_exprs.wast:1976
+assert_return(() => invoke($79, `f32.sqrt`, [value("f32", 5)]), [value("f32", 2.236068)]);
 
-// ./test/core/float_exprs.wast:2031
+// ./test/core/float_exprs.wast:1977
 assert_return(
-  () => invoke($81, `f32.xkcd_sqrt_5`, [
+  () => invoke($79, `f32.xkcd_sqrt_5`, [
     value("f32", 2),
     value("f32", 2.7182817),
     value("f32", 3),
@@ -6438,9 +6195,9 @@ assert_return(
   [value("f32", 2.2357588)],
 );
 
-// ./test/core/float_exprs.wast:2032
+// ./test/core/float_exprs.wast:1978
 assert_return(
-  () => invoke($81, `f32.xkcd_better_sqrt_5`, [
+  () => invoke($79, `f32.xkcd_better_sqrt_5`, [
     value("f32", 13),
     value("f32", 4),
     value("f32", 3.1415927),
@@ -6449,12 +6206,12 @@ assert_return(
   [value("f32", 2.236068)],
 );
 
-// ./test/core/float_exprs.wast:2034
-assert_return(() => invoke($81, `f64.sqrt`, [value("f64", 2)]), [value("f64", 1.4142135623730951)]);
+// ./test/core/float_exprs.wast:1980
+assert_return(() => invoke($79, `f64.sqrt`, [value("f64", 2)]), [value("f64", 1.4142135623730951)]);
 
-// ./test/core/float_exprs.wast:2035
+// ./test/core/float_exprs.wast:1981
 assert_return(
-  () => invoke($81, `f64.xkcd_sqrt_2`, [
+  () => invoke($79, `f64.xkcd_sqrt_2`, [
     value("f64", 3),
     value("f64", 5),
     value("f64", 3.141592653589793),
@@ -6463,12 +6220,12 @@ assert_return(
   [value("f64", 1.4142200580539208)],
 );
 
-// ./test/core/float_exprs.wast:2036
-assert_return(() => invoke($81, `f64.sqrt`, [value("f64", 3)]), [value("f64", 1.7320508075688772)]);
+// ./test/core/float_exprs.wast:1982
+assert_return(() => invoke($79, `f64.sqrt`, [value("f64", 3)]), [value("f64", 1.7320508075688772)]);
 
-// ./test/core/float_exprs.wast:2037
+// ./test/core/float_exprs.wast:1983
 assert_return(
-  () => invoke($81, `f64.xkcd_sqrt_3`, [
+  () => invoke($79, `f64.xkcd_sqrt_3`, [
     value("f64", 2),
     value("f64", 2.718281828459045),
     value("f64", 3.141592653589793),
@@ -6476,12 +6233,12 @@ assert_return(
   [value("f64", 1.7305119588645301)],
 );
 
-// ./test/core/float_exprs.wast:2038
-assert_return(() => invoke($81, `f64.sqrt`, [value("f64", 5)]), [value("f64", 2.23606797749979)]);
+// ./test/core/float_exprs.wast:1984
+assert_return(() => invoke($79, `f64.sqrt`, [value("f64", 5)]), [value("f64", 2.23606797749979)]);
 
-// ./test/core/float_exprs.wast:2039
+// ./test/core/float_exprs.wast:1985
 assert_return(
-  () => invoke($81, `f64.xkcd_sqrt_5`, [
+  () => invoke($79, `f64.xkcd_sqrt_5`, [
     value("f64", 2),
     value("f64", 2.718281828459045),
     value("f64", 3),
@@ -6489,9 +6246,9 @@ assert_return(
   [value("f64", 2.2357588823428847)],
 );
 
-// ./test/core/float_exprs.wast:2040
+// ./test/core/float_exprs.wast:1986
 assert_return(
-  () => invoke($81, `f64.xkcd_better_sqrt_5`, [
+  () => invoke($79, `f64.xkcd_better_sqrt_5`, [
     value("f64", 13),
     value("f64", 4),
     value("f64", 3.141592653589793),
@@ -6500,8 +6257,8 @@ assert_return(
   [value("f64", 2.2360678094452893)],
 );
 
-// ./test/core/float_exprs.wast:2045
-let $82 = instantiate(`(module
+// ./test/core/float_exprs.wast:1991
+let $80 = instantiate(`(module
   (func (export "f32.compute_radix") (param \$0 f32) (param \$1 f32) (result f32)
     (loop \$label\$0
       (br_if \$label\$0
@@ -6579,20 +6336,20 @@ let $82 = instantiate(`(module
   )
 )`);
 
-// ./test/core/float_exprs.wast:2123
+// ./test/core/float_exprs.wast:2069
 assert_return(
-  () => invoke($82, `f32.compute_radix`, [value("f32", 1), value("f32", 1)]),
+  () => invoke($80, `f32.compute_radix`, [value("f32", 1), value("f32", 1)]),
   [value("f32", 2)],
 );
 
-// ./test/core/float_exprs.wast:2124
+// ./test/core/float_exprs.wast:2070
 assert_return(
-  () => invoke($82, `f64.compute_radix`, [value("f64", 1), value("f64", 1)]),
+  () => invoke($80, `f64.compute_radix`, [value("f64", 1), value("f64", 1)]),
   [value("f64", 2)],
 );
 
-// ./test/core/float_exprs.wast:2129
-let $83 = instantiate(`(module
+// ./test/core/float_exprs.wast:2075
+let $81 = instantiate(`(module
   (func (export "f32.no_fold_sub1_mul_add") (param \$x f32) (param \$y f32) (result f32)
     (f32.add (f32.mul (f32.sub (local.get \$x) (f32.const 1.0)) (local.get \$y)) (local.get \$y)))
 
@@ -6600,26 +6357,26 @@ let $83 = instantiate(`(module
     (f64.add (f64.mul (f64.sub (local.get \$x) (f64.const 1.0)) (local.get \$y)) (local.get \$y)))
 )`);
 
-// ./test/core/float_exprs.wast:2137
+// ./test/core/float_exprs.wast:2083
 assert_return(
-  () => invoke($83, `f32.no_fold_sub1_mul_add`, [
+  () => invoke($81, `f32.no_fold_sub1_mul_add`, [
     value("f32", 0.00000000023283064),
     value("f32", 1),
   ]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:2138
+// ./test/core/float_exprs.wast:2084
 assert_return(
-  () => invoke($83, `f64.no_fold_sub1_mul_add`, [
+  () => invoke($81, `f64.no_fold_sub1_mul_add`, [
     value("f64", 0.00000000000000000005421010862427522),
     value("f64", 1),
   ]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:2143
-let $84 = instantiate(`(module
+// ./test/core/float_exprs.wast:2089
+let $82 = instantiate(`(module
   (func (export "f32.no_fold_add_le_monotonicity") (param \$x f32) (param \$y f32) (param \$z f32) (result i32)
     (f32.le (f32.add (local.get \$x) (local.get \$z)) (f32.add (local.get \$y) (local.get \$z))))
 
@@ -6633,9 +6390,9 @@ let $84 = instantiate(`(module
     (f64.ge (f64.add (local.get \$x) (local.get \$z)) (f64.add (local.get \$y) (local.get \$z))))
 )`);
 
-// ./test/core/float_exprs.wast:2157
+// ./test/core/float_exprs.wast:2103
 assert_return(
-  () => invoke($84, `f32.no_fold_add_le_monotonicity`, [
+  () => invoke($82, `f32.no_fold_add_le_monotonicity`, [
     value("f32", 0),
     value("f32", 0),
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
@@ -6643,9 +6400,9 @@ assert_return(
   [value("i32", 0)],
 );
 
-// ./test/core/float_exprs.wast:2158
+// ./test/core/float_exprs.wast:2104
 assert_return(
-  () => invoke($84, `f32.no_fold_add_le_monotonicity`, [
+  () => invoke($82, `f32.no_fold_add_le_monotonicity`, [
     value("f32", Infinity),
     value("f32", -Infinity),
     value("f32", Infinity),
@@ -6653,9 +6410,9 @@ assert_return(
   [value("i32", 0)],
 );
 
-// ./test/core/float_exprs.wast:2159
+// ./test/core/float_exprs.wast:2105
 assert_return(
-  () => invoke($84, `f64.no_fold_add_le_monotonicity`, [
+  () => invoke($82, `f64.no_fold_add_le_monotonicity`, [
     value("f64", 0),
     value("f64", 0),
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
@@ -6663,9 +6420,9 @@ assert_return(
   [value("i32", 0)],
 );
 
-// ./test/core/float_exprs.wast:2160
+// ./test/core/float_exprs.wast:2106
 assert_return(
-  () => invoke($84, `f64.no_fold_add_le_monotonicity`, [
+  () => invoke($82, `f64.no_fold_add_le_monotonicity`, [
     value("f64", Infinity),
     value("f64", -Infinity),
     value("f64", Infinity),
@@ -6673,8 +6430,8 @@ assert_return(
   [value("i32", 0)],
 );
 
-// ./test/core/float_exprs.wast:2164
-let $85 = instantiate(`(module
+// ./test/core/float_exprs.wast:2110
+let $83 = instantiate(`(module
   (func (export "f32.not_lt") (param \$x f32) (param \$y f32) (result i32)
     (i32.eqz (f32.lt (local.get \$x) (local.get \$y))))
 
@@ -6700,80 +6457,80 @@ let $85 = instantiate(`(module
     (i32.eqz (f64.ge (local.get \$x) (local.get \$y))))
 )`);
 
-// ./test/core/float_exprs.wast:2190
+// ./test/core/float_exprs.wast:2136
 assert_return(
-  () => invoke($85, `f32.not_lt`, [
+  () => invoke($83, `f32.not_lt`, [
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
     value("f32", 0),
   ]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:2191
+// ./test/core/float_exprs.wast:2137
 assert_return(
-  () => invoke($85, `f32.not_le`, [
+  () => invoke($83, `f32.not_le`, [
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
     value("f32", 0),
   ]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:2192
+// ./test/core/float_exprs.wast:2138
 assert_return(
-  () => invoke($85, `f32.not_gt`, [
+  () => invoke($83, `f32.not_gt`, [
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
     value("f32", 0),
   ]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:2193
+// ./test/core/float_exprs.wast:2139
 assert_return(
-  () => invoke($85, `f32.not_ge`, [
+  () => invoke($83, `f32.not_ge`, [
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
     value("f32", 0),
   ]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:2194
+// ./test/core/float_exprs.wast:2140
 assert_return(
-  () => invoke($85, `f64.not_lt`, [
+  () => invoke($83, `f64.not_lt`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
     value("f64", 0),
   ]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:2195
+// ./test/core/float_exprs.wast:2141
 assert_return(
-  () => invoke($85, `f64.not_le`, [
+  () => invoke($83, `f64.not_le`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
     value("f64", 0),
   ]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:2196
+// ./test/core/float_exprs.wast:2142
 assert_return(
-  () => invoke($85, `f64.not_gt`, [
+  () => invoke($83, `f64.not_gt`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
     value("f64", 0),
   ]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:2197
+// ./test/core/float_exprs.wast:2143
 assert_return(
-  () => invoke($85, `f64.not_ge`, [
+  () => invoke($83, `f64.not_ge`, [
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
     value("f64", 0),
   ]),
   [value("i32", 1)],
 );
 
-// ./test/core/float_exprs.wast:2203
-let $86 = instantiate(`(module
+// ./test/core/float_exprs.wast:2149
+let $84 = instantiate(`(module
   (func (export "f32.epsilon") (result f32)
     (f32.sub (f32.const 1.0) (f32.mul (f32.const 3.0) (f32.sub (f32.div (f32.const 4.0) (f32.const 3.0)) (f32.const 1.0)))))
 
@@ -6781,14 +6538,14 @@ let $86 = instantiate(`(module
     (f64.sub (f64.const 1.0) (f64.mul (f64.const 3.0) (f64.sub (f64.div (f64.const 4.0) (f64.const 3.0)) (f64.const 1.0)))))
 )`);
 
-// ./test/core/float_exprs.wast:2211
-assert_return(() => invoke($86, `f32.epsilon`, []), [value("f32", -0.00000011920929)]);
+// ./test/core/float_exprs.wast:2157
+assert_return(() => invoke($84, `f32.epsilon`, []), [value("f32", -0.00000011920929)]);
 
-// ./test/core/float_exprs.wast:2212
-assert_return(() => invoke($86, `f64.epsilon`, []), [value("f64", 0.0000000000000002220446049250313)]);
+// ./test/core/float_exprs.wast:2158
+assert_return(() => invoke($84, `f64.epsilon`, []), [value("f64", 0.0000000000000002220446049250313)]);
 
-// ./test/core/float_exprs.wast:2218
-let $87 = instantiate(`(module
+// ./test/core/float_exprs.wast:2164
+let $85 = instantiate(`(module
   (func (export "f32.epsilon") (result f32)
     (local \$x f32)
     (local \$result f32)
@@ -6836,14 +6593,14 @@ let $87 = instantiate(`(module
   )
 )`);
 
-// ./test/core/float_exprs.wast:2266
-assert_return(() => invoke($87, `f32.epsilon`, []), [value("f32", 0.00000011920929)]);
+// ./test/core/float_exprs.wast:2212
+assert_return(() => invoke($85, `f32.epsilon`, []), [value("f32", 0.00000011920929)]);
 
-// ./test/core/float_exprs.wast:2267
-assert_return(() => invoke($87, `f64.epsilon`, []), [value("f64", 0.0000000000000002220446049250313)]);
+// ./test/core/float_exprs.wast:2213
+assert_return(() => invoke($85, `f64.epsilon`, []), [value("f64", 0.0000000000000002220446049250313)]);
 
-// ./test/core/float_exprs.wast:2272
-let $88 = instantiate(`(module
+// ./test/core/float_exprs.wast:2218
+let $86 = instantiate(`(module
   (func (export "f32.no_trichotomy_lt") (param \$x f32) (param \$y f32) (result i32)
     (i32.or (f32.lt (local.get \$x) (local.get \$y)) (f32.ge (local.get \$x) (local.get \$y))))
   (func (export "f32.no_trichotomy_le") (param \$x f32) (param \$y f32) (result i32)
@@ -6863,80 +6620,80 @@ let $88 = instantiate(`(module
     (i32.or (f64.ge (local.get \$x) (local.get \$y)) (f64.lt (local.get \$x) (local.get \$y))))
 )`);
 
-// ./test/core/float_exprs.wast:2292
+// ./test/core/float_exprs.wast:2238
 assert_return(
-  () => invoke($88, `f32.no_trichotomy_lt`, [
+  () => invoke($86, `f32.no_trichotomy_lt`, [
     value("f32", 0),
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
   ]),
   [value("i32", 0)],
 );
 
-// ./test/core/float_exprs.wast:2293
+// ./test/core/float_exprs.wast:2239
 assert_return(
-  () => invoke($88, `f32.no_trichotomy_le`, [
+  () => invoke($86, `f32.no_trichotomy_le`, [
     value("f32", 0),
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
   ]),
   [value("i32", 0)],
 );
 
-// ./test/core/float_exprs.wast:2294
+// ./test/core/float_exprs.wast:2240
 assert_return(
-  () => invoke($88, `f32.no_trichotomy_gt`, [
+  () => invoke($86, `f32.no_trichotomy_gt`, [
     value("f32", 0),
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
   ]),
   [value("i32", 0)],
 );
 
-// ./test/core/float_exprs.wast:2295
+// ./test/core/float_exprs.wast:2241
 assert_return(
-  () => invoke($88, `f32.no_trichotomy_ge`, [
+  () => invoke($86, `f32.no_trichotomy_ge`, [
     value("f32", 0),
     bytes("f32", [0x0, 0x0, 0xc0, 0x7f]),
   ]),
   [value("i32", 0)],
 );
 
-// ./test/core/float_exprs.wast:2296
+// ./test/core/float_exprs.wast:2242
 assert_return(
-  () => invoke($88, `f64.no_trichotomy_lt`, [
+  () => invoke($86, `f64.no_trichotomy_lt`, [
     value("f64", 0),
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
   ]),
   [value("i32", 0)],
 );
 
-// ./test/core/float_exprs.wast:2297
+// ./test/core/float_exprs.wast:2243
 assert_return(
-  () => invoke($88, `f64.no_trichotomy_le`, [
+  () => invoke($86, `f64.no_trichotomy_le`, [
     value("f64", 0),
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
   ]),
   [value("i32", 0)],
 );
 
-// ./test/core/float_exprs.wast:2298
+// ./test/core/float_exprs.wast:2244
 assert_return(
-  () => invoke($88, `f64.no_trichotomy_gt`, [
+  () => invoke($86, `f64.no_trichotomy_gt`, [
     value("f64", 0),
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
   ]),
   [value("i32", 0)],
 );
 
-// ./test/core/float_exprs.wast:2299
+// ./test/core/float_exprs.wast:2245
 assert_return(
-  () => invoke($88, `f64.no_trichotomy_ge`, [
+  () => invoke($86, `f64.no_trichotomy_ge`, [
     value("f64", 0),
     bytes("f64", [0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x7f]),
   ]),
   [value("i32", 0)],
 );
 
-// ./test/core/float_exprs.wast:2304
-let $89 = instantiate(`(module
+// ./test/core/float_exprs.wast:2250
+let $87 = instantiate(`(module
   (func (export "f32.arithmetic_nan_bitpattern")
         (param \$x i32) (param \$y i32) (result i32)
     (i32.and (i32.reinterpret_f32
@@ -7015,197 +6772,197 @@ let $89 = instantiate(`(module
              (i32.const 0x7fc00000)))
 )`);
 
-// ./test/core/float_exprs.wast:2383
+// ./test/core/float_exprs.wast:2329
 assert_return(
-  () => invoke($89, `f32.arithmetic_nan_bitpattern`, [2139107856, 2139107856]),
+  () => invoke($87, `f32.arithmetic_nan_bitpattern`, [2139107856, 2139107856]),
   [value("i32", 2143289344)],
 );
 
-// ./test/core/float_exprs.wast:2384
-assert_return(() => invoke($89, `f32.canonical_nan_bitpattern`, [0, 0]), [value("i32", 2143289344)]);
+// ./test/core/float_exprs.wast:2330
+assert_return(() => invoke($87, `f32.canonical_nan_bitpattern`, [0, 0]), [value("i32", 2143289344)]);
 
-// ./test/core/float_exprs.wast:2385
+// ./test/core/float_exprs.wast:2331
 assert_return(
-  () => invoke($89, `f32.canonical_nan_bitpattern`, [2143289344, 2143289344]),
+  () => invoke($87, `f32.canonical_nan_bitpattern`, [2143289344, 2143289344]),
   [value("i32", 2143289344)],
 );
 
-// ./test/core/float_exprs.wast:2386
+// ./test/core/float_exprs.wast:2332
 assert_return(
-  () => invoke($89, `f32.canonical_nan_bitpattern`, [-4194304, 2143289344]),
+  () => invoke($87, `f32.canonical_nan_bitpattern`, [-4194304, 2143289344]),
   [value("i32", 2143289344)],
 );
 
-// ./test/core/float_exprs.wast:2387
+// ./test/core/float_exprs.wast:2333
 assert_return(
-  () => invoke($89, `f32.canonical_nan_bitpattern`, [2143289344, -4194304]),
+  () => invoke($87, `f32.canonical_nan_bitpattern`, [2143289344, -4194304]),
   [value("i32", 2143289344)],
 );
 
-// ./test/core/float_exprs.wast:2388
+// ./test/core/float_exprs.wast:2334
 assert_return(
-  () => invoke($89, `f32.canonical_nan_bitpattern`, [-4194304, -4194304]),
+  () => invoke($87, `f32.canonical_nan_bitpattern`, [-4194304, -4194304]),
   [value("i32", 2143289344)],
 );
 
-// ./test/core/float_exprs.wast:2389
+// ./test/core/float_exprs.wast:2335
 assert_return(
-  () => invoke($89, `f32.nonarithmetic_nan_bitpattern`, [2143302160]),
+  () => invoke($87, `f32.nonarithmetic_nan_bitpattern`, [2143302160]),
   [value("i32", -4181488)],
 );
 
-// ./test/core/float_exprs.wast:2390
+// ./test/core/float_exprs.wast:2336
 assert_return(
-  () => invoke($89, `f32.nonarithmetic_nan_bitpattern`, [-4181488]),
+  () => invoke($87, `f32.nonarithmetic_nan_bitpattern`, [-4181488]),
   [value("i32", 2143302160)],
 );
 
-// ./test/core/float_exprs.wast:2391
+// ./test/core/float_exprs.wast:2337
 assert_return(
-  () => invoke($89, `f32.nonarithmetic_nan_bitpattern`, [2139107856]),
+  () => invoke($87, `f32.nonarithmetic_nan_bitpattern`, [2139107856]),
   [value("i32", -8375792)],
 );
 
-// ./test/core/float_exprs.wast:2392
+// ./test/core/float_exprs.wast:2338
 assert_return(
-  () => invoke($89, `f32.nonarithmetic_nan_bitpattern`, [-8375792]),
+  () => invoke($87, `f32.nonarithmetic_nan_bitpattern`, [-8375792]),
   [value("i32", 2139107856)],
 );
 
-// ./test/core/float_exprs.wast:2393
+// ./test/core/float_exprs.wast:2339
 assert_return(
-  () => invoke($89, `f64.arithmetic_nan_bitpattern`, [
+  () => invoke($87, `f64.arithmetic_nan_bitpattern`, [
     9218868437227418128n,
     9218868437227418128n,
   ]),
   [value("i64", 9221120237041090560n)],
 );
 
-// ./test/core/float_exprs.wast:2394
+// ./test/core/float_exprs.wast:2340
 assert_return(
-  () => invoke($89, `f64.canonical_nan_bitpattern`, [0n, 0n]),
+  () => invoke($87, `f64.canonical_nan_bitpattern`, [0n, 0n]),
   [value("i64", 9221120237041090560n)],
 );
 
-// ./test/core/float_exprs.wast:2395
+// ./test/core/float_exprs.wast:2341
 assert_return(
-  () => invoke($89, `f64.canonical_nan_bitpattern`, [
+  () => invoke($87, `f64.canonical_nan_bitpattern`, [
     9221120237041090560n,
     9221120237041090560n,
   ]),
   [value("i64", 9221120237041090560n)],
 );
 
-// ./test/core/float_exprs.wast:2396
+// ./test/core/float_exprs.wast:2342
 assert_return(
-  () => invoke($89, `f64.canonical_nan_bitpattern`, [
+  () => invoke($87, `f64.canonical_nan_bitpattern`, [
     -2251799813685248n,
     9221120237041090560n,
   ]),
   [value("i64", 9221120237041090560n)],
 );
 
-// ./test/core/float_exprs.wast:2397
+// ./test/core/float_exprs.wast:2343
 assert_return(
-  () => invoke($89, `f64.canonical_nan_bitpattern`, [
+  () => invoke($87, `f64.canonical_nan_bitpattern`, [
     9221120237041090560n,
     -2251799813685248n,
   ]),
   [value("i64", 9221120237041090560n)],
 );
 
-// ./test/core/float_exprs.wast:2398
+// ./test/core/float_exprs.wast:2344
 assert_return(
-  () => invoke($89, `f64.canonical_nan_bitpattern`, [
+  () => invoke($87, `f64.canonical_nan_bitpattern`, [
     -2251799813685248n,
     -2251799813685248n,
   ]),
   [value("i64", 9221120237041090560n)],
 );
 
-// ./test/core/float_exprs.wast:2399
+// ./test/core/float_exprs.wast:2345
 assert_return(
-  () => invoke($89, `f64.nonarithmetic_nan_bitpattern`, [9221120237041103376n]),
+  () => invoke($87, `f64.nonarithmetic_nan_bitpattern`, [9221120237041103376n]),
   [value("i64", -2251799813672432n)],
 );
 
-// ./test/core/float_exprs.wast:2400
+// ./test/core/float_exprs.wast:2346
 assert_return(
-  () => invoke($89, `f64.nonarithmetic_nan_bitpattern`, [-2251799813672432n]),
+  () => invoke($87, `f64.nonarithmetic_nan_bitpattern`, [-2251799813672432n]),
   [value("i64", 9221120237041103376n)],
 );
 
-// ./test/core/float_exprs.wast:2401
+// ./test/core/float_exprs.wast:2347
 assert_return(
-  () => invoke($89, `f64.nonarithmetic_nan_bitpattern`, [9218868437227418128n]),
+  () => invoke($87, `f64.nonarithmetic_nan_bitpattern`, [9218868437227418128n]),
   [value("i64", -4503599627357680n)],
 );
 
-// ./test/core/float_exprs.wast:2402
+// ./test/core/float_exprs.wast:2348
 assert_return(
-  () => invoke($89, `f64.nonarithmetic_nan_bitpattern`, [-4503599627357680n]),
+  () => invoke($87, `f64.nonarithmetic_nan_bitpattern`, [-4503599627357680n]),
   [value("i64", 9218868437227418128n)],
 );
 
-// ./test/core/float_exprs.wast:2403
-assert_return(() => invoke($89, `f32.no_fold_sub_zero`, [2141192192]), [value("i32", 2143289344)]);
+// ./test/core/float_exprs.wast:2349
+assert_return(() => invoke($87, `f32.no_fold_sub_zero`, [2141192192]), [value("i32", 2143289344)]);
 
-// ./test/core/float_exprs.wast:2404
-assert_return(() => invoke($89, `f32.no_fold_neg0_sub`, [2141192192]), [value("i32", 2143289344)]);
+// ./test/core/float_exprs.wast:2350
+assert_return(() => invoke($87, `f32.no_fold_neg0_sub`, [2141192192]), [value("i32", 2143289344)]);
 
-// ./test/core/float_exprs.wast:2405
-assert_return(() => invoke($89, `f32.no_fold_mul_one`, [2141192192]), [value("i32", 2143289344)]);
+// ./test/core/float_exprs.wast:2351
+assert_return(() => invoke($87, `f32.no_fold_mul_one`, [2141192192]), [value("i32", 2143289344)]);
 
-// ./test/core/float_exprs.wast:2406
-assert_return(() => invoke($89, `f32.no_fold_neg1_mul`, [2141192192]), [value("i32", 2143289344)]);
+// ./test/core/float_exprs.wast:2352
+assert_return(() => invoke($87, `f32.no_fold_neg1_mul`, [2141192192]), [value("i32", 2143289344)]);
 
-// ./test/core/float_exprs.wast:2407
-assert_return(() => invoke($89, `f32.no_fold_div_one`, [2141192192]), [value("i32", 2143289344)]);
+// ./test/core/float_exprs.wast:2353
+assert_return(() => invoke($87, `f32.no_fold_div_one`, [2141192192]), [value("i32", 2143289344)]);
 
-// ./test/core/float_exprs.wast:2408
-assert_return(() => invoke($89, `f32.no_fold_div_neg1`, [2141192192]), [value("i32", 2143289344)]);
+// ./test/core/float_exprs.wast:2354
+assert_return(() => invoke($87, `f32.no_fold_div_neg1`, [2141192192]), [value("i32", 2143289344)]);
 
-// ./test/core/float_exprs.wast:2409
+// ./test/core/float_exprs.wast:2355
 assert_return(
-  () => invoke($89, `f64.no_fold_sub_zero`, [9219994337134247936n]),
+  () => invoke($87, `f64.no_fold_sub_zero`, [9219994337134247936n]),
   [value("i64", 9221120237041090560n)],
 );
 
-// ./test/core/float_exprs.wast:2410
+// ./test/core/float_exprs.wast:2356
 assert_return(
-  () => invoke($89, `f64.no_fold_neg0_sub`, [9219994337134247936n]),
+  () => invoke($87, `f64.no_fold_neg0_sub`, [9219994337134247936n]),
   [value("i64", 9221120237041090560n)],
 );
 
-// ./test/core/float_exprs.wast:2411
+// ./test/core/float_exprs.wast:2357
 assert_return(
-  () => invoke($89, `f64.no_fold_mul_one`, [9219994337134247936n]),
+  () => invoke($87, `f64.no_fold_mul_one`, [9219994337134247936n]),
   [value("i64", 9221120237041090560n)],
 );
 
-// ./test/core/float_exprs.wast:2412
+// ./test/core/float_exprs.wast:2358
 assert_return(
-  () => invoke($89, `f64.no_fold_neg1_mul`, [9219994337134247936n]),
+  () => invoke($87, `f64.no_fold_neg1_mul`, [9219994337134247936n]),
   [value("i64", 9221120237041090560n)],
 );
 
-// ./test/core/float_exprs.wast:2413
+// ./test/core/float_exprs.wast:2359
 assert_return(
-  () => invoke($89, `f64.no_fold_div_one`, [9219994337134247936n]),
+  () => invoke($87, `f64.no_fold_div_one`, [9219994337134247936n]),
   [value("i64", 9221120237041090560n)],
 );
 
-// ./test/core/float_exprs.wast:2414
+// ./test/core/float_exprs.wast:2360
 assert_return(
-  () => invoke($89, `f64.no_fold_div_neg1`, [9219994337134247936n]),
+  () => invoke($87, `f64.no_fold_div_neg1`, [9219994337134247936n]),
   [value("i64", 9221120237041090560n)],
 );
 
-// ./test/core/float_exprs.wast:2415
-assert_return(() => invoke($89, `no_fold_promote_demote`, [2141192192]), [value("i32", 2143289344)]);
+// ./test/core/float_exprs.wast:2361
+assert_return(() => invoke($87, `no_fold_promote_demote`, [2141192192]), [value("i32", 2143289344)]);
 
-// ./test/core/float_exprs.wast:2420
-let $90 = instantiate(`(module
+// ./test/core/float_exprs.wast:2366
+let $88 = instantiate(`(module
   (func (export "dot_product_example")
         (param \$x0 f64) (param \$x1 f64) (param \$x2 f64) (param \$x3 f64)
         (param \$y0 f64) (param \$y1 f64) (param \$y2 f64) (param \$y3 f64)
@@ -7228,9 +6985,9 @@ let $90 = instantiate(`(module
   )
 )`);
 
-// ./test/core/float_exprs.wast:2443
+// ./test/core/float_exprs.wast:2389
 assert_return(
-  () => invoke($90, `dot_product_example`, [
+  () => invoke($88, `dot_product_example`, [
     value("f64", 32000000),
     value("f64", 1),
     value("f64", -1),
@@ -7243,9 +7000,9 @@ assert_return(
   [value("f64", 2)],
 );
 
-// ./test/core/float_exprs.wast:2447
+// ./test/core/float_exprs.wast:2393
 assert_return(
-  () => invoke($90, `with_binary_sum_collapse`, [
+  () => invoke($88, `with_binary_sum_collapse`, [
     value("f64", 32000000),
     value("f64", 1),
     value("f64", -1),
@@ -7258,8 +7015,8 @@ assert_return(
   [value("f64", 2)],
 );
 
-// ./test/core/float_exprs.wast:2454
-let $91 = instantiate(`(module
+// ./test/core/float_exprs.wast:2400
+let $89 = instantiate(`(module
   (func (export "f32.contract2fma")
         (param \$x f32) (param \$y f32) (result f32)
     (f32.sqrt (f32.sub (f32.mul (local.get \$x) (local.get \$x))
@@ -7270,47 +7027,47 @@ let $91 = instantiate(`(module
                        (f64.mul (local.get \$y) (local.get \$y)))))
 )`);
 
-// ./test/core/float_exprs.wast:2465
+// ./test/core/float_exprs.wast:2411
 assert_return(
-  () => invoke($91, `f32.contract2fma`, [value("f32", 1), value("f32", 1)]),
+  () => invoke($89, `f32.contract2fma`, [value("f32", 1), value("f32", 1)]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:2466
+// ./test/core/float_exprs.wast:2412
 assert_return(
-  () => invoke($91, `f32.contract2fma`, [value("f32", 1.1), value("f32", 1.1)]),
+  () => invoke($89, `f32.contract2fma`, [value("f32", 1.1), value("f32", 1.1)]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:2467
+// ./test/core/float_exprs.wast:2413
 assert_return(
-  () => invoke($91, `f32.contract2fma`, [
+  () => invoke($89, `f32.contract2fma`, [
     value("f32", 1.1999999),
     value("f32", 1.1999999),
   ]),
   [value("f32", 0)],
 );
 
-// ./test/core/float_exprs.wast:2468
+// ./test/core/float_exprs.wast:2414
 assert_return(
-  () => invoke($91, `f64.contract2fma`, [value("f64", 1), value("f64", 1)]),
+  () => invoke($89, `f64.contract2fma`, [value("f64", 1), value("f64", 1)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:2469
+// ./test/core/float_exprs.wast:2415
 assert_return(
-  () => invoke($91, `f64.contract2fma`, [value("f64", 1.1), value("f64", 1.1)]),
+  () => invoke($89, `f64.contract2fma`, [value("f64", 1.1), value("f64", 1.1)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:2470
+// ./test/core/float_exprs.wast:2416
 assert_return(
-  () => invoke($91, `f64.contract2fma`, [value("f64", 1.2), value("f64", 1.2)]),
+  () => invoke($89, `f64.contract2fma`, [value("f64", 1.2), value("f64", 1.2)]),
   [value("f64", 0)],
 );
 
-// ./test/core/float_exprs.wast:2475
-let $92 = instantiate(`(module
+// ./test/core/float_exprs.wast:2421
+let $90 = instantiate(`(module
   (func (export "f32.division_by_small_number")
         (param \$a f32) (param \$b f32) (param \$c f32) (result f32)
     (f32.sub (local.get \$a) (f32.div (local.get \$b) (local.get \$c))))
@@ -7319,9 +7076,9 @@ let $92 = instantiate(`(module
     (f64.sub (local.get \$a) (f64.div (local.get \$b) (local.get \$c))))
 )`);
 
-// ./test/core/float_exprs.wast:2484
+// ./test/core/float_exprs.wast:2430
 assert_return(
-  () => invoke($92, `f32.division_by_small_number`, [
+  () => invoke($90, `f32.division_by_small_number`, [
     value("f32", 112000000),
     value("f32", 100000),
     value("f32", 0.0009),
@@ -7329,9 +7086,9 @@ assert_return(
   [value("f32", 888888)],
 );
 
-// ./test/core/float_exprs.wast:2485
+// ./test/core/float_exprs.wast:2431
 assert_return(
-  () => invoke($92, `f64.division_by_small_number`, [
+  () => invoke($90, `f64.division_by_small_number`, [
     value("f64", 112000000),
     value("f64", 100000),
     value("f64", 0.0009),
@@ -7339,17 +7096,17 @@ assert_return(
   [value("f64", 888888.8888888806)],
 );
 
-// ./test/core/float_exprs.wast:2490
-let $93 = instantiate(`(module
+// ./test/core/float_exprs.wast:2436
+let $91 = instantiate(`(module
   (func (export "f32.golden_ratio") (param \$a f32) (param \$b f32) (param \$c f32) (result f32)
     (f32.mul (local.get 0) (f32.add (local.get 1) (f32.sqrt (local.get 2)))))
   (func (export "f64.golden_ratio") (param \$a f64) (param \$b f64) (param \$c f64) (result f64)
     (f64.mul (local.get 0) (f64.add (local.get 1) (f64.sqrt (local.get 2)))))
 )`);
 
-// ./test/core/float_exprs.wast:2497
+// ./test/core/float_exprs.wast:2443
 assert_return(
-  () => invoke($93, `f32.golden_ratio`, [
+  () => invoke($91, `f32.golden_ratio`, [
     value("f32", 0.5),
     value("f32", 1),
     value("f32", 5),
@@ -7357,9 +7114,9 @@ assert_return(
   [value("f32", 1.618034)],
 );
 
-// ./test/core/float_exprs.wast:2498
+// ./test/core/float_exprs.wast:2444
 assert_return(
-  () => invoke($93, `f64.golden_ratio`, [
+  () => invoke($91, `f64.golden_ratio`, [
     value("f64", 0.5),
     value("f64", 1),
     value("f64", 5),
@@ -7367,8 +7124,8 @@ assert_return(
   [value("f64", 1.618033988749895)],
 );
 
-// ./test/core/float_exprs.wast:2503
-let $94 = instantiate(`(module
+// ./test/core/float_exprs.wast:2449
+let $92 = instantiate(`(module
   (func (export "f32.silver_means") (param \$n f32) (result f32)
     (f32.mul (f32.const 0.5)
              (f32.add (local.get \$n)
@@ -7381,68 +7138,68 @@ let $94 = instantiate(`(module
                                          (f64.const 4.0))))))
 )`);
 
-// ./test/core/float_exprs.wast:2516
-assert_return(() => invoke($94, `f32.silver_means`, [value("f32", 0)]), [value("f32", 1)]);
+// ./test/core/float_exprs.wast:2462
+assert_return(() => invoke($92, `f32.silver_means`, [value("f32", 0)]), [value("f32", 1)]);
 
-// ./test/core/float_exprs.wast:2517
-assert_return(() => invoke($94, `f32.silver_means`, [value("f32", 1)]), [value("f32", 1.618034)]);
+// ./test/core/float_exprs.wast:2463
+assert_return(() => invoke($92, `f32.silver_means`, [value("f32", 1)]), [value("f32", 1.618034)]);
 
-// ./test/core/float_exprs.wast:2518
-assert_return(() => invoke($94, `f32.silver_means`, [value("f32", 2)]), [value("f32", 2.4142137)]);
+// ./test/core/float_exprs.wast:2464
+assert_return(() => invoke($92, `f32.silver_means`, [value("f32", 2)]), [value("f32", 2.4142137)]);
 
-// ./test/core/float_exprs.wast:2519
-assert_return(() => invoke($94, `f32.silver_means`, [value("f32", 3)]), [value("f32", 3.3027756)]);
+// ./test/core/float_exprs.wast:2465
+assert_return(() => invoke($92, `f32.silver_means`, [value("f32", 3)]), [value("f32", 3.3027756)]);
 
-// ./test/core/float_exprs.wast:2520
-assert_return(() => invoke($94, `f32.silver_means`, [value("f32", 4)]), [value("f32", 4.236068)]);
+// ./test/core/float_exprs.wast:2466
+assert_return(() => invoke($92, `f32.silver_means`, [value("f32", 4)]), [value("f32", 4.236068)]);
 
-// ./test/core/float_exprs.wast:2521
-assert_return(() => invoke($94, `f32.silver_means`, [value("f32", 5)]), [value("f32", 5.192582)]);
+// ./test/core/float_exprs.wast:2467
+assert_return(() => invoke($92, `f32.silver_means`, [value("f32", 5)]), [value("f32", 5.192582)]);
 
-// ./test/core/float_exprs.wast:2522
-assert_return(() => invoke($94, `f64.silver_means`, [value("f64", 0)]), [value("f64", 1)]);
+// ./test/core/float_exprs.wast:2468
+assert_return(() => invoke($92, `f64.silver_means`, [value("f64", 0)]), [value("f64", 1)]);
 
-// ./test/core/float_exprs.wast:2523
+// ./test/core/float_exprs.wast:2469
 assert_return(
-  () => invoke($94, `f64.silver_means`, [value("f64", 1)]),
+  () => invoke($92, `f64.silver_means`, [value("f64", 1)]),
   [value("f64", 1.618033988749895)],
 );
 
-// ./test/core/float_exprs.wast:2524
+// ./test/core/float_exprs.wast:2470
 assert_return(
-  () => invoke($94, `f64.silver_means`, [value("f64", 2)]),
+  () => invoke($92, `f64.silver_means`, [value("f64", 2)]),
   [value("f64", 2.414213562373095)],
 );
 
-// ./test/core/float_exprs.wast:2525
+// ./test/core/float_exprs.wast:2471
 assert_return(
-  () => invoke($94, `f64.silver_means`, [value("f64", 3)]),
+  () => invoke($92, `f64.silver_means`, [value("f64", 3)]),
   [value("f64", 3.302775637731995)],
 );
 
-// ./test/core/float_exprs.wast:2526
+// ./test/core/float_exprs.wast:2472
 assert_return(
-  () => invoke($94, `f64.silver_means`, [value("f64", 4)]),
+  () => invoke($92, `f64.silver_means`, [value("f64", 4)]),
   [value("f64", 4.23606797749979)],
 );
 
-// ./test/core/float_exprs.wast:2527
+// ./test/core/float_exprs.wast:2473
 assert_return(
-  () => invoke($94, `f64.silver_means`, [value("f64", 5)]),
+  () => invoke($92, `f64.silver_means`, [value("f64", 5)]),
   [value("f64", 5.192582403567252)],
 );
 
-// ./test/core/float_exprs.wast:2532
-let $95 = instantiate(`(module
+// ./test/core/float_exprs.wast:2478
+let $93 = instantiate(`(module
   (func (export "point_four") (param \$four f64) (param \$ten f64) (result i32)
     (f64.lt (f64.div (local.get \$four) (local.get \$ten)) (f64.const 0.4)))
 )`);
 
-// ./test/core/float_exprs.wast:2537
-assert_return(() => invoke($95, `point_four`, [value("f64", 4), value("f64", 10)]), [value("i32", 0)]);
+// ./test/core/float_exprs.wast:2483
+assert_return(() => invoke($93, `point_four`, [value("f64", 4), value("f64", 10)]), [value("i32", 0)]);
 
-// ./test/core/float_exprs.wast:2542
-let $96 = instantiate(`(module
+// ./test/core/float_exprs.wast:2488
+let $94 = instantiate(`(module
   (func (export "tau") (param i32) (result f64)
     (local f64 f64 f64 f64)
     f64.const 0x0p+0
@@ -7507,14 +7264,14 @@ let $96 = instantiate(`(module
   )
 )`);
 
-// ./test/core/float_exprs.wast:2607
-assert_return(() => invoke($96, `tau`, [10]), [value("f64", 6.283185307179583)]);
+// ./test/core/float_exprs.wast:2553
+assert_return(() => invoke($94, `tau`, [10]), [value("f64", 6.283185307179583)]);
 
-// ./test/core/float_exprs.wast:2608
-assert_return(() => invoke($96, `tau`, [11]), [value("f64", 6.283185307179586)]);
+// ./test/core/float_exprs.wast:2554
+assert_return(() => invoke($94, `tau`, [11]), [value("f64", 6.283185307179586)]);
 
-// ./test/core/float_exprs.wast:2612
-let $97 = instantiate(`(module
+// ./test/core/float_exprs.wast:2558
+let $95 = instantiate(`(module
   (func (export "f32.no_fold_conditional_inc") (param \$x f32) (param \$y f32) (result f32)
     (select (local.get \$x)
             (f32.add (local.get \$x) (f32.const 1.0))
@@ -7525,14 +7282,14 @@ let $97 = instantiate(`(module
             (f64.lt (local.get \$y) (f64.const 0.0))))
 )`);
 
-// ./test/core/float_exprs.wast:2623
+// ./test/core/float_exprs.wast:2569
 assert_return(
-  () => invoke($97, `f32.no_fold_conditional_inc`, [value("f32", -0), value("f32", -1)]),
+  () => invoke($95, `f32.no_fold_conditional_inc`, [value("f32", -0), value("f32", -1)]),
   [value("f32", -0)],
 );
 
-// ./test/core/float_exprs.wast:2624
+// ./test/core/float_exprs.wast:2570
 assert_return(
-  () => invoke($97, `f64.no_fold_conditional_inc`, [value("f64", -0), value("f64", -1)]),
+  () => invoke($95, `f64.no_fold_conditional_inc`, [value("f64", -0), value("f64", -1)]),
   [value("f64", -0)],
 );

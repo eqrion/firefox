@@ -244,36 +244,36 @@ assert_invalid(
 
 // ./test/core/local_get.wast:200
 assert_invalid(
-  () => instantiate(`(module (func \$unbound-local (local i32 i64) (local.get 3) drop))`),
+  () => instantiate(`(module (func \$unbound-local (local i32 i64) (local.get 3)))`),
   `unknown local`,
 );
 
 // ./test/core/local_get.wast:204
 assert_invalid(
-  () => instantiate(`(module (func \$large-local (local i32 i64) (local.get 14324343) drop))`),
+  () => instantiate(`(module (func \$large-local (local i32 i64) (local.get 14324343)))`),
   `unknown local`,
 );
 
 // ./test/core/local_get.wast:209
 assert_invalid(
-  () => instantiate(`(module (func \$unbound-param (param i32 i64) (local.get 2) drop))`),
+  () => instantiate(`(module (func \$unbound-param (param i32 i64) (local.get 2)))`),
   `unknown local`,
 );
 
 // ./test/core/local_get.wast:213
 assert_invalid(
-  () => instantiate(`(module (func \$large-param (param i32 i64) (local.get 714324343) drop))`),
+  () => instantiate(`(module (func \$large-param (param i32 i64) (local.get 714324343)))`),
   `unknown local`,
 );
 
 // ./test/core/local_get.wast:218
 assert_invalid(
-  () => instantiate(`(module (func \$unbound-mixed (param i32) (local i32 i64) (local.get 3) drop))`),
+  () => instantiate(`(module (func \$unbound-mixed (param i32) (local i32 i64) (local.get 3)))`),
   `unknown local`,
 );
 
 // ./test/core/local_get.wast:222
 assert_invalid(
-  () => instantiate(`(module (func \$large-mixed (param i64) (local i32 i64) (local.get 214324343) drop))`),
+  () => instantiate(`(module (func \$large-mixed (param i64) (local i32 i64) (local.get 214324343)))`),
   `unknown local`,
 );

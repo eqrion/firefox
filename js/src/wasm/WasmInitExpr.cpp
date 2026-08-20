@@ -441,7 +441,6 @@ bool wasm::DecodeConstantExpression(Decoder& d, CodeMetadata* codeMeta,
       return false;
     }
 
-    Nothing nothing;
     NothingVector nothings{};
     ResultType unusedType;
 
@@ -496,127 +495,6 @@ bool wasm::DecodeConstantExpression(Decoder& d, CodeMetadata* codeMeta,
           return false;
         }
         *literal = Some(LitVal(c));
-        break;
-      }
-#ifdef ENABLE_WASM_SIMD
-      case uint16_t(Op::SimdPrefix): {
-        if (!codeMeta->simdAvailable()) {
-          return d.fail("v128 not enabled");
-        }
-        if (op.b1 != uint32_t(SimdOp::V128Const)) {
-          return iter.unrecognizedOpcode(&op);
-        }
-        V128 c;
-        if (!iter.readV128Const(&c)) {
-          return false;
-        }
-        *literal = Some(LitVal(c));
-        break;
-      }
-#endif
-      case uint16_t(Op::RefFunc): {
-        uint32_t funcIndex;
-        if (!iter.readRefFunc(&funcIndex)) {
-          return false;
-        }
-        codeMeta->funcs[funcIndex].declareFuncExported(/* eager */ false,
-                                                       /* canRefFunc */ true);
-        *literal = Nothing();
-        break;
-      }
-      case uint16_t(Op::RefNull): {
-        RefType type;
-        if (!iter.readRefNull(&type)) {
-          return false;
-        }
-        *literal = Some(LitVal(ValType(type)));
-        break;
-      }
-      case uint16_t(Op::I32Add):
-      case uint16_t(Op::I32Sub):
-      case uint16_t(Op::I32Mul): {
-        if (!iter.readBinary(ValType::I32, &nothing, &nothing)) {
-          return false;
-        }
-        *literal = Nothing();
-        break;
-      }
-      case uint16_t(Op::I64Add):
-      case uint16_t(Op::I64Sub):
-      case uint16_t(Op::I64Mul): {
-        if (!iter.readBinary(ValType::I64, &nothing, &nothing)) {
-          return false;
-        }
-        *literal = Nothing();
-        break;
-      }
-      case uint16_t(Op::GcPrefix): {
-        switch (op.b1) {
-          case uint32_t(GcOp::StructNew): {
-            uint32_t typeIndex;
-            if (!iter.readStructNew(&typeIndex, &nothings)) {
-              return false;
-            }
-            break;
-          }
-          case uint32_t(GcOp::StructNewDefault): {
-            uint32_t typeIndex;
-            if (!iter.readStructNewDefault(&typeIndex)) {
-              return false;
-            }
-            break;
-          }
-          case uint32_t(GcOp::ArrayNew): {
-            uint32_t typeIndex;
-            if (!iter.readArrayNew(&typeIndex, &nothing, &nothing)) {
-              return false;
-            }
-            break;
-          }
-          case uint32_t(GcOp::ArrayNewFixed): {
-            uint32_t typeIndex, len;
-            if (!iter.readArrayNewFixed(&typeIndex, &len, &nothings)) {
-              return false;
-            }
-            break;
-          }
-          case uint32_t(GcOp::ArrayNewDefault): {
-            uint32_t typeIndex;
-            if (!iter.readArrayNewDefault(&typeIndex, &nothing)) {
-              return false;
-            }
-            break;
-          }
-          case uint32_t(GcOp::RefI31): {
-            Nothing value;
-            if (!iter.readConversion(ValType::I32,
-                                     ValType(RefType::i31().asNonNullable()),
-                                     &value)) {
-              return false;
-            }
-            break;
-          }
-          case uint32_t(GcOp::AnyConvertExtern): {
-            Nothing value;
-            if (!iter.readRefConversion(RefType::extern_(), RefType::any(),
-                                        &value)) {
-              return false;
-            }
-            break;
-          }
-          case uint32_t(GcOp::ExternConvertAny): {
-            Nothing value;
-            if (!iter.readRefConversion(RefType::any(), RefType::extern_(),
-                                        &value)) {
-              return false;
-            }
-            break;
-          }
-          default: {
-            return iter.unrecognizedOpcode(&op);
-          }
-        }
-        *literal = Nothing();
         break;
       }
       default: {

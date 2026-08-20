@@ -448,22 +448,9 @@ let WasmFuncrefValues = [
     wasmEvalText(`(module (func (export "")))`).exports[''],
 ];
 
-// Valid values for structref/arrayref
+// GC is not part of wasm 1.0, so there are no structref/arrayref values.
 let WasmStructrefValues = [];
 let WasmArrayrefValues = [];
-let { newStruct, newArray } = wasmEvalText(`
-    (module
-    (type $s (sub (struct)))
-    (type $a (sub (array i32)))
-    (func (export "newStruct") (result anyref)
-        struct.new $s)
-    (func (export "newArray") (result anyref)
-        i32.const 0
-        i32.const 0
-        array.new $a)
-    )`).exports;
-WasmStructrefValues.push(newStruct());
-WasmArrayrefValues.push(newArray());
 
 let WasmGcObjectValues = WasmStructrefValues.concat(WasmArrayrefValues);
 
@@ -531,7 +518,7 @@ let WasmNonNullExternrefValues = [
 let WasmExternrefValues = [null, ...WasmNonNullExternrefValues];
 
 // Max number of memories in a single wasm module.
-let MaxMemories = 100
+let MaxMemories = 1
 
 // Constants related to memory sizes.
 const MaxMemory64PagesValidation = BigInt(Math.pow(2, 37) - 1); // from spec

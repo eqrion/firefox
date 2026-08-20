@@ -24,10 +24,6 @@ let $0 = instantiate(`(module
   (func (export "type-i64") (block (drop (i64.ctz (br 0)))))
   (func (export "type-f32") (block (drop (f32.neg (br 0)))))
   (func (export "type-f64") (block (drop (f64.neg (br 0)))))
-  (func (export "type-i32-i32") (block (drop (i32.add (br 0)))))
-  (func (export "type-i64-i64") (block (drop (i64.add (br 0)))))
-  (func (export "type-f32-f32") (block (drop (f32.add (br 0)))))
-  (func (export "type-f64-f64") (block (drop (f64.add (br 0)))))
 
   (func (export "type-i32-value") (result i32)
     (block (result i32) (i32.ctz (br 0 (i32.const 1))))
@@ -40,11 +36,6 @@ let $0 = instantiate(`(module
   )
   (func (export "type-f64-value") (result f64)
     (block (result f64) (f64.neg (br 0 (f64.const 4))))
-  )
-  (func (export "type-f64-f64-value") (result f64 f64)
-    (block (result f64 f64)
-      (f64.add (br 0 (f64.const 4) (f64.const 5))) (f64.const 6)
-    )
   )
 
   (func (export "as-block-first")
@@ -109,10 +100,6 @@ let $0 = instantiate(`(module
   (func (export "as-return-value") (result i64)
     (block (result i64) (return (br 0 (i64.const 7))))
   )
-  (func (export "as-return-values") (result i32 i64)
-    (i32.const 2)
-    (block (result i64) (return (br 0 (i32.const 1) (i64.const 7))))
-  )
 
   (func (export "as-if-cond") (result i32)
     (block (result i32)
@@ -154,9 +141,6 @@ let $0 = instantiate(`(module
       (select (i32.const 0) (i32.const 1) (br 0 (i32.const 7)))
     )
   )
-  (func (export "as-select-all") (result i32)
-    (block (result i32) (select (br 0 (i32.const 8))))
-  )
 
   (func \$f (param i32 i32 i32) (result i32) (i32.const -1))
   (func (export "as-call-first") (result i32)
@@ -173,9 +157,6 @@ let $0 = instantiate(`(module
     (block (result i32)
       (call \$f (i32.const 1) (i32.const 2) (br 0 (i32.const 14)))
     )
-  )
-  (func (export "as-call-all") (result i32)
-    (block (result i32) (call \$f (br 0 (i32.const 15))))
   )
 
   (type \$sig (func (param i32 i32 i32) (result i32)))
@@ -212,9 +193,6 @@ let $0 = instantiate(`(module
       )
     )
   )
-  (func (export "as-call_indirect-all") (result i32)
-    (block (result i32) (call_indirect (type \$sig) (br 0 (i32.const 24))))
-  )
 
   (func (export "as-local.set-value") (result i32) (local f32)
     (block (result i32) (local.set 0 (br 0 (i32.const 17))) (i32.const -1))
@@ -245,11 +223,6 @@ let $0 = instantiate(`(module
       (i64.store (i32.const 2) (br 0 (i32.const 31))) (i32.const -1)
     )
   )
-  (func (export "as-store-both") (result i32)
-    (block (result i32)
-      (i64.store (br 0 (i32.const 32))) (i32.const -1)
-    )
-  )
 
   (func (export "as-storeN-address") (result i32)
     (block (result i32)
@@ -259,11 +232,6 @@ let $0 = instantiate(`(module
   (func (export "as-storeN-value") (result i32)
     (block (result i32)
       (i64.store16 (i32.const 2) (br 0 (i32.const 33))) (i32.const -1)
-    )
-  )
-  (func (export "as-storeN-both") (result i32)
-    (block (result i32)
-      (i64.store16 (br 0 (i32.const 34))) (i32.const -1)
     )
   )
 
@@ -277,9 +245,6 @@ let $0 = instantiate(`(module
   (func (export "as-binary-right") (result i64)
     (block (result i64) (i64.sub (i64.const 10) (br 0 (i64.const 45))))
   )
-  (func (export "as-binary-both") (result i32)
-    (block (result i32) (i32.add (br 0 (i32.const 46))))
-  )
 
   (func (export "as-test-operand") (result i32)
     (block (result i32) (i32.eqz (br 0 (i32.const 44))))
@@ -290,9 +255,6 @@ let $0 = instantiate(`(module
   )
   (func (export "as-compare-right") (result i32)
     (block (result i32) (f32.ne (f32.const 10) (br 0 (i32.const 42))))
-  )
-  (func (export "as-compare-both") (result i32)
-    (block (result i32) (f64.le (br 0 (i32.const 44))))
   )
 
   (func (export "as-convert-operand") (result i32)
@@ -385,235 +347,196 @@ let $0 = instantiate(`(module
   )
 )`);
 
-// ./test/core/br.wast:372
+// ./test/core/br.wast:334
 assert_return(() => invoke($0, `type-i32`, []), []);
 
-// ./test/core/br.wast:373
+// ./test/core/br.wast:335
 assert_return(() => invoke($0, `type-i64`, []), []);
 
-// ./test/core/br.wast:374
+// ./test/core/br.wast:336
 assert_return(() => invoke($0, `type-f32`, []), []);
 
-// ./test/core/br.wast:375
+// ./test/core/br.wast:337
 assert_return(() => invoke($0, `type-f64`, []), []);
 
-// ./test/core/br.wast:376
-assert_return(() => invoke($0, `type-i32-i32`, []), []);
-
-// ./test/core/br.wast:377
-assert_return(() => invoke($0, `type-i64-i64`, []), []);
-
-// ./test/core/br.wast:378
-assert_return(() => invoke($0, `type-f32-f32`, []), []);
-
-// ./test/core/br.wast:379
-assert_return(() => invoke($0, `type-f64-f64`, []), []);
-
-// ./test/core/br.wast:381
+// ./test/core/br.wast:339
 assert_return(() => invoke($0, `type-i32-value`, []), [value("i32", 1)]);
 
-// ./test/core/br.wast:382
+// ./test/core/br.wast:340
 assert_return(() => invoke($0, `type-i64-value`, []), [value("i64", 2n)]);
 
-// ./test/core/br.wast:383
+// ./test/core/br.wast:341
 assert_return(() => invoke($0, `type-f32-value`, []), [value("f32", 3)]);
 
-// ./test/core/br.wast:384
+// ./test/core/br.wast:342
 assert_return(() => invoke($0, `type-f64-value`, []), [value("f64", 4)]);
 
-// ./test/core/br.wast:385
-assert_return(() => invoke($0, `type-f64-f64-value`, []), [value("f64", 4), value("f64", 5)]);
-
-// ./test/core/br.wast:387
+// ./test/core/br.wast:344
 assert_return(() => invoke($0, `as-block-first`, []), []);
 
-// ./test/core/br.wast:388
+// ./test/core/br.wast:345
 assert_return(() => invoke($0, `as-block-mid`, []), []);
 
-// ./test/core/br.wast:389
+// ./test/core/br.wast:346
 assert_return(() => invoke($0, `as-block-last`, []), []);
 
-// ./test/core/br.wast:390
+// ./test/core/br.wast:347
 assert_return(() => invoke($0, `as-block-value`, []), [value("i32", 2)]);
 
-// ./test/core/br.wast:392
+// ./test/core/br.wast:349
 assert_return(() => invoke($0, `as-loop-first`, []), [value("i32", 3)]);
 
-// ./test/core/br.wast:393
+// ./test/core/br.wast:350
 assert_return(() => invoke($0, `as-loop-mid`, []), [value("i32", 4)]);
 
-// ./test/core/br.wast:394
+// ./test/core/br.wast:351
 assert_return(() => invoke($0, `as-loop-last`, []), [value("i32", 5)]);
 
-// ./test/core/br.wast:396
+// ./test/core/br.wast:353
 assert_return(() => invoke($0, `as-br-value`, []), [value("i32", 9)]);
 
-// ./test/core/br.wast:398
+// ./test/core/br.wast:355
 assert_return(() => invoke($0, `as-br_if-cond`, []), []);
 
-// ./test/core/br.wast:399
+// ./test/core/br.wast:356
 assert_return(() => invoke($0, `as-br_if-value`, []), [value("i32", 8)]);
 
-// ./test/core/br.wast:400
+// ./test/core/br.wast:357
 assert_return(() => invoke($0, `as-br_if-value-cond`, []), [value("i32", 9)]);
 
-// ./test/core/br.wast:402
+// ./test/core/br.wast:359
 assert_return(() => invoke($0, `as-br_table-index`, []), []);
 
-// ./test/core/br.wast:403
+// ./test/core/br.wast:360
 assert_return(() => invoke($0, `as-br_table-value`, []), [value("i32", 10)]);
 
-// ./test/core/br.wast:404
+// ./test/core/br.wast:361
 assert_return(() => invoke($0, `as-br_table-value-index`, []), [value("i32", 11)]);
 
-// ./test/core/br.wast:406
+// ./test/core/br.wast:363
 assert_return(() => invoke($0, `as-return-value`, []), [value("i64", 7n)]);
 
-// ./test/core/br.wast:407
-assert_return(() => invoke($0, `as-return-values`, []), [value("i32", 2), value("i64", 7n)]);
-
-// ./test/core/br.wast:409
+// ./test/core/br.wast:365
 assert_return(() => invoke($0, `as-if-cond`, []), [value("i32", 2)]);
 
-// ./test/core/br.wast:410
+// ./test/core/br.wast:366
 assert_return(() => invoke($0, `as-if-then`, [1, 6]), [value("i32", 3)]);
 
-// ./test/core/br.wast:411
+// ./test/core/br.wast:367
 assert_return(() => invoke($0, `as-if-then`, [0, 6]), [value("i32", 6)]);
 
-// ./test/core/br.wast:412
+// ./test/core/br.wast:368
 assert_return(() => invoke($0, `as-if-else`, [0, 6]), [value("i32", 4)]);
 
-// ./test/core/br.wast:413
+// ./test/core/br.wast:369
 assert_return(() => invoke($0, `as-if-else`, [1, 6]), [value("i32", 6)]);
 
-// ./test/core/br.wast:415
+// ./test/core/br.wast:371
 assert_return(() => invoke($0, `as-select-first`, [0, 6]), [value("i32", 5)]);
 
-// ./test/core/br.wast:416
+// ./test/core/br.wast:372
 assert_return(() => invoke($0, `as-select-first`, [1, 6]), [value("i32", 5)]);
 
-// ./test/core/br.wast:417
+// ./test/core/br.wast:373
 assert_return(() => invoke($0, `as-select-second`, [0, 6]), [value("i32", 6)]);
 
-// ./test/core/br.wast:418
+// ./test/core/br.wast:374
 assert_return(() => invoke($0, `as-select-second`, [1, 6]), [value("i32", 6)]);
 
-// ./test/core/br.wast:419
+// ./test/core/br.wast:375
 assert_return(() => invoke($0, `as-select-cond`, []), [value("i32", 7)]);
 
-// ./test/core/br.wast:420
-assert_return(() => invoke($0, `as-select-all`, []), [value("i32", 8)]);
-
-// ./test/core/br.wast:422
+// ./test/core/br.wast:377
 assert_return(() => invoke($0, `as-call-first`, []), [value("i32", 12)]);
 
-// ./test/core/br.wast:423
+// ./test/core/br.wast:378
 assert_return(() => invoke($0, `as-call-mid`, []), [value("i32", 13)]);
 
-// ./test/core/br.wast:424
+// ./test/core/br.wast:379
 assert_return(() => invoke($0, `as-call-last`, []), [value("i32", 14)]);
 
-// ./test/core/br.wast:425
-assert_return(() => invoke($0, `as-call-all`, []), [value("i32", 15)]);
-
-// ./test/core/br.wast:427
+// ./test/core/br.wast:381
 assert_return(() => invoke($0, `as-call_indirect-func`, []), [value("i32", 20)]);
 
-// ./test/core/br.wast:428
+// ./test/core/br.wast:382
 assert_return(() => invoke($0, `as-call_indirect-first`, []), [value("i32", 21)]);
 
-// ./test/core/br.wast:429
+// ./test/core/br.wast:383
 assert_return(() => invoke($0, `as-call_indirect-mid`, []), [value("i32", 22)]);
 
-// ./test/core/br.wast:430
+// ./test/core/br.wast:384
 assert_return(() => invoke($0, `as-call_indirect-last`, []), [value("i32", 23)]);
 
-// ./test/core/br.wast:431
-assert_return(() => invoke($0, `as-call_indirect-all`, []), [value("i32", 24)]);
-
-// ./test/core/br.wast:433
+// ./test/core/br.wast:386
 assert_return(() => invoke($0, `as-local.set-value`, []), [value("i32", 17)]);
 
-// ./test/core/br.wast:434
+// ./test/core/br.wast:387
 assert_return(() => invoke($0, `as-local.tee-value`, []), [value("i32", 1)]);
 
-// ./test/core/br.wast:435
+// ./test/core/br.wast:388
 assert_return(() => invoke($0, `as-global.set-value`, []), [value("i32", 1)]);
 
-// ./test/core/br.wast:437
+// ./test/core/br.wast:390
 assert_return(() => invoke($0, `as-load-address`, []), [value("f32", 1.7)]);
 
-// ./test/core/br.wast:438
+// ./test/core/br.wast:391
 assert_return(() => invoke($0, `as-loadN-address`, []), [value("i64", 30n)]);
 
-// ./test/core/br.wast:440
+// ./test/core/br.wast:393
 assert_return(() => invoke($0, `as-store-address`, []), [value("i32", 30)]);
 
-// ./test/core/br.wast:441
+// ./test/core/br.wast:394
 assert_return(() => invoke($0, `as-store-value`, []), [value("i32", 31)]);
 
-// ./test/core/br.wast:442
-assert_return(() => invoke($0, `as-store-both`, []), [value("i32", 32)]);
-
-// ./test/core/br.wast:443
+// ./test/core/br.wast:395
 assert_return(() => invoke($0, `as-storeN-address`, []), [value("i32", 32)]);
 
-// ./test/core/br.wast:444
+// ./test/core/br.wast:396
 assert_return(() => invoke($0, `as-storeN-value`, []), [value("i32", 33)]);
 
-// ./test/core/br.wast:445
-assert_return(() => invoke($0, `as-storeN-both`, []), [value("i32", 34)]);
-
-// ./test/core/br.wast:447
+// ./test/core/br.wast:398
 assert_return(() => invoke($0, `as-unary-operand`, []), [value("f32", 3.4)]);
 
-// ./test/core/br.wast:449
+// ./test/core/br.wast:400
 assert_return(() => invoke($0, `as-binary-left`, []), [value("i32", 3)]);
 
-// ./test/core/br.wast:450
+// ./test/core/br.wast:401
 assert_return(() => invoke($0, `as-binary-right`, []), [value("i64", 45n)]);
 
-// ./test/core/br.wast:451
-assert_return(() => invoke($0, `as-binary-both`, []), [value("i32", 46)]);
-
-// ./test/core/br.wast:453
+// ./test/core/br.wast:403
 assert_return(() => invoke($0, `as-test-operand`, []), [value("i32", 44)]);
 
-// ./test/core/br.wast:455
+// ./test/core/br.wast:405
 assert_return(() => invoke($0, `as-compare-left`, []), [value("i32", 43)]);
 
-// ./test/core/br.wast:456
+// ./test/core/br.wast:406
 assert_return(() => invoke($0, `as-compare-right`, []), [value("i32", 42)]);
 
-// ./test/core/br.wast:457
-assert_return(() => invoke($0, `as-compare-both`, []), [value("i32", 44)]);
-
-// ./test/core/br.wast:459
+// ./test/core/br.wast:408
 assert_return(() => invoke($0, `as-convert-operand`, []), [value("i32", 41)]);
 
-// ./test/core/br.wast:461
+// ./test/core/br.wast:410
 assert_return(() => invoke($0, `as-memory.grow-size`, []), [value("i32", 40)]);
 
-// ./test/core/br.wast:463
+// ./test/core/br.wast:412
 assert_return(() => invoke($0, `nested-block-value`, []), [value("i32", 9)]);
 
-// ./test/core/br.wast:464
+// ./test/core/br.wast:413
 assert_return(() => invoke($0, `nested-br-value`, []), [value("i32", 9)]);
 
-// ./test/core/br.wast:465
+// ./test/core/br.wast:414
 assert_return(() => invoke($0, `nested-br_if-value`, []), [value("i32", 9)]);
 
-// ./test/core/br.wast:466
+// ./test/core/br.wast:415
 assert_return(() => invoke($0, `nested-br_if-value-cond`, []), [value("i32", 9)]);
 
-// ./test/core/br.wast:467
+// ./test/core/br.wast:416
 assert_return(() => invoke($0, `nested-br_table-value`, []), [value("i32", 9)]);
 
-// ./test/core/br.wast:468
+// ./test/core/br.wast:417
 assert_return(() => invoke($0, `nested-br_table-value-index`, []), [value("i32", 9)]);
 
-// ./test/core/br.wast:470
+// ./test/core/br.wast:419
 assert_invalid(
   () => instantiate(`(module (func \$type-arg-empty-vs-num (result i32)
     (block (result i32) (br 0) (i32.const 1))
@@ -621,7 +544,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br.wast:477
+// ./test/core/br.wast:426
 assert_invalid(
   () => instantiate(`(module (func \$type-arg-void-vs-num (result i32)
     (block (result i32) (br 0 (nop)) (i32.const 1))
@@ -629,7 +552,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br.wast:483
+// ./test/core/br.wast:432
 assert_invalid(
   () => instantiate(`(module (func \$type-arg-void-vs-num-nested (result i32)
     (block (result i32) (i32.const 0) (block (br 1)))
@@ -637,7 +560,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br.wast:489
+// ./test/core/br.wast:438
 assert_invalid(
   () => instantiate(`(module (func \$type-arg-num-vs-num (result i32)
     (block (result i32) (br 0 (i64.const 1)) (i32.const 1))
@@ -645,7 +568,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br.wast:496
+// ./test/core/br.wast:445
 assert_invalid(
   () => instantiate(`(module
     (func \$type-arg-empty-in-br
@@ -656,7 +579,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br.wast:505
+// ./test/core/br.wast:454
 assert_invalid(
   () => instantiate(`(module
     (func \$type-arg-empty-in-br_if
@@ -667,7 +590,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br.wast:514
+// ./test/core/br.wast:463
 assert_invalid(
   () => instantiate(`(module
     (func \$type-arg-empty-in-br_table
@@ -678,7 +601,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br.wast:523
+// ./test/core/br.wast:472
 assert_invalid(
   () => instantiate(`(module
     (func \$type-arg-empty-in-return
@@ -691,7 +614,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br.wast:534
+// ./test/core/br.wast:483
 assert_invalid(
   () => instantiate(`(module
     (func \$type-arg-empty-in-select
@@ -704,7 +627,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br.wast:545
+// ./test/core/br.wast:494
 assert_invalid(
   () => instantiate(`(module
     (func \$type-arg-empty-in-call
@@ -718,7 +641,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br.wast:557
+// ./test/core/br.wast:506
 assert_invalid(
   () => instantiate(`(module
     (func \$f (param i32) (result i32) (local.get 0))
@@ -736,7 +659,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br.wast:573
+// ./test/core/br.wast:522
 assert_invalid(
   () => instantiate(`(module
     (func \$type-arg-empty-in-local.set
@@ -750,7 +673,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br.wast:585
+// ./test/core/br.wast:534
 assert_invalid(
   () => instantiate(`(module
     (func \$type-arg-empty-in-local.tee
@@ -764,7 +687,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br.wast:597
+// ./test/core/br.wast:546
 assert_invalid(
   () => instantiate(`(module
     (global \$x (mut i32) (i32.const 0))
@@ -778,7 +701,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br.wast:609
+// ./test/core/br.wast:558
 assert_invalid(
   () => instantiate(`(module
     (memory 0)
@@ -792,7 +715,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br.wast:621
+// ./test/core/br.wast:570
 assert_invalid(
   () => instantiate(`(module
     (memory 1)
@@ -806,7 +729,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br.wast:633
+// ./test/core/br.wast:582
 assert_invalid(
   () => instantiate(`(module
     (memory 1)
@@ -820,19 +743,19 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br.wast:646
+// ./test/core/br.wast:595
 assert_invalid(
   () => instantiate(`(module (func \$unbound-label (br 1)))`),
   `unknown label`,
 );
 
-// ./test/core/br.wast:650
+// ./test/core/br.wast:599
 assert_invalid(
   () => instantiate(`(module (func \$unbound-nested-label (block (block (br 5)))))`),
   `unknown label`,
 );
 
-// ./test/core/br.wast:654
+// ./test/core/br.wast:603
 assert_invalid(
   () => instantiate(`(module (func \$large-label (br 0x10000001)))`),
   `unknown label`,

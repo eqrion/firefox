@@ -599,6 +599,255 @@ let $0 = instantiate(`(module
           0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
           0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
           0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
+          0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1
           (local.get 0)
         )
         (return (i32.const -1))
@@ -1009,562 +1258,447 @@ let $0 = instantiate(`(module
       (i32.const 3)
     )
   )
-
-  (func (export "meet-externref") (param i32) (param externref) (result externref)
-    (block \$l1 (result externref)
-      (block \$l2 (result externref)
-        (br_table \$l1 \$l2 \$l1 (local.get 1) (local.get 0))
-      )
-    )
-  )
-
-  (func (export "meet-bottom")
-    (block (result f64)
-      (block (result f32)
-        (unreachable)
-        (br_table 0 1 1 (i32.const 1))
-      )
-      (drop)
-      (f64.const 0)
-    )
-    (drop)
-  )
-
-  (type \$t (func))
-  (func \$tf)
-  (table \$t (ref null \$t) (elem \$tf))
-  (func (export "meet-funcref-1") (param i32) (result (ref null func))
-    (block \$l1 (result (ref null func))
-      (block \$l2 (result (ref null \$t))
-        (br_table \$l1 \$l1 \$l2 (table.get \$t (i32.const 0)) (local.get 0))
-      )
-    )
-  )
-  (func (export "meet-funcref-2") (param i32) (result (ref null func))
-    (block \$l1 (result (ref null func))
-      (block \$l2 (result (ref null \$t))
-        (br_table \$l2 \$l2 \$l1 (table.get \$t (i32.const 0)) (local.get 0))
-      )
-    )
-  )
-  (func (export "meet-funcref-3") (param i32) (result (ref null func))
-    (block \$l1 (result (ref null func))
-      (block \$l2 (result (ref null \$t))
-        (br_table \$l2 \$l1 \$l2 (table.get \$t (i32.const 0)) (local.get 0))
-      )
-    )
-  )
-  (func (export "meet-funcref-4") (param i32) (result (ref null func))
-    (block \$l1 (result (ref null func))
-      (block \$l2 (result (ref null \$t))
-        (br_table \$l1 \$l2 \$l1 (table.get \$t (i32.const 0)) (local.get 0))
-      )
-    )
-  )
-
-  (func (export "meet-nullref") (param i32) (result (ref null func))
-    (block \$l1 (result (ref null func))
-      (block \$l2 (result (ref null \$t))
-        (br_table \$l1 \$l2 \$l1 (ref.null \$t) (local.get 0))
-      )
-    )
-  )
-
-  (func (export "meet-multi-ref") (param i32) (result (ref null func))
-    (block \$l1 (result (ref null func))
-      (block \$l2 (result (ref null \$t))
-        (block \$l3 (result (ref \$t))
-          (br_table \$l3 \$l2 \$l1 (ref.func \$tf) (local.get 0))
-        )
-      )
-    )
-  )
 )`);
 
-// ./test/core/br_table.wast:1068
+// ./test/core/br_table.wast:1247
 assert_return(() => invoke($0, `type-i32`, []), []);
 
-// ./test/core/br_table.wast:1069
+// ./test/core/br_table.wast:1248
 assert_return(() => invoke($0, `type-i64`, []), []);
 
-// ./test/core/br_table.wast:1070
+// ./test/core/br_table.wast:1249
 assert_return(() => invoke($0, `type-f32`, []), []);
 
-// ./test/core/br_table.wast:1071
+// ./test/core/br_table.wast:1250
 assert_return(() => invoke($0, `type-f64`, []), []);
 
-// ./test/core/br_table.wast:1073
+// ./test/core/br_table.wast:1252
 assert_return(() => invoke($0, `type-i32-value`, []), [value("i32", 1)]);
 
-// ./test/core/br_table.wast:1074
+// ./test/core/br_table.wast:1253
 assert_return(() => invoke($0, `type-i64-value`, []), [value("i64", 2n)]);
 
-// ./test/core/br_table.wast:1075
+// ./test/core/br_table.wast:1254
 assert_return(() => invoke($0, `type-f32-value`, []), [value("f32", 3)]);
 
-// ./test/core/br_table.wast:1076
+// ./test/core/br_table.wast:1255
 assert_return(() => invoke($0, `type-f64-value`, []), [value("f64", 4)]);
 
-// ./test/core/br_table.wast:1078
+// ./test/core/br_table.wast:1257
 assert_return(() => invoke($0, `empty`, [0]), [value("i32", 22)]);
 
-// ./test/core/br_table.wast:1079
+// ./test/core/br_table.wast:1258
 assert_return(() => invoke($0, `empty`, [1]), [value("i32", 22)]);
 
-// ./test/core/br_table.wast:1080
+// ./test/core/br_table.wast:1259
 assert_return(() => invoke($0, `empty`, [11]), [value("i32", 22)]);
 
-// ./test/core/br_table.wast:1081
-assert_return(() => invoke($0, `empty`, [-1]), [value("i32", 22)]);
-
-// ./test/core/br_table.wast:1082
-assert_return(() => invoke($0, `empty`, [-100]), [value("i32", 22)]);
-
-// ./test/core/br_table.wast:1083
-assert_return(() => invoke($0, `empty`, [-1]), [value("i32", 22)]);
-
-// ./test/core/br_table.wast:1085
-assert_return(() => invoke($0, `empty-value`, [0]), [value("i32", 33)]);
-
-// ./test/core/br_table.wast:1086
-assert_return(() => invoke($0, `empty-value`, [1]), [value("i32", 33)]);
-
-// ./test/core/br_table.wast:1087
-assert_return(() => invoke($0, `empty-value`, [11]), [value("i32", 33)]);
-
-// ./test/core/br_table.wast:1088
-assert_return(() => invoke($0, `empty-value`, [-1]), [value("i32", 33)]);
-
-// ./test/core/br_table.wast:1089
-assert_return(() => invoke($0, `empty-value`, [-100]), [value("i32", 33)]);
-
-// ./test/core/br_table.wast:1090
-assert_return(() => invoke($0, `empty-value`, [-1]), [value("i32", 33)]);
-
-// ./test/core/br_table.wast:1092
-assert_return(() => invoke($0, `singleton`, [0]), [value("i32", 22)]);
-
-// ./test/core/br_table.wast:1093
-assert_return(() => invoke($0, `singleton`, [1]), [value("i32", 20)]);
-
-// ./test/core/br_table.wast:1094
-assert_return(() => invoke($0, `singleton`, [11]), [value("i32", 20)]);
-
-// ./test/core/br_table.wast:1095
-assert_return(() => invoke($0, `singleton`, [-1]), [value("i32", 20)]);
-
-// ./test/core/br_table.wast:1096
-assert_return(() => invoke($0, `singleton`, [-100]), [value("i32", 20)]);
-
-// ./test/core/br_table.wast:1097
-assert_return(() => invoke($0, `singleton`, [-1]), [value("i32", 20)]);
-
-// ./test/core/br_table.wast:1099
-assert_return(() => invoke($0, `singleton-value`, [0]), [value("i32", 32)]);
-
-// ./test/core/br_table.wast:1100
-assert_return(() => invoke($0, `singleton-value`, [1]), [value("i32", 33)]);
-
-// ./test/core/br_table.wast:1101
-assert_return(() => invoke($0, `singleton-value`, [11]), [value("i32", 33)]);
-
-// ./test/core/br_table.wast:1102
-assert_return(() => invoke($0, `singleton-value`, [-1]), [value("i32", 33)]);
-
-// ./test/core/br_table.wast:1103
-assert_return(() => invoke($0, `singleton-value`, [-100]), [value("i32", 33)]);
-
-// ./test/core/br_table.wast:1104
-assert_return(() => invoke($0, `singleton-value`, [-1]), [value("i32", 33)]);
-
-// ./test/core/br_table.wast:1106
-assert_return(() => invoke($0, `multiple`, [0]), [value("i32", 103)]);
-
-// ./test/core/br_table.wast:1107
-assert_return(() => invoke($0, `multiple`, [1]), [value("i32", 102)]);
-
-// ./test/core/br_table.wast:1108
-assert_return(() => invoke($0, `multiple`, [2]), [value("i32", 101)]);
-
-// ./test/core/br_table.wast:1109
-assert_return(() => invoke($0, `multiple`, [3]), [value("i32", 100)]);
-
-// ./test/core/br_table.wast:1110
-assert_return(() => invoke($0, `multiple`, [4]), [value("i32", 104)]);
-
-// ./test/core/br_table.wast:1111
-assert_return(() => invoke($0, `multiple`, [5]), [value("i32", 104)]);
-
-// ./test/core/br_table.wast:1112
-assert_return(() => invoke($0, `multiple`, [6]), [value("i32", 104)]);
-
-// ./test/core/br_table.wast:1113
-assert_return(() => invoke($0, `multiple`, [10]), [value("i32", 104)]);
-
-// ./test/core/br_table.wast:1114
-assert_return(() => invoke($0, `multiple`, [-1]), [value("i32", 104)]);
-
-// ./test/core/br_table.wast:1115
-assert_return(() => invoke($0, `multiple`, [-1]), [value("i32", 104)]);
-
-// ./test/core/br_table.wast:1117
-assert_return(() => invoke($0, `multiple-value`, [0]), [value("i32", 213)]);
-
-// ./test/core/br_table.wast:1118
-assert_return(() => invoke($0, `multiple-value`, [1]), [value("i32", 212)]);
-
-// ./test/core/br_table.wast:1119
-assert_return(() => invoke($0, `multiple-value`, [2]), [value("i32", 211)]);
-
-// ./test/core/br_table.wast:1120
-assert_return(() => invoke($0, `multiple-value`, [3]), [value("i32", 210)]);
-
-// ./test/core/br_table.wast:1121
-assert_return(() => invoke($0, `multiple-value`, [4]), [value("i32", 214)]);
-
-// ./test/core/br_table.wast:1122
-assert_return(() => invoke($0, `multiple-value`, [5]), [value("i32", 214)]);
-
-// ./test/core/br_table.wast:1123
-assert_return(() => invoke($0, `multiple-value`, [6]), [value("i32", 214)]);
-
-// ./test/core/br_table.wast:1124
-assert_return(() => invoke($0, `multiple-value`, [10]), [value("i32", 214)]);
-
-// ./test/core/br_table.wast:1125
-assert_return(() => invoke($0, `multiple-value`, [-1]), [value("i32", 214)]);
-
-// ./test/core/br_table.wast:1126
-assert_return(() => invoke($0, `multiple-value`, [-1]), [value("i32", 214)]);
-
-// ./test/core/br_table.wast:1128
-assert_return(() => invoke($0, `large`, [0]), [value("i32", 0)]);
-
-// ./test/core/br_table.wast:1129
-assert_return(() => invoke($0, `large`, [1]), [value("i32", 1)]);
-
-// ./test/core/br_table.wast:1130
-assert_return(() => invoke($0, `large`, [100]), [value("i32", 0)]);
-
-// ./test/core/br_table.wast:1131
-assert_return(() => invoke($0, `large`, [101]), [value("i32", 1)]);
-
-// ./test/core/br_table.wast:1132
-assert_return(() => invoke($0, `large`, [10000]), [value("i32", 0)]);
-
-// ./test/core/br_table.wast:1133
-assert_return(() => invoke($0, `large`, [10001]), [value("i32", 1)]);
-
-// ./test/core/br_table.wast:1134
-assert_return(() => invoke($0, `large`, [1000000]), [value("i32", 1)]);
-
-// ./test/core/br_table.wast:1135
-assert_return(() => invoke($0, `large`, [1000001]), [value("i32", 1)]);
-
-// ./test/core/br_table.wast:1137
-assert_return(() => invoke($0, `as-block-first`, []), []);
-
-// ./test/core/br_table.wast:1138
-assert_return(() => invoke($0, `as-block-mid`, []), []);
-
-// ./test/core/br_table.wast:1139
-assert_return(() => invoke($0, `as-block-last`, []), []);
-
-// ./test/core/br_table.wast:1140
-assert_return(() => invoke($0, `as-block-value`, []), [value("i32", 2)]);
-
-// ./test/core/br_table.wast:1142
-assert_return(() => invoke($0, `as-loop-first`, []), [value("i32", 3)]);
-
-// ./test/core/br_table.wast:1143
-assert_return(() => invoke($0, `as-loop-mid`, []), [value("i32", 4)]);
-
-// ./test/core/br_table.wast:1144
-assert_return(() => invoke($0, `as-loop-last`, []), [value("i32", 5)]);
-
-// ./test/core/br_table.wast:1146
-assert_return(() => invoke($0, `as-br-value`, []), [value("i32", 9)]);
-
-// ./test/core/br_table.wast:1148
-assert_return(() => invoke($0, `as-br_if-cond`, []), []);
-
-// ./test/core/br_table.wast:1149
-assert_return(() => invoke($0, `as-br_if-value`, []), [value("i32", 8)]);
-
-// ./test/core/br_table.wast:1150
-assert_return(() => invoke($0, `as-br_if-value-cond`, []), [value("i32", 9)]);
-
-// ./test/core/br_table.wast:1152
-assert_return(() => invoke($0, `as-br_table-index`, []), []);
-
-// ./test/core/br_table.wast:1153
-assert_return(() => invoke($0, `as-br_table-value`, []), [value("i32", 10)]);
-
-// ./test/core/br_table.wast:1154
-assert_return(() => invoke($0, `as-br_table-value-index`, []), [value("i32", 11)]);
-
-// ./test/core/br_table.wast:1156
-assert_return(() => invoke($0, `as-return-value`, []), [value("i64", 7n)]);
-
-// ./test/core/br_table.wast:1158
-assert_return(() => invoke($0, `as-if-cond`, []), [value("i32", 2)]);
-
-// ./test/core/br_table.wast:1159
-assert_return(() => invoke($0, `as-if-then`, [1, 6]), [value("i32", 3)]);
-
-// ./test/core/br_table.wast:1160
-assert_return(() => invoke($0, `as-if-then`, [0, 6]), [value("i32", 6)]);
-
-// ./test/core/br_table.wast:1161
-assert_return(() => invoke($0, `as-if-else`, [0, 6]), [value("i32", 4)]);
-
-// ./test/core/br_table.wast:1162
-assert_return(() => invoke($0, `as-if-else`, [1, 6]), [value("i32", 6)]);
-
-// ./test/core/br_table.wast:1164
-assert_return(() => invoke($0, `as-select-first`, [0, 6]), [value("i32", 5)]);
-
-// ./test/core/br_table.wast:1165
-assert_return(() => invoke($0, `as-select-first`, [1, 6]), [value("i32", 5)]);
-
-// ./test/core/br_table.wast:1166
-assert_return(() => invoke($0, `as-select-second`, [0, 6]), [value("i32", 6)]);
-
-// ./test/core/br_table.wast:1167
-assert_return(() => invoke($0, `as-select-second`, [1, 6]), [value("i32", 6)]);
-
-// ./test/core/br_table.wast:1168
-assert_return(() => invoke($0, `as-select-cond`, []), [value("i32", 7)]);
-
-// ./test/core/br_table.wast:1170
-assert_return(() => invoke($0, `as-call-first`, []), [value("i32", 12)]);
-
-// ./test/core/br_table.wast:1171
-assert_return(() => invoke($0, `as-call-mid`, []), [value("i32", 13)]);
-
-// ./test/core/br_table.wast:1172
-assert_return(() => invoke($0, `as-call-last`, []), [value("i32", 14)]);
-
-// ./test/core/br_table.wast:1174
-assert_return(() => invoke($0, `as-call_indirect-first`, []), [value("i32", 20)]);
-
-// ./test/core/br_table.wast:1175
-assert_return(() => invoke($0, `as-call_indirect-mid`, []), [value("i32", 21)]);
-
-// ./test/core/br_table.wast:1176
-assert_return(() => invoke($0, `as-call_indirect-last`, []), [value("i32", 22)]);
-
-// ./test/core/br_table.wast:1177
-assert_return(() => invoke($0, `as-call_indirect-func`, []), [value("i32", 23)]);
-
-// ./test/core/br_table.wast:1179
-assert_return(() => invoke($0, `as-local.set-value`, []), [value("i32", 17)]);
-
-// ./test/core/br_table.wast:1180
-assert_return(() => invoke($0, `as-local.tee-value`, []), [value("i32", 1)]);
-
-// ./test/core/br_table.wast:1181
-assert_return(() => invoke($0, `as-global.set-value`, []), [value("i32", 1)]);
-
-// ./test/core/br_table.wast:1183
-assert_return(() => invoke($0, `as-load-address`, []), [value("f32", 1.7)]);
-
-// ./test/core/br_table.wast:1184
-assert_return(() => invoke($0, `as-loadN-address`, []), [value("i64", 30n)]);
-
-// ./test/core/br_table.wast:1186
-assert_return(() => invoke($0, `as-store-address`, []), [value("i32", 30)]);
-
-// ./test/core/br_table.wast:1187
-assert_return(() => invoke($0, `as-store-value`, []), [value("i32", 31)]);
-
-// ./test/core/br_table.wast:1188
-assert_return(() => invoke($0, `as-storeN-address`, []), [value("i32", 32)]);
-
-// ./test/core/br_table.wast:1189
-assert_return(() => invoke($0, `as-storeN-value`, []), [value("i32", 33)]);
-
-// ./test/core/br_table.wast:1191
-assert_return(() => invoke($0, `as-unary-operand`, []), [value("f32", 3.4)]);
-
-// ./test/core/br_table.wast:1193
-assert_return(() => invoke($0, `as-binary-left`, []), [value("i32", 3)]);
-
-// ./test/core/br_table.wast:1194
-assert_return(() => invoke($0, `as-binary-right`, []), [value("i64", 45n)]);
-
-// ./test/core/br_table.wast:1196
-assert_return(() => invoke($0, `as-test-operand`, []), [value("i32", 44)]);
-
-// ./test/core/br_table.wast:1198
-assert_return(() => invoke($0, `as-compare-left`, []), [value("i32", 43)]);
-
-// ./test/core/br_table.wast:1199
-assert_return(() => invoke($0, `as-compare-right`, []), [value("i32", 42)]);
-
-// ./test/core/br_table.wast:1201
-assert_return(() => invoke($0, `as-convert-operand`, []), [value("i32", 41)]);
-
-// ./test/core/br_table.wast:1203
-assert_return(() => invoke($0, `as-memory.grow-size`, []), [value("i32", 40)]);
-
-// ./test/core/br_table.wast:1205
-assert_return(() => invoke($0, `nested-block-value`, [0]), [value("i32", 19)]);
-
-// ./test/core/br_table.wast:1206
-assert_return(() => invoke($0, `nested-block-value`, [1]), [value("i32", 17)]);
-
-// ./test/core/br_table.wast:1207
-assert_return(() => invoke($0, `nested-block-value`, [2]), [value("i32", 16)]);
-
-// ./test/core/br_table.wast:1208
-assert_return(() => invoke($0, `nested-block-value`, [10]), [value("i32", 16)]);
-
-// ./test/core/br_table.wast:1209
-assert_return(() => invoke($0, `nested-block-value`, [-1]), [value("i32", 16)]);
-
-// ./test/core/br_table.wast:1210
-assert_return(() => invoke($0, `nested-block-value`, [100000]), [value("i32", 16)]);
-
-// ./test/core/br_table.wast:1212
-assert_return(() => invoke($0, `nested-br-value`, [0]), [value("i32", 8)]);
-
-// ./test/core/br_table.wast:1213
-assert_return(() => invoke($0, `nested-br-value`, [1]), [value("i32", 9)]);
-
-// ./test/core/br_table.wast:1214
-assert_return(() => invoke($0, `nested-br-value`, [2]), [value("i32", 17)]);
-
-// ./test/core/br_table.wast:1215
-assert_return(() => invoke($0, `nested-br-value`, [11]), [value("i32", 17)]);
-
-// ./test/core/br_table.wast:1216
-assert_return(() => invoke($0, `nested-br-value`, [-4]), [value("i32", 17)]);
-
-// ./test/core/br_table.wast:1217
-assert_return(() => invoke($0, `nested-br-value`, [10213210]), [value("i32", 17)]);
-
-// ./test/core/br_table.wast:1219
-assert_return(() => invoke($0, `nested-br_if-value`, [0]), [value("i32", 17)]);
-
-// ./test/core/br_table.wast:1220
-assert_return(() => invoke($0, `nested-br_if-value`, [1]), [value("i32", 9)]);
-
-// ./test/core/br_table.wast:1221
-assert_return(() => invoke($0, `nested-br_if-value`, [2]), [value("i32", 8)]);
-
-// ./test/core/br_table.wast:1222
-assert_return(() => invoke($0, `nested-br_if-value`, [9]), [value("i32", 8)]);
-
-// ./test/core/br_table.wast:1223
-assert_return(() => invoke($0, `nested-br_if-value`, [-9]), [value("i32", 8)]);
-
-// ./test/core/br_table.wast:1224
-assert_return(() => invoke($0, `nested-br_if-value`, [999999]), [value("i32", 8)]);
-
-// ./test/core/br_table.wast:1226
-assert_return(() => invoke($0, `nested-br_if-value-cond`, [0]), [value("i32", 9)]);
-
-// ./test/core/br_table.wast:1227
-assert_return(() => invoke($0, `nested-br_if-value-cond`, [1]), [value("i32", 8)]);
-
-// ./test/core/br_table.wast:1228
-assert_return(() => invoke($0, `nested-br_if-value-cond`, [2]), [value("i32", 9)]);
-
-// ./test/core/br_table.wast:1229
-assert_return(() => invoke($0, `nested-br_if-value-cond`, [3]), [value("i32", 9)]);
-
-// ./test/core/br_table.wast:1230
-assert_return(() => invoke($0, `nested-br_if-value-cond`, [-1000000]), [value("i32", 9)]);
-
-// ./test/core/br_table.wast:1231
-assert_return(() => invoke($0, `nested-br_if-value-cond`, [9423975]), [value("i32", 9)]);
-
-// ./test/core/br_table.wast:1233
-assert_return(() => invoke($0, `nested-br_table-value`, [0]), [value("i32", 17)]);
-
-// ./test/core/br_table.wast:1234
-assert_return(() => invoke($0, `nested-br_table-value`, [1]), [value("i32", 9)]);
-
-// ./test/core/br_table.wast:1235
-assert_return(() => invoke($0, `nested-br_table-value`, [2]), [value("i32", 8)]);
-
-// ./test/core/br_table.wast:1236
-assert_return(() => invoke($0, `nested-br_table-value`, [9]), [value("i32", 8)]);
-
-// ./test/core/br_table.wast:1237
-assert_return(() => invoke($0, `nested-br_table-value`, [-9]), [value("i32", 8)]);
-
-// ./test/core/br_table.wast:1238
-assert_return(() => invoke($0, `nested-br_table-value`, [999999]), [value("i32", 8)]);
-
-// ./test/core/br_table.wast:1240
-assert_return(() => invoke($0, `nested-br_table-value-index`, [0]), [value("i32", 9)]);
-
-// ./test/core/br_table.wast:1241
-assert_return(() => invoke($0, `nested-br_table-value-index`, [1]), [value("i32", 8)]);
-
-// ./test/core/br_table.wast:1242
-assert_return(() => invoke($0, `nested-br_table-value-index`, [2]), [value("i32", 9)]);
-
-// ./test/core/br_table.wast:1243
-assert_return(() => invoke($0, `nested-br_table-value-index`, [3]), [value("i32", 9)]);
-
-// ./test/core/br_table.wast:1244
-assert_return(() => invoke($0, `nested-br_table-value-index`, [-1000000]), [value("i32", 9)]);
-
-// ./test/core/br_table.wast:1245
-assert_return(() => invoke($0, `nested-br_table-value-index`, [9423975]), [value("i32", 9)]);
-
-// ./test/core/br_table.wast:1247
-assert_return(() => invoke($0, `nested-br_table-loop-block`, [1]), [value("i32", 3)]);
-
-// ./test/core/br_table.wast:1249
-assert_return(() => invoke($0, `meet-externref`, [0, externref(1)]), [new ExternRefResult(1)]);
-
-// ./test/core/br_table.wast:1250
-assert_return(() => invoke($0, `meet-externref`, [1, externref(1)]), [new ExternRefResult(1)]);
-
-// ./test/core/br_table.wast:1251
-assert_return(() => invoke($0, `meet-externref`, [2, externref(1)]), [new ExternRefResult(1)]);
-
-// ./test/core/br_table.wast:1253
-assert_return(() => invoke($0, `meet-funcref-1`, [0]), [new RefWithType('funcref')]);
-
-// ./test/core/br_table.wast:1254
-assert_return(() => invoke($0, `meet-funcref-1`, [1]), [new RefWithType('funcref')]);
-
-// ./test/core/br_table.wast:1255
-assert_return(() => invoke($0, `meet-funcref-1`, [2]), [new RefWithType('funcref')]);
-
-// ./test/core/br_table.wast:1256
-assert_return(() => invoke($0, `meet-funcref-2`, [0]), [new RefWithType('funcref')]);
-
-// ./test/core/br_table.wast:1257
-assert_return(() => invoke($0, `meet-funcref-2`, [1]), [new RefWithType('funcref')]);
-
-// ./test/core/br_table.wast:1258
-assert_return(() => invoke($0, `meet-funcref-2`, [2]), [new RefWithType('funcref')]);
-
-// ./test/core/br_table.wast:1259
-assert_return(() => invoke($0, `meet-funcref-3`, [0]), [new RefWithType('funcref')]);
-
 // ./test/core/br_table.wast:1260
-assert_return(() => invoke($0, `meet-funcref-3`, [1]), [new RefWithType('funcref')]);
+assert_return(() => invoke($0, `empty`, [-1]), [value("i32", 22)]);
 
 // ./test/core/br_table.wast:1261
-assert_return(() => invoke($0, `meet-funcref-3`, [2]), [new RefWithType('funcref')]);
+assert_return(() => invoke($0, `empty`, [-100]), [value("i32", 22)]);
 
 // ./test/core/br_table.wast:1262
-assert_return(() => invoke($0, `meet-funcref-4`, [0]), [new RefWithType('funcref')]);
-
-// ./test/core/br_table.wast:1263
-assert_return(() => invoke($0, `meet-funcref-4`, [1]), [new RefWithType('funcref')]);
+assert_return(() => invoke($0, `empty`, [-1]), [value("i32", 22)]);
 
 // ./test/core/br_table.wast:1264
-assert_return(() => invoke($0, `meet-funcref-4`, [2]), [new RefWithType('funcref')]);
+assert_return(() => invoke($0, `empty-value`, [0]), [value("i32", 33)]);
+
+// ./test/core/br_table.wast:1265
+assert_return(() => invoke($0, `empty-value`, [1]), [value("i32", 33)]);
 
 // ./test/core/br_table.wast:1266
+assert_return(() => invoke($0, `empty-value`, [11]), [value("i32", 33)]);
+
+// ./test/core/br_table.wast:1267
+assert_return(() => invoke($0, `empty-value`, [-1]), [value("i32", 33)]);
+
+// ./test/core/br_table.wast:1268
+assert_return(() => invoke($0, `empty-value`, [-100]), [value("i32", 33)]);
+
+// ./test/core/br_table.wast:1269
+assert_return(() => invoke($0, `empty-value`, [-1]), [value("i32", 33)]);
+
+// ./test/core/br_table.wast:1271
+assert_return(() => invoke($0, `singleton`, [0]), [value("i32", 22)]);
+
+// ./test/core/br_table.wast:1272
+assert_return(() => invoke($0, `singleton`, [1]), [value("i32", 20)]);
+
+// ./test/core/br_table.wast:1273
+assert_return(() => invoke($0, `singleton`, [11]), [value("i32", 20)]);
+
+// ./test/core/br_table.wast:1274
+assert_return(() => invoke($0, `singleton`, [-1]), [value("i32", 20)]);
+
+// ./test/core/br_table.wast:1275
+assert_return(() => invoke($0, `singleton`, [-100]), [value("i32", 20)]);
+
+// ./test/core/br_table.wast:1276
+assert_return(() => invoke($0, `singleton`, [-1]), [value("i32", 20)]);
+
+// ./test/core/br_table.wast:1278
+assert_return(() => invoke($0, `singleton-value`, [0]), [value("i32", 32)]);
+
+// ./test/core/br_table.wast:1279
+assert_return(() => invoke($0, `singleton-value`, [1]), [value("i32", 33)]);
+
+// ./test/core/br_table.wast:1280
+assert_return(() => invoke($0, `singleton-value`, [11]), [value("i32", 33)]);
+
+// ./test/core/br_table.wast:1281
+assert_return(() => invoke($0, `singleton-value`, [-1]), [value("i32", 33)]);
+
+// ./test/core/br_table.wast:1282
+assert_return(() => invoke($0, `singleton-value`, [-100]), [value("i32", 33)]);
+
+// ./test/core/br_table.wast:1283
+assert_return(() => invoke($0, `singleton-value`, [-1]), [value("i32", 33)]);
+
+// ./test/core/br_table.wast:1285
+assert_return(() => invoke($0, `multiple`, [0]), [value("i32", 103)]);
+
+// ./test/core/br_table.wast:1286
+assert_return(() => invoke($0, `multiple`, [1]), [value("i32", 102)]);
+
+// ./test/core/br_table.wast:1287
+assert_return(() => invoke($0, `multiple`, [2]), [value("i32", 101)]);
+
+// ./test/core/br_table.wast:1288
+assert_return(() => invoke($0, `multiple`, [3]), [value("i32", 100)]);
+
+// ./test/core/br_table.wast:1289
+assert_return(() => invoke($0, `multiple`, [4]), [value("i32", 104)]);
+
+// ./test/core/br_table.wast:1290
+assert_return(() => invoke($0, `multiple`, [5]), [value("i32", 104)]);
+
+// ./test/core/br_table.wast:1291
+assert_return(() => invoke($0, `multiple`, [6]), [value("i32", 104)]);
+
+// ./test/core/br_table.wast:1292
+assert_return(() => invoke($0, `multiple`, [10]), [value("i32", 104)]);
+
+// ./test/core/br_table.wast:1293
+assert_return(() => invoke($0, `multiple`, [-1]), [value("i32", 104)]);
+
+// ./test/core/br_table.wast:1294
+assert_return(() => invoke($0, `multiple`, [-1]), [value("i32", 104)]);
+
+// ./test/core/br_table.wast:1296
+assert_return(() => invoke($0, `multiple-value`, [0]), [value("i32", 213)]);
+
+// ./test/core/br_table.wast:1297
+assert_return(() => invoke($0, `multiple-value`, [1]), [value("i32", 212)]);
+
+// ./test/core/br_table.wast:1298
+assert_return(() => invoke($0, `multiple-value`, [2]), [value("i32", 211)]);
+
+// ./test/core/br_table.wast:1299
+assert_return(() => invoke($0, `multiple-value`, [3]), [value("i32", 210)]);
+
+// ./test/core/br_table.wast:1300
+assert_return(() => invoke($0, `multiple-value`, [4]), [value("i32", 214)]);
+
+// ./test/core/br_table.wast:1301
+assert_return(() => invoke($0, `multiple-value`, [5]), [value("i32", 214)]);
+
+// ./test/core/br_table.wast:1302
+assert_return(() => invoke($0, `multiple-value`, [6]), [value("i32", 214)]);
+
+// ./test/core/br_table.wast:1303
+assert_return(() => invoke($0, `multiple-value`, [10]), [value("i32", 214)]);
+
+// ./test/core/br_table.wast:1304
+assert_return(() => invoke($0, `multiple-value`, [-1]), [value("i32", 214)]);
+
+// ./test/core/br_table.wast:1305
+assert_return(() => invoke($0, `multiple-value`, [-1]), [value("i32", 214)]);
+
+// ./test/core/br_table.wast:1307
+assert_return(() => invoke($0, `large`, [0]), [value("i32", 0)]);
+
+// ./test/core/br_table.wast:1308
+assert_return(() => invoke($0, `large`, [1]), [value("i32", 1)]);
+
+// ./test/core/br_table.wast:1309
+assert_return(() => invoke($0, `large`, [100]), [value("i32", 0)]);
+
+// ./test/core/br_table.wast:1310
+assert_return(() => invoke($0, `large`, [101]), [value("i32", 1)]);
+
+// ./test/core/br_table.wast:1311
+assert_return(() => invoke($0, `large`, [10000]), [value("i32", 0)]);
+
+// ./test/core/br_table.wast:1312
+assert_return(() => invoke($0, `large`, [10001]), [value("i32", 1)]);
+
+// ./test/core/br_table.wast:1313
+assert_return(() => invoke($0, `large`, [1000000]), [value("i32", 1)]);
+
+// ./test/core/br_table.wast:1314
+assert_return(() => invoke($0, `large`, [1000001]), [value("i32", 1)]);
+
+// ./test/core/br_table.wast:1316
+assert_return(() => invoke($0, `as-block-first`, []), []);
+
+// ./test/core/br_table.wast:1317
+assert_return(() => invoke($0, `as-block-mid`, []), []);
+
+// ./test/core/br_table.wast:1318
+assert_return(() => invoke($0, `as-block-last`, []), []);
+
+// ./test/core/br_table.wast:1319
+assert_return(() => invoke($0, `as-block-value`, []), [value("i32", 2)]);
+
+// ./test/core/br_table.wast:1321
+assert_return(() => invoke($0, `as-loop-first`, []), [value("i32", 3)]);
+
+// ./test/core/br_table.wast:1322
+assert_return(() => invoke($0, `as-loop-mid`, []), [value("i32", 4)]);
+
+// ./test/core/br_table.wast:1323
+assert_return(() => invoke($0, `as-loop-last`, []), [value("i32", 5)]);
+
+// ./test/core/br_table.wast:1325
+assert_return(() => invoke($0, `as-br-value`, []), [value("i32", 9)]);
+
+// ./test/core/br_table.wast:1327
+assert_return(() => invoke($0, `as-br_if-cond`, []), []);
+
+// ./test/core/br_table.wast:1328
+assert_return(() => invoke($0, `as-br_if-value`, []), [value("i32", 8)]);
+
+// ./test/core/br_table.wast:1329
+assert_return(() => invoke($0, `as-br_if-value-cond`, []), [value("i32", 9)]);
+
+// ./test/core/br_table.wast:1331
+assert_return(() => invoke($0, `as-br_table-index`, []), []);
+
+// ./test/core/br_table.wast:1332
+assert_return(() => invoke($0, `as-br_table-value`, []), [value("i32", 10)]);
+
+// ./test/core/br_table.wast:1333
+assert_return(() => invoke($0, `as-br_table-value-index`, []), [value("i32", 11)]);
+
+// ./test/core/br_table.wast:1335
+assert_return(() => invoke($0, `as-return-value`, []), [value("i64", 7n)]);
+
+// ./test/core/br_table.wast:1337
+assert_return(() => invoke($0, `as-if-cond`, []), [value("i32", 2)]);
+
+// ./test/core/br_table.wast:1338
+assert_return(() => invoke($0, `as-if-then`, [1, 6]), [value("i32", 3)]);
+
+// ./test/core/br_table.wast:1339
+assert_return(() => invoke($0, `as-if-then`, [0, 6]), [value("i32", 6)]);
+
+// ./test/core/br_table.wast:1340
+assert_return(() => invoke($0, `as-if-else`, [0, 6]), [value("i32", 4)]);
+
+// ./test/core/br_table.wast:1341
+assert_return(() => invoke($0, `as-if-else`, [1, 6]), [value("i32", 6)]);
+
+// ./test/core/br_table.wast:1343
+assert_return(() => invoke($0, `as-select-first`, [0, 6]), [value("i32", 5)]);
+
+// ./test/core/br_table.wast:1344
+assert_return(() => invoke($0, `as-select-first`, [1, 6]), [value("i32", 5)]);
+
+// ./test/core/br_table.wast:1345
+assert_return(() => invoke($0, `as-select-second`, [0, 6]), [value("i32", 6)]);
+
+// ./test/core/br_table.wast:1346
+assert_return(() => invoke($0, `as-select-second`, [1, 6]), [value("i32", 6)]);
+
+// ./test/core/br_table.wast:1347
+assert_return(() => invoke($0, `as-select-cond`, []), [value("i32", 7)]);
+
+// ./test/core/br_table.wast:1349
+assert_return(() => invoke($0, `as-call-first`, []), [value("i32", 12)]);
+
+// ./test/core/br_table.wast:1350
+assert_return(() => invoke($0, `as-call-mid`, []), [value("i32", 13)]);
+
+// ./test/core/br_table.wast:1351
+assert_return(() => invoke($0, `as-call-last`, []), [value("i32", 14)]);
+
+// ./test/core/br_table.wast:1353
+assert_return(() => invoke($0, `as-call_indirect-first`, []), [value("i32", 20)]);
+
+// ./test/core/br_table.wast:1354
+assert_return(() => invoke($0, `as-call_indirect-mid`, []), [value("i32", 21)]);
+
+// ./test/core/br_table.wast:1355
+assert_return(() => invoke($0, `as-call_indirect-last`, []), [value("i32", 22)]);
+
+// ./test/core/br_table.wast:1356
+assert_return(() => invoke($0, `as-call_indirect-func`, []), [value("i32", 23)]);
+
+// ./test/core/br_table.wast:1358
+assert_return(() => invoke($0, `as-local.set-value`, []), [value("i32", 17)]);
+
+// ./test/core/br_table.wast:1359
+assert_return(() => invoke($0, `as-local.tee-value`, []), [value("i32", 1)]);
+
+// ./test/core/br_table.wast:1360
+assert_return(() => invoke($0, `as-global.set-value`, []), [value("i32", 1)]);
+
+// ./test/core/br_table.wast:1362
+assert_return(() => invoke($0, `as-load-address`, []), [value("f32", 1.7)]);
+
+// ./test/core/br_table.wast:1363
+assert_return(() => invoke($0, `as-loadN-address`, []), [value("i64", 30n)]);
+
+// ./test/core/br_table.wast:1365
+assert_return(() => invoke($0, `as-store-address`, []), [value("i32", 30)]);
+
+// ./test/core/br_table.wast:1366
+assert_return(() => invoke($0, `as-store-value`, []), [value("i32", 31)]);
+
+// ./test/core/br_table.wast:1367
+assert_return(() => invoke($0, `as-storeN-address`, []), [value("i32", 32)]);
+
+// ./test/core/br_table.wast:1368
+assert_return(() => invoke($0, `as-storeN-value`, []), [value("i32", 33)]);
+
+// ./test/core/br_table.wast:1370
+assert_return(() => invoke($0, `as-unary-operand`, []), [value("f32", 3.4)]);
+
+// ./test/core/br_table.wast:1372
+assert_return(() => invoke($0, `as-binary-left`, []), [value("i32", 3)]);
+
+// ./test/core/br_table.wast:1373
+assert_return(() => invoke($0, `as-binary-right`, []), [value("i64", 45n)]);
+
+// ./test/core/br_table.wast:1375
+assert_return(() => invoke($0, `as-test-operand`, []), [value("i32", 44)]);
+
+// ./test/core/br_table.wast:1377
+assert_return(() => invoke($0, `as-compare-left`, []), [value("i32", 43)]);
+
+// ./test/core/br_table.wast:1378
+assert_return(() => invoke($0, `as-compare-right`, []), [value("i32", 42)]);
+
+// ./test/core/br_table.wast:1380
+assert_return(() => invoke($0, `as-convert-operand`, []), [value("i32", 41)]);
+
+// ./test/core/br_table.wast:1382
+assert_return(() => invoke($0, `as-memory.grow-size`, []), [value("i32", 40)]);
+
+// ./test/core/br_table.wast:1384
+assert_return(() => invoke($0, `nested-block-value`, [0]), [value("i32", 19)]);
+
+// ./test/core/br_table.wast:1385
+assert_return(() => invoke($0, `nested-block-value`, [1]), [value("i32", 17)]);
+
+// ./test/core/br_table.wast:1386
+assert_return(() => invoke($0, `nested-block-value`, [2]), [value("i32", 16)]);
+
+// ./test/core/br_table.wast:1387
+assert_return(() => invoke($0, `nested-block-value`, [10]), [value("i32", 16)]);
+
+// ./test/core/br_table.wast:1388
+assert_return(() => invoke($0, `nested-block-value`, [-1]), [value("i32", 16)]);
+
+// ./test/core/br_table.wast:1389
+assert_return(() => invoke($0, `nested-block-value`, [100000]), [value("i32", 16)]);
+
+// ./test/core/br_table.wast:1391
+assert_return(() => invoke($0, `nested-br-value`, [0]), [value("i32", 8)]);
+
+// ./test/core/br_table.wast:1392
+assert_return(() => invoke($0, `nested-br-value`, [1]), [value("i32", 9)]);
+
+// ./test/core/br_table.wast:1393
+assert_return(() => invoke($0, `nested-br-value`, [2]), [value("i32", 17)]);
+
+// ./test/core/br_table.wast:1394
+assert_return(() => invoke($0, `nested-br-value`, [11]), [value("i32", 17)]);
+
+// ./test/core/br_table.wast:1395
+assert_return(() => invoke($0, `nested-br-value`, [-4]), [value("i32", 17)]);
+
+// ./test/core/br_table.wast:1396
+assert_return(() => invoke($0, `nested-br-value`, [10213210]), [value("i32", 17)]);
+
+// ./test/core/br_table.wast:1398
+assert_return(() => invoke($0, `nested-br_if-value`, [0]), [value("i32", 17)]);
+
+// ./test/core/br_table.wast:1399
+assert_return(() => invoke($0, `nested-br_if-value`, [1]), [value("i32", 9)]);
+
+// ./test/core/br_table.wast:1400
+assert_return(() => invoke($0, `nested-br_if-value`, [2]), [value("i32", 8)]);
+
+// ./test/core/br_table.wast:1401
+assert_return(() => invoke($0, `nested-br_if-value`, [9]), [value("i32", 8)]);
+
+// ./test/core/br_table.wast:1402
+assert_return(() => invoke($0, `nested-br_if-value`, [-9]), [value("i32", 8)]);
+
+// ./test/core/br_table.wast:1403
+assert_return(() => invoke($0, `nested-br_if-value`, [999999]), [value("i32", 8)]);
+
+// ./test/core/br_table.wast:1405
+assert_return(() => invoke($0, `nested-br_if-value-cond`, [0]), [value("i32", 9)]);
+
+// ./test/core/br_table.wast:1406
+assert_return(() => invoke($0, `nested-br_if-value-cond`, [1]), [value("i32", 8)]);
+
+// ./test/core/br_table.wast:1407
+assert_return(() => invoke($0, `nested-br_if-value-cond`, [2]), [value("i32", 9)]);
+
+// ./test/core/br_table.wast:1408
+assert_return(() => invoke($0, `nested-br_if-value-cond`, [3]), [value("i32", 9)]);
+
+// ./test/core/br_table.wast:1409
+assert_return(() => invoke($0, `nested-br_if-value-cond`, [-1000000]), [value("i32", 9)]);
+
+// ./test/core/br_table.wast:1410
+assert_return(() => invoke($0, `nested-br_if-value-cond`, [9423975]), [value("i32", 9)]);
+
+// ./test/core/br_table.wast:1412
+assert_return(() => invoke($0, `nested-br_table-value`, [0]), [value("i32", 17)]);
+
+// ./test/core/br_table.wast:1413
+assert_return(() => invoke($0, `nested-br_table-value`, [1]), [value("i32", 9)]);
+
+// ./test/core/br_table.wast:1414
+assert_return(() => invoke($0, `nested-br_table-value`, [2]), [value("i32", 8)]);
+
+// ./test/core/br_table.wast:1415
+assert_return(() => invoke($0, `nested-br_table-value`, [9]), [value("i32", 8)]);
+
+// ./test/core/br_table.wast:1416
+assert_return(() => invoke($0, `nested-br_table-value`, [-9]), [value("i32", 8)]);
+
+// ./test/core/br_table.wast:1417
+assert_return(() => invoke($0, `nested-br_table-value`, [999999]), [value("i32", 8)]);
+
+// ./test/core/br_table.wast:1419
+assert_return(() => invoke($0, `nested-br_table-value-index`, [0]), [value("i32", 9)]);
+
+// ./test/core/br_table.wast:1420
+assert_return(() => invoke($0, `nested-br_table-value-index`, [1]), [value("i32", 8)]);
+
+// ./test/core/br_table.wast:1421
+assert_return(() => invoke($0, `nested-br_table-value-index`, [2]), [value("i32", 9)]);
+
+// ./test/core/br_table.wast:1422
+assert_return(() => invoke($0, `nested-br_table-value-index`, [3]), [value("i32", 9)]);
+
+// ./test/core/br_table.wast:1423
+assert_return(() => invoke($0, `nested-br_table-value-index`, [-1000000]), [value("i32", 9)]);
+
+// ./test/core/br_table.wast:1424
+assert_return(() => invoke($0, `nested-br_table-value-index`, [9423975]), [value("i32", 9)]);
+
+// ./test/core/br_table.wast:1426
+assert_return(() => invoke($0, `nested-br_table-loop-block`, [1]), [value("i32", 3)]);
+
+// ./test/core/br_table.wast:1428
 assert_invalid(
   () => instantiate(`(module (func \$type-arg-void-vs-num (result i32)
     (block (br_table 0 (i32.const 1)) (i32.const 1))
@@ -1572,7 +1706,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br_table.wast:1273
+// ./test/core/br_table.wast:1435
 assert_invalid(
   () => instantiate(`(module (func \$type-arg-empty-vs-num (result i32)
     (block (br_table 0) (i32.const 1))
@@ -1580,7 +1714,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br_table.wast:1280
+// ./test/core/br_table.wast:1442
 assert_invalid(
   () => instantiate(`(module (func \$type-arg-void-vs-num (result i32)
     (block (result i32) (br_table 0 (nop) (i32.const 1)) (i32.const 1))
@@ -1588,7 +1722,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br_table.wast:1286
+// ./test/core/br_table.wast:1448
 assert_invalid(
   () => instantiate(`(module (func \$type-arg-num-vs-num (result i32)
     (block (result i32)
@@ -1598,7 +1732,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br_table.wast:1294
+// ./test/core/br_table.wast:1456
 assert_invalid(
   () => instantiate(`(module (func \$type-arg-num-vs-arg-num
     (block
@@ -1611,19 +1745,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br_table.wast:1305
-assert_invalid(
-  () => instantiate(`(module (func
-    (block (result i32)
-      (block (result i64)
-        (br_table 0 1 (i32.const 0) (i32.const 0))
-      )
-    )
-  ))`),
-  `type mismatch`,
-);
-
-// ./test/core/br_table.wast:1316
+// ./test/core/br_table.wast:1468
 assert_invalid(
   () => instantiate(`(module (func \$type-index-void-vs-i32
     (block (br_table 0 0 0 (nop)))
@@ -1631,7 +1753,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br_table.wast:1322
+// ./test/core/br_table.wast:1474
 assert_invalid(
   () => instantiate(`(module (func \$type-index-num-vs-i32
     (block (br_table 0 (i64.const 0)))
@@ -1639,7 +1761,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br_table.wast:1328
+// ./test/core/br_table.wast:1480
 assert_invalid(
   () => instantiate(`(module (func \$type-arg-index-void-vs-i32 (result i32)
     (block (result i32) (br_table 0 0 (i32.const 0) (nop)) (i32.const 1))
@@ -1647,7 +1769,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br_table.wast:1334
+// ./test/core/br_table.wast:1486
 assert_invalid(
   () => instantiate(`(module (func \$type-arg-void-vs-num-nested (result i32)
     (block (result i32) (i32.const 0) (block (br_table 1 (i32.const 0))))
@@ -1655,7 +1777,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br_table.wast:1340
+// ./test/core/br_table.wast:1492
 assert_invalid(
   () => instantiate(`(module (func \$type-arg-index-num-vs-i32 (result i32)
     (block (result i32)
@@ -1665,7 +1787,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br_table.wast:1349
+// ./test/core/br_table.wast:1501
 assert_invalid(
   () => instantiate(`(module (func \$type-arg-void-vs-num (result i32)
     (block (br_table 0 (i32.const 1)) (i32.const 1))
@@ -1673,7 +1795,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br_table.wast:1356
+// ./test/core/br_table.wast:1508
 assert_invalid(
   () => instantiate(`(module
     (func \$type-arg-index-empty-in-then
@@ -1687,7 +1809,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br_table.wast:1368
+// ./test/core/br_table.wast:1520
 assert_invalid(
   () => instantiate(`(module
     (func \$type-arg-value-empty-in-then
@@ -1701,7 +1823,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br_table.wast:1380
+// ./test/core/br_table.wast:1532
 assert_invalid(
   () => instantiate(`(module
     (func \$type-arg-index-empty-in-return
@@ -1714,7 +1836,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br_table.wast:1391
+// ./test/core/br_table.wast:1543
 assert_invalid(
   () => instantiate(`(module
     (func \$type-arg-value-empty-in-return
@@ -1727,35 +1849,7 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/br_table.wast:1403
-assert_invalid(
-  () => instantiate(`(module
-    (func (param i32) (result i32)
-      (loop (result i32)
-        (block (result i32)
-          (br_table 0 1 (i32.const 1) (local.get 0))
-        )
-      )
-    )
-  )`),
-  `type mismatch`,
-);
-
-// ./test/core/br_table.wast:1415
-assert_invalid(
-  () => instantiate(`(module
-    (func (param i32) (result i32)
-      (block (result i32)
-        (loop (result i32)
-          (br_table 0 1 (i32.const 1) (local.get 0))
-        )
-      )
-    )
-  )`),
-  `type mismatch`,
-);
-
-// ./test/core/br_table.wast:1429
+// ./test/core/br_table.wast:1556
 assert_invalid(
   () => instantiate(`(module (func \$unbound-label
     (block (br_table 2 1 (i32.const 1)))
@@ -1763,7 +1857,7 @@ assert_invalid(
   `unknown label`,
 );
 
-// ./test/core/br_table.wast:1435
+// ./test/core/br_table.wast:1562
 assert_invalid(
   () => instantiate(`(module (func \$unbound-nested-label
     (block (block (br_table 0 5 (i32.const 1))))
@@ -1771,7 +1865,7 @@ assert_invalid(
   `unknown label`,
 );
 
-// ./test/core/br_table.wast:1441
+// ./test/core/br_table.wast:1568
 assert_invalid(
   () => instantiate(`(module (func \$large-label
     (block (br_table 0 0x10000001 0 (i32.const 1)))
@@ -1779,7 +1873,7 @@ assert_invalid(
   `unknown label`,
 );
 
-// ./test/core/br_table.wast:1448
+// ./test/core/br_table.wast:1575
 assert_invalid(
   () => instantiate(`(module (func \$unbound-label-default
     (block (br_table 1 2 (i32.const 1)))
@@ -1787,7 +1881,7 @@ assert_invalid(
   `unknown label`,
 );
 
-// ./test/core/br_table.wast:1454
+// ./test/core/br_table.wast:1581
 assert_invalid(
   () => instantiate(`(module (func \$unbound-nested-label-default
     (block (block (br_table 0 5 (i32.const 1))))
@@ -1795,7 +1889,7 @@ assert_invalid(
   `unknown label`,
 );
 
-// ./test/core/br_table.wast:1460
+// ./test/core/br_table.wast:1587
 assert_invalid(
   () => instantiate(`(module (func \$large-label-default
     (block (br_table 0 0 0x10000001 (i32.const 1)))

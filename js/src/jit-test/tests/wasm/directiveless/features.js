@@ -50,17 +50,6 @@ let features = {
     status: DISABLED,
     test: () => check(`(tag) (func unreachable resume 0 unreachable)`)
   },
-  "customPageSizes": {
-    status: DISABLED,
-    test: () => check(`(memory 1 1 (pagesize 1))`)
-  },
-  "compactImports": {
-    status: RELEASED,
-    test: () => check(
-      `(import "mod" (item "1" (func)) (item "2" (func)))`,
-      {mod: {"1": () => {}, "2": () => {}}},
-    ),
-  },
   "memoryControl": {
     status: DISABLED,
     test: () => check(`(func unreachable memory.discard unreachable)`)
@@ -73,27 +62,11 @@ let features = {
     status: RELEASED,
     test: () => WebAssembly.promising !== undefined
   },
-  "wideArithmetic": {
-    status: RELEASED,
-    test: () => check(`(func unreachable i64.add128 unreachable)`)
-  },
-  "simd": {
-    status: RELEASED_MAYBE_DISABLED,
-    test: () => check(`(func unreachable i8x16.splat unreachable)`)
-  },
-  "relaxedSimd": {
-    status: RELEASED_MAYBE_DISABLED,
-    test: () => check(`(func unreachable i16x8.relaxed_laneselect unreachable)`)
-  },
-  "threads": {
-    status: RELEASED,
-    test: () => check(`(memory 1 1 shared)`)
-  },
-  "branchHinting": {
-    status: RELEASED,
-    // No way to accurately feature test this
-    test: () => true,
-  },
+  // SIMD and shared memories are supported by the backend, but wasm 1.0
+  // module validation no longer accepts the opcodes/flags that would reach
+  // them, so these can no longer be feature-tested through module content.
+  "simd": { status: IGNORE, test: () => true },
+  "threads": { status: IGNORE, test: () => true },
 
   // Hard to feature test
   "mozIntGemm": { status: IGNORE, test: () => true },

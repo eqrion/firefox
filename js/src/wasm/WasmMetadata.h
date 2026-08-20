@@ -168,7 +168,6 @@ struct CodeMetadata : public ShareableBase<CodeMetadata> {
   bool SHORT_NAME##Enabled() const { return features().SHORT_NAME; }
   JS_FOR_WASM_FEATURES(WASM_FEATURE)
 #undef WASM_FEATURE
-  bool v128RelaxedEnabled() const { return features().relaxedSimd; }
   Shareable sharedMemoryEnabled() const { return features().sharedMemory; }
   bool simdAvailable() const { return features().simd; }
 

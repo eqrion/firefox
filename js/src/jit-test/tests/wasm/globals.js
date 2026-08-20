@@ -45,10 +45,8 @@ testInner('f64', 13.37, 0.1989, x => +x);
 // Basic global shenanigans
 {
     const module = wasmEvalText(`(module
-        ;; -2 * (5 - (-10 + 20)) = 10
-        (global i32 (i32.mul (i32.const -2) (i32.sub (i32.const 5) (i32.add (i32.const -10) (i32.const 20)))))
-        ;; ((1 + 2) - (3 * 4)) = -9
-        (global i64 (i64.sub (i64.add (i64.const 1) (i64.const 2)) (i64.mul (i64.const 3) (i64.const 4))))
+        (global i32 (i32.const 10))
+        (global i64 (i64.const -9))
 
         (func (export "get0") (result i32) global.get 0)
         (func (export "get1") (result i64) global.get 1)
@@ -67,7 +65,6 @@ testInner('f64', 13.37, 0.1989, x => +x);
         (memory (import "env" "memory") 15 15)
         (global $memBase (import "env" "__memory_base") i32)
         (data (offset (global.get $memBase)) "Hello from module 1.")
-        (data (offset (i32.add (global.get $memBase) (i32.const 65536))) "Goodbye from module 1.")
     )`));
     const instance1 = new WebAssembly.Instance(mod1, {
         env: {
@@ -80,7 +77,6 @@ testInner('f64', 13.37, 0.1989, x => +x);
         (memory (import "env" "memory") 15 15)
         (global $memBase (import "env" "__memory_base") i32)
         (data (offset (global.get $memBase)) "Hello from module 2.")
-        (data (offset (i32.add (global.get $memBase) (i32.const 65536))) "Goodbye from module 2.")
     )`));
     const instance2 = new WebAssembly.Instance(mod2, {
         env: {
@@ -89,7 +85,7 @@ testInner('f64', 13.37, 0.1989, x => +x);
         },
     });
 
-    // All four strings should now be present in the memory.
+    // Both strings should now be present in the memory.
 
     function assertStringInMem(mem, str, addr) {
         const bytes = new Uint8Array(mem.buffer).slice(addr, addr + str.length);
@@ -98,9 +94,7 @@ testInner('f64', 13.37, 0.1989, x => +x);
     }
 
     assertStringInMem(mem, "Hello from module 1.", 65536 * 5);
-    assertStringInMem(mem, "Goodbye from module 1.", 65536 * 6);
     assertStringInMem(mem, "Hello from module 2.", 65536 * 10);
-    assertStringInMem(mem, "Goodbye from module 2.", 65536 * 11);
 }
 
 // Semantic errors.

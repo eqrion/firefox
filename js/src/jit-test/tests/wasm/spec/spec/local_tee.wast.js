@@ -751,71 +751,56 @@ assert_invalid(
   `type mismatch`,
 );
 
-// ./test/core/local_tee.wast:598
+// ./test/core/local_tee.wast:601
+assert_invalid(
+  () => instantiate(`(module (func \$unbound-local (local i32 i64) (local.get 3)))`),
+  `unknown local`,
+);
+
+// ./test/core/local_tee.wast:605
+assert_invalid(
+  () => instantiate(`(module (func \$large-local (local i32 i64) (local.get 14324343)))`),
+  `unknown local`,
+);
+
+// ./test/core/local_tee.wast:610
+assert_invalid(
+  () => instantiate(`(module (func \$unbound-param (param i32 i64) (local.get 2)))`),
+  `unknown local`,
+);
+
+// ./test/core/local_tee.wast:614
+assert_invalid(
+  () => instantiate(`(module (func \$large-param (local i32 i64) (local.get 714324343)))`),
+  `unknown local`,
+);
+
+// ./test/core/local_tee.wast:619
+assert_invalid(
+  () => instantiate(`(module (func \$unbound-mixed (param i32) (local i32 i64) (local.get 3)))`),
+  `unknown local`,
+);
+
+// ./test/core/local_tee.wast:623
+assert_invalid(
+  () => instantiate(`(module (func \$large-mixed (param i64) (local i32 i64) (local.get 214324343)))`),
+  `unknown local`,
+);
+
+// ./test/core/local_tee.wast:628
 assert_invalid(
   () => instantiate(`(module (func \$type-mixed-arg-num-vs-num (param f32) (local i32) (local.tee 1 (f32.const 0))))`),
   `type mismatch`,
 );
 
-// ./test/core/local_tee.wast:602
+// ./test/core/local_tee.wast:632
 assert_invalid(
   () => instantiate(`(module (func \$type-mixed-arg-num-vs-num (param i64 i32) (local f32) (local.tee 1 (f32.const 0))))`),
   `type mismatch`,
 );
 
-// ./test/core/local_tee.wast:606
+// ./test/core/local_tee.wast:636
 assert_invalid(
   () => instantiate(`(module (func \$type-mixed-arg-num-vs-num (param i64) (local f64 i64) (local.tee 1 (i64.const 0))))`),
   `type mismatch`,
-);
-
-// ./test/core/local_tee.wast:612
-assert_invalid(
-  () => instantiate(`(module
-    (type \$t (func))
-    (func \$f (param (ref null \$t)))
-    (func
-      (local \$x funcref)
-      (ref.null \$t)
-      (local.tee \$x)  ;; leaves only a funcref on the stack
-      (call \$f)
-    )
-  )`),
-  `type mismatch`,
-);
-
-// ./test/core/local_tee.wast:629
-assert_invalid(
-  () => instantiate(`(module (func \$unbound-local (local i32 i64) (local.tee 3 (i32.const 0)) drop))`),
-  `unknown local`,
-);
-
-// ./test/core/local_tee.wast:633
-assert_invalid(
-  () => instantiate(`(module (func \$large-local (local i32 i64) (local.tee 14324343 (i32.const 0)) drop))`),
-  `unknown local`,
-);
-
-// ./test/core/local_tee.wast:638
-assert_invalid(
-  () => instantiate(`(module (func \$unbound-param (param i32 i64) (local.tee 2 (i32.const 0)) drop))`),
-  `unknown local`,
-);
-
-// ./test/core/local_tee.wast:642
-assert_invalid(
-  () => instantiate(`(module (func \$large-param (param i32 i64) (local.tee 714324343 (i32.const 0)) drop))`),
-  `unknown local`,
-);
-
-// ./test/core/local_tee.wast:647
-assert_invalid(
-  () => instantiate(`(module (func \$unbound-mixed (param i32) (local i32 i64) (local.tee 3 (i32.const 0)) drop))`),
-  `unknown local`,
-);
-
-// ./test/core/local_tee.wast:651
-assert_invalid(
-  () => instantiate(`(module (func \$large-mixed (param i64) (local i32 i64) (local.tee 214324343 (i32.const 0)) drop))`),
-  `unknown local`,
 );

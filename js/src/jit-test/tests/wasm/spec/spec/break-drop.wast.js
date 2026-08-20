@@ -13,31 +13,20 @@
  * limitations under the License.
  */
 
-// ./test/core/memory64/call_indirect64.wast
+// ./test/core/break-drop.wast
 
-// ./test/core/memory64/call_indirect64.wast:3
+// ./test/core/break-drop.wast:1
 let $0 = instantiate(`(module
-  ;; Auxiliary definitions
-  (type \$out-i32 (func (result i32)))
-
-  (func \$const-i32 (type \$out-i32) (i32.const 0x132))
-
-  (table \$t64 i64 funcref
-    (elem \$const-i32)
-  )
-
-  ;; Syntax
-
-  (func
-    (call_indirect \$t64 (i64.const 0))
-  )
-
-  ;; Typing
-
-  (func (export "type-i32-t64") (result i32)
-    (call_indirect \$t64 (type \$out-i32) (i64.const 0))
-  )
+  (func (export "br") (block (br 0)))
+  (func (export "br_if") (block (br_if 0 (i32.const 1))))
+  (func (export "br_table") (block (br_table 0 (i32.const 0))))
 )`);
 
-// ./test/core/memory64/call_indirect64.wast:26
-assert_return(() => invoke($0, `type-i32-t64`, []), [value("i32", 306)]);
+// ./test/core/break-drop.wast:7
+assert_return(() => invoke($0, `br`, []), []);
+
+// ./test/core/break-drop.wast:8
+assert_return(() => invoke($0, `br_if`, []), []);
+
+// ./test/core/break-drop.wast:9
+assert_return(() => invoke($0, `br_table`, []), []);

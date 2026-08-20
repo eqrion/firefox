@@ -343,60 +343,42 @@ assert_return(() => invoke($0, `32_good4`, [65508]), [value("i32", 0)]);
 assert_trap(() => invoke($0, `32_good5`, [65508]), `out of bounds memory access`);
 
 // ./test/core/address.wast:194
-assert_trap(() => invoke($0, `8u_good3`, [-1]), `out of bounds memory access`);
-
-// ./test/core/address.wast:195
-assert_trap(() => invoke($0, `8s_good3`, [-1]), `out of bounds memory access`);
-
-// ./test/core/address.wast:196
-assert_trap(() => invoke($0, `16u_good3`, [-1]), `out of bounds memory access`);
-
-// ./test/core/address.wast:197
-assert_trap(() => invoke($0, `16s_good3`, [-1]), `out of bounds memory access`);
-
-// ./test/core/address.wast:198
-assert_trap(() => invoke($0, `32_good3`, [-1]), `out of bounds memory access`);
-
-// ./test/core/address.wast:199
-assert_trap(() => invoke($0, `32_good3`, [-1]), `out of bounds memory access`);
-
-// ./test/core/address.wast:201
 assert_trap(() => invoke($0, `8u_bad`, [0]), `out of bounds memory access`);
 
-// ./test/core/address.wast:202
+// ./test/core/address.wast:195
 assert_trap(() => invoke($0, `8s_bad`, [0]), `out of bounds memory access`);
 
-// ./test/core/address.wast:203
+// ./test/core/address.wast:196
 assert_trap(() => invoke($0, `16u_bad`, [0]), `out of bounds memory access`);
 
-// ./test/core/address.wast:204
+// ./test/core/address.wast:197
 assert_trap(() => invoke($0, `16s_bad`, [0]), `out of bounds memory access`);
 
-// ./test/core/address.wast:205
+// ./test/core/address.wast:198
 assert_trap(() => invoke($0, `32_bad`, [0]), `out of bounds memory access`);
 
-// ./test/core/address.wast:207
+// ./test/core/address.wast:200
 assert_trap(() => invoke($0, `8u_bad`, [1]), `out of bounds memory access`);
 
-// ./test/core/address.wast:208
+// ./test/core/address.wast:201
 assert_trap(() => invoke($0, `8s_bad`, [1]), `out of bounds memory access`);
 
-// ./test/core/address.wast:209
+// ./test/core/address.wast:202
 assert_trap(() => invoke($0, `16u_bad`, [1]), `out of bounds memory access`);
 
-// ./test/core/address.wast:210
+// ./test/core/address.wast:203
 assert_trap(() => invoke($0, `16s_bad`, [1]), `out of bounds memory access`);
 
-// ./test/core/address.wast:211
+// ./test/core/address.wast:204
 assert_trap(() => invoke($0, `32_bad`, [1]), `out of bounds memory access`);
 
-// ./test/core/address.wast:213
-assert_invalid(
+// ./test/core/address.wast:206
+assert_malformed(
   () => instantiate(`(memory 1) (func (drop (i32.load offset=4294967296 (i32.const 0)))) `),
-  `offset out of range`,
+  `i32 constant`,
 );
 
-// ./test/core/address.wast:223
+// ./test/core/address.wast:216
 let $1 = instantiate(`(module
   (memory 1)
   (data (i32.const 0) "abcdefghijklmnopqrstuvwxyz")
@@ -536,385 +518,364 @@ let $1 = instantiate(`(module
   )
 )`);
 
-// ./test/core/address.wast:362
+// ./test/core/address.wast:355
 assert_return(() => invoke($1, `8u_good1`, [0]), [value("i64", 97n)]);
 
-// ./test/core/address.wast:363
+// ./test/core/address.wast:356
 assert_return(() => invoke($1, `8u_good2`, [0]), [value("i64", 97n)]);
 
-// ./test/core/address.wast:364
+// ./test/core/address.wast:357
 assert_return(() => invoke($1, `8u_good3`, [0]), [value("i64", 98n)]);
 
-// ./test/core/address.wast:365
+// ./test/core/address.wast:358
 assert_return(() => invoke($1, `8u_good4`, [0]), [value("i64", 99n)]);
 
-// ./test/core/address.wast:366
+// ./test/core/address.wast:359
 assert_return(() => invoke($1, `8u_good5`, [0]), [value("i64", 122n)]);
 
-// ./test/core/address.wast:368
+// ./test/core/address.wast:361
 assert_return(() => invoke($1, `8s_good1`, [0]), [value("i64", 97n)]);
 
-// ./test/core/address.wast:369
+// ./test/core/address.wast:362
 assert_return(() => invoke($1, `8s_good2`, [0]), [value("i64", 97n)]);
 
-// ./test/core/address.wast:370
+// ./test/core/address.wast:363
 assert_return(() => invoke($1, `8s_good3`, [0]), [value("i64", 98n)]);
 
-// ./test/core/address.wast:371
+// ./test/core/address.wast:364
 assert_return(() => invoke($1, `8s_good4`, [0]), [value("i64", 99n)]);
 
-// ./test/core/address.wast:372
+// ./test/core/address.wast:365
 assert_return(() => invoke($1, `8s_good5`, [0]), [value("i64", 122n)]);
 
-// ./test/core/address.wast:374
+// ./test/core/address.wast:367
 assert_return(() => invoke($1, `16u_good1`, [0]), [value("i64", 25185n)]);
 
-// ./test/core/address.wast:375
+// ./test/core/address.wast:368
 assert_return(() => invoke($1, `16u_good2`, [0]), [value("i64", 25185n)]);
 
-// ./test/core/address.wast:376
+// ./test/core/address.wast:369
 assert_return(() => invoke($1, `16u_good3`, [0]), [value("i64", 25442n)]);
 
-// ./test/core/address.wast:377
+// ./test/core/address.wast:370
 assert_return(() => invoke($1, `16u_good4`, [0]), [value("i64", 25699n)]);
 
-// ./test/core/address.wast:378
+// ./test/core/address.wast:371
 assert_return(() => invoke($1, `16u_good5`, [0]), [value("i64", 122n)]);
 
-// ./test/core/address.wast:380
+// ./test/core/address.wast:373
 assert_return(() => invoke($1, `16s_good1`, [0]), [value("i64", 25185n)]);
 
-// ./test/core/address.wast:381
+// ./test/core/address.wast:374
 assert_return(() => invoke($1, `16s_good2`, [0]), [value("i64", 25185n)]);
 
-// ./test/core/address.wast:382
+// ./test/core/address.wast:375
 assert_return(() => invoke($1, `16s_good3`, [0]), [value("i64", 25442n)]);
 
-// ./test/core/address.wast:383
+// ./test/core/address.wast:376
 assert_return(() => invoke($1, `16s_good4`, [0]), [value("i64", 25699n)]);
 
-// ./test/core/address.wast:384
+// ./test/core/address.wast:377
 assert_return(() => invoke($1, `16s_good5`, [0]), [value("i64", 122n)]);
 
-// ./test/core/address.wast:386
+// ./test/core/address.wast:379
 assert_return(() => invoke($1, `32u_good1`, [0]), [value("i64", 1684234849n)]);
 
-// ./test/core/address.wast:387
+// ./test/core/address.wast:380
 assert_return(() => invoke($1, `32u_good2`, [0]), [value("i64", 1684234849n)]);
 
-// ./test/core/address.wast:388
+// ./test/core/address.wast:381
 assert_return(() => invoke($1, `32u_good3`, [0]), [value("i64", 1701077858n)]);
 
-// ./test/core/address.wast:389
+// ./test/core/address.wast:382
 assert_return(() => invoke($1, `32u_good4`, [0]), [value("i64", 1717920867n)]);
 
-// ./test/core/address.wast:390
+// ./test/core/address.wast:383
 assert_return(() => invoke($1, `32u_good5`, [0]), [value("i64", 122n)]);
 
-// ./test/core/address.wast:392
+// ./test/core/address.wast:385
 assert_return(() => invoke($1, `32s_good1`, [0]), [value("i64", 1684234849n)]);
 
-// ./test/core/address.wast:393
+// ./test/core/address.wast:386
 assert_return(() => invoke($1, `32s_good2`, [0]), [value("i64", 1684234849n)]);
 
-// ./test/core/address.wast:394
+// ./test/core/address.wast:387
 assert_return(() => invoke($1, `32s_good3`, [0]), [value("i64", 1701077858n)]);
 
-// ./test/core/address.wast:395
+// ./test/core/address.wast:388
 assert_return(() => invoke($1, `32s_good4`, [0]), [value("i64", 1717920867n)]);
 
-// ./test/core/address.wast:396
+// ./test/core/address.wast:389
 assert_return(() => invoke($1, `32s_good5`, [0]), [value("i64", 122n)]);
 
-// ./test/core/address.wast:398
+// ./test/core/address.wast:391
 assert_return(() => invoke($1, `64_good1`, [0]), [value("i64", 7523094288207667809n)]);
 
-// ./test/core/address.wast:399
+// ./test/core/address.wast:392
 assert_return(() => invoke($1, `64_good2`, [0]), [value("i64", 7523094288207667809n)]);
 
-// ./test/core/address.wast:400
+// ./test/core/address.wast:393
 assert_return(() => invoke($1, `64_good3`, [0]), [value("i64", 7595434461045744482n)]);
 
-// ./test/core/address.wast:401
+// ./test/core/address.wast:394
 assert_return(() => invoke($1, `64_good4`, [0]), [value("i64", 7667774633883821155n)]);
 
-// ./test/core/address.wast:402
+// ./test/core/address.wast:395
 assert_return(() => invoke($1, `64_good5`, [0]), [value("i64", 122n)]);
 
-// ./test/core/address.wast:404
+// ./test/core/address.wast:397
 assert_return(() => invoke($1, `8u_good1`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:405
+// ./test/core/address.wast:398
 assert_return(() => invoke($1, `8u_good2`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:406
+// ./test/core/address.wast:399
 assert_return(() => invoke($1, `8u_good3`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:407
+// ./test/core/address.wast:400
 assert_return(() => invoke($1, `8u_good4`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:408
+// ./test/core/address.wast:401
 assert_return(() => invoke($1, `8u_good5`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:410
+// ./test/core/address.wast:403
 assert_return(() => invoke($1, `8s_good1`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:411
+// ./test/core/address.wast:404
 assert_return(() => invoke($1, `8s_good2`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:412
+// ./test/core/address.wast:405
 assert_return(() => invoke($1, `8s_good3`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:413
+// ./test/core/address.wast:406
 assert_return(() => invoke($1, `8s_good4`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:414
+// ./test/core/address.wast:407
 assert_return(() => invoke($1, `8s_good5`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:416
+// ./test/core/address.wast:409
 assert_return(() => invoke($1, `16u_good1`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:417
+// ./test/core/address.wast:410
 assert_return(() => invoke($1, `16u_good2`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:418
+// ./test/core/address.wast:411
 assert_return(() => invoke($1, `16u_good3`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:419
+// ./test/core/address.wast:412
 assert_return(() => invoke($1, `16u_good4`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:420
+// ./test/core/address.wast:413
 assert_return(() => invoke($1, `16u_good5`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:422
+// ./test/core/address.wast:415
 assert_return(() => invoke($1, `16s_good1`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:423
+// ./test/core/address.wast:416
 assert_return(() => invoke($1, `16s_good2`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:424
+// ./test/core/address.wast:417
 assert_return(() => invoke($1, `16s_good3`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:425
+// ./test/core/address.wast:418
 assert_return(() => invoke($1, `16s_good4`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:426
+// ./test/core/address.wast:419
 assert_return(() => invoke($1, `16s_good5`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:428
+// ./test/core/address.wast:421
 assert_return(() => invoke($1, `32u_good1`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:429
+// ./test/core/address.wast:422
 assert_return(() => invoke($1, `32u_good2`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:430
+// ./test/core/address.wast:423
 assert_return(() => invoke($1, `32u_good3`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:431
+// ./test/core/address.wast:424
 assert_return(() => invoke($1, `32u_good4`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:432
+// ./test/core/address.wast:425
 assert_return(() => invoke($1, `32u_good5`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:434
+// ./test/core/address.wast:427
 assert_return(() => invoke($1, `32s_good1`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:435
+// ./test/core/address.wast:428
 assert_return(() => invoke($1, `32s_good2`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:436
+// ./test/core/address.wast:429
 assert_return(() => invoke($1, `32s_good3`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:437
+// ./test/core/address.wast:430
 assert_return(() => invoke($1, `32s_good4`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:438
+// ./test/core/address.wast:431
 assert_return(() => invoke($1, `32s_good5`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:440
+// ./test/core/address.wast:433
 assert_return(() => invoke($1, `64_good1`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:441
+// ./test/core/address.wast:434
 assert_return(() => invoke($1, `64_good2`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:442
+// ./test/core/address.wast:435
 assert_return(() => invoke($1, `64_good3`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:443
+// ./test/core/address.wast:436
 assert_return(() => invoke($1, `64_good4`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:444
+// ./test/core/address.wast:437
 assert_return(() => invoke($1, `64_good5`, [65503]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:446
+// ./test/core/address.wast:439
 assert_return(() => invoke($1, `8u_good1`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:447
+// ./test/core/address.wast:440
 assert_return(() => invoke($1, `8u_good2`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:448
+// ./test/core/address.wast:441
 assert_return(() => invoke($1, `8u_good3`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:449
+// ./test/core/address.wast:442
 assert_return(() => invoke($1, `8u_good4`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:450
+// ./test/core/address.wast:443
 assert_return(() => invoke($1, `8u_good5`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:452
+// ./test/core/address.wast:445
 assert_return(() => invoke($1, `8s_good1`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:453
+// ./test/core/address.wast:446
 assert_return(() => invoke($1, `8s_good2`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:454
+// ./test/core/address.wast:447
 assert_return(() => invoke($1, `8s_good3`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:455
+// ./test/core/address.wast:448
 assert_return(() => invoke($1, `8s_good4`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:456
+// ./test/core/address.wast:449
 assert_return(() => invoke($1, `8s_good5`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:458
+// ./test/core/address.wast:451
 assert_return(() => invoke($1, `16u_good1`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:459
+// ./test/core/address.wast:452
 assert_return(() => invoke($1, `16u_good2`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:460
+// ./test/core/address.wast:453
 assert_return(() => invoke($1, `16u_good3`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:461
+// ./test/core/address.wast:454
 assert_return(() => invoke($1, `16u_good4`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:462
+// ./test/core/address.wast:455
 assert_return(() => invoke($1, `16u_good5`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:464
+// ./test/core/address.wast:457
 assert_return(() => invoke($1, `16s_good1`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:465
+// ./test/core/address.wast:458
 assert_return(() => invoke($1, `16s_good2`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:466
+// ./test/core/address.wast:459
 assert_return(() => invoke($1, `16s_good3`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:467
+// ./test/core/address.wast:460
 assert_return(() => invoke($1, `16s_good4`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:468
+// ./test/core/address.wast:461
 assert_return(() => invoke($1, `16s_good5`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:470
+// ./test/core/address.wast:463
 assert_return(() => invoke($1, `32u_good1`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:471
+// ./test/core/address.wast:464
 assert_return(() => invoke($1, `32u_good2`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:472
+// ./test/core/address.wast:465
 assert_return(() => invoke($1, `32u_good3`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:473
+// ./test/core/address.wast:466
 assert_return(() => invoke($1, `32u_good4`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:474
+// ./test/core/address.wast:467
 assert_return(() => invoke($1, `32u_good5`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:476
+// ./test/core/address.wast:469
 assert_return(() => invoke($1, `32s_good1`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:477
+// ./test/core/address.wast:470
 assert_return(() => invoke($1, `32s_good2`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:478
+// ./test/core/address.wast:471
 assert_return(() => invoke($1, `32s_good3`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:479
+// ./test/core/address.wast:472
 assert_return(() => invoke($1, `32s_good4`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:480
+// ./test/core/address.wast:473
 assert_return(() => invoke($1, `32s_good5`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:482
+// ./test/core/address.wast:475
 assert_return(() => invoke($1, `64_good1`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:483
+// ./test/core/address.wast:476
 assert_return(() => invoke($1, `64_good2`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:484
+// ./test/core/address.wast:477
 assert_return(() => invoke($1, `64_good3`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:485
+// ./test/core/address.wast:478
 assert_return(() => invoke($1, `64_good4`, [65504]), [value("i64", 0n)]);
 
-// ./test/core/address.wast:486
+// ./test/core/address.wast:479
 assert_trap(() => invoke($1, `64_good5`, [65504]), `out of bounds memory access`);
 
-// ./test/core/address.wast:488
-assert_trap(() => invoke($1, `8u_good3`, [-1]), `out of bounds memory access`);
-
-// ./test/core/address.wast:489
-assert_trap(() => invoke($1, `8s_good3`, [-1]), `out of bounds memory access`);
-
-// ./test/core/address.wast:490
-assert_trap(() => invoke($1, `16u_good3`, [-1]), `out of bounds memory access`);
-
-// ./test/core/address.wast:491
-assert_trap(() => invoke($1, `16s_good3`, [-1]), `out of bounds memory access`);
-
-// ./test/core/address.wast:492
-assert_trap(() => invoke($1, `32u_good3`, [-1]), `out of bounds memory access`);
-
-// ./test/core/address.wast:493
-assert_trap(() => invoke($1, `32s_good3`, [-1]), `out of bounds memory access`);
-
-// ./test/core/address.wast:494
-assert_trap(() => invoke($1, `64_good3`, [-1]), `out of bounds memory access`);
-
-// ./test/core/address.wast:496
+// ./test/core/address.wast:481
 assert_trap(() => invoke($1, `8u_bad`, [0]), `out of bounds memory access`);
 
-// ./test/core/address.wast:497
+// ./test/core/address.wast:482
 assert_trap(() => invoke($1, `8s_bad`, [0]), `out of bounds memory access`);
 
-// ./test/core/address.wast:498
+// ./test/core/address.wast:483
 assert_trap(() => invoke($1, `16u_bad`, [0]), `out of bounds memory access`);
 
-// ./test/core/address.wast:499
+// ./test/core/address.wast:484
 assert_trap(() => invoke($1, `16s_bad`, [0]), `out of bounds memory access`);
 
-// ./test/core/address.wast:500
+// ./test/core/address.wast:485
 assert_trap(() => invoke($1, `32u_bad`, [0]), `out of bounds memory access`);
 
-// ./test/core/address.wast:501
+// ./test/core/address.wast:486
 assert_trap(() => invoke($1, `32s_bad`, [0]), `out of bounds memory access`);
 
-// ./test/core/address.wast:502
+// ./test/core/address.wast:487
 assert_trap(() => invoke($1, `64_bad`, [0]), `out of bounds memory access`);
 
-// ./test/core/address.wast:504
+// ./test/core/address.wast:489
 assert_trap(() => invoke($1, `8u_bad`, [1]), `out of bounds memory access`);
 
-// ./test/core/address.wast:505
+// ./test/core/address.wast:490
 assert_trap(() => invoke($1, `8s_bad`, [1]), `out of bounds memory access`);
 
-// ./test/core/address.wast:506
+// ./test/core/address.wast:491
 assert_trap(() => invoke($1, `16u_bad`, [1]), `out of bounds memory access`);
 
-// ./test/core/address.wast:507
+// ./test/core/address.wast:492
 assert_trap(() => invoke($1, `16s_bad`, [1]), `out of bounds memory access`);
 
-// ./test/core/address.wast:508
+// ./test/core/address.wast:493
 assert_trap(() => invoke($1, `32u_bad`, [0]), `out of bounds memory access`);
 
-// ./test/core/address.wast:509
+// ./test/core/address.wast:494
 assert_trap(() => invoke($1, `32s_bad`, [0]), `out of bounds memory access`);
 
-// ./test/core/address.wast:510
+// ./test/core/address.wast:495
 assert_trap(() => invoke($1, `64_bad`, [1]), `out of bounds memory access`);
 
-// ./test/core/address.wast:514
+// ./test/core/address.wast:499
 let $2 = instantiate(`(module
   (memory 1)
   (data (i32.const 0) "\\00\\00\\00\\00\\00\\00\\a0\\7f\\01\\00\\d0\\7f")
@@ -939,64 +900,58 @@ let $2 = instantiate(`(module
   )
 )`);
 
-// ./test/core/address.wast:538
+// ./test/core/address.wast:523
 assert_return(() => invoke($2, `32_good1`, [0]), [value("f32", 0)]);
 
-// ./test/core/address.wast:539
+// ./test/core/address.wast:524
 assert_return(() => invoke($2, `32_good2`, [0]), [value("f32", 0)]);
 
-// ./test/core/address.wast:540
+// ./test/core/address.wast:525
 assert_return(() => invoke($2, `32_good3`, [0]), [value("f32", 0)]);
 
-// ./test/core/address.wast:541
+// ./test/core/address.wast:526
 assert_return(() => invoke($2, `32_good4`, [0]), [value("f32", 0)]);
 
-// ./test/core/address.wast:542
+// ./test/core/address.wast:527
 assert_return(() => invoke($2, `32_good5`, [0]), [bytes("f32", [0x1, 0x0, 0xd0, 0x7f])]);
 
-// ./test/core/address.wast:544
+// ./test/core/address.wast:529
 assert_return(() => invoke($2, `32_good1`, [65524]), [value("f32", 0)]);
 
-// ./test/core/address.wast:545
+// ./test/core/address.wast:530
 assert_return(() => invoke($2, `32_good2`, [65524]), [value("f32", 0)]);
 
-// ./test/core/address.wast:546
+// ./test/core/address.wast:531
 assert_return(() => invoke($2, `32_good3`, [65524]), [value("f32", 0)]);
 
-// ./test/core/address.wast:547
+// ./test/core/address.wast:532
 assert_return(() => invoke($2, `32_good4`, [65524]), [value("f32", 0)]);
 
-// ./test/core/address.wast:548
+// ./test/core/address.wast:533
 assert_return(() => invoke($2, `32_good5`, [65524]), [value("f32", 0)]);
 
-// ./test/core/address.wast:550
+// ./test/core/address.wast:535
 assert_return(() => invoke($2, `32_good1`, [65525]), [value("f32", 0)]);
 
-// ./test/core/address.wast:551
+// ./test/core/address.wast:536
 assert_return(() => invoke($2, `32_good2`, [65525]), [value("f32", 0)]);
 
-// ./test/core/address.wast:552
+// ./test/core/address.wast:537
 assert_return(() => invoke($2, `32_good3`, [65525]), [value("f32", 0)]);
 
-// ./test/core/address.wast:553
+// ./test/core/address.wast:538
 assert_return(() => invoke($2, `32_good4`, [65525]), [value("f32", 0)]);
 
-// ./test/core/address.wast:554
+// ./test/core/address.wast:539
 assert_trap(() => invoke($2, `32_good5`, [65525]), `out of bounds memory access`);
 
-// ./test/core/address.wast:556
-assert_trap(() => invoke($2, `32_good3`, [-1]), `out of bounds memory access`);
-
-// ./test/core/address.wast:557
-assert_trap(() => invoke($2, `32_good3`, [-1]), `out of bounds memory access`);
-
-// ./test/core/address.wast:559
+// ./test/core/address.wast:541
 assert_trap(() => invoke($2, `32_bad`, [0]), `out of bounds memory access`);
 
-// ./test/core/address.wast:560
+// ./test/core/address.wast:542
 assert_trap(() => invoke($2, `32_bad`, [1]), `out of bounds memory access`);
 
-// ./test/core/address.wast:564
+// ./test/core/address.wast:546
 let $3 = instantiate(`(module
   (memory 1)
   (data (i32.const 0) "\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\f4\\7f\\01\\00\\00\\00\\00\\00\\fc\\7f")
@@ -1021,62 +976,56 @@ let $3 = instantiate(`(module
   )
 )`);
 
-// ./test/core/address.wast:588
+// ./test/core/address.wast:570
 assert_return(() => invoke($3, `64_good1`, [0]), [value("f64", 0)]);
 
-// ./test/core/address.wast:589
+// ./test/core/address.wast:571
 assert_return(() => invoke($3, `64_good2`, [0]), [value("f64", 0)]);
 
-// ./test/core/address.wast:590
+// ./test/core/address.wast:572
 assert_return(() => invoke($3, `64_good3`, [0]), [value("f64", 0)]);
 
-// ./test/core/address.wast:591
+// ./test/core/address.wast:573
 assert_return(() => invoke($3, `64_good4`, [0]), [value("f64", 0)]);
 
-// ./test/core/address.wast:592
+// ./test/core/address.wast:574
 assert_return(
   () => invoke($3, `64_good5`, [0]),
   [bytes("f64", [0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0xfc, 0x7f])],
 );
 
-// ./test/core/address.wast:594
+// ./test/core/address.wast:576
 assert_return(() => invoke($3, `64_good1`, [65510]), [value("f64", 0)]);
 
-// ./test/core/address.wast:595
+// ./test/core/address.wast:577
 assert_return(() => invoke($3, `64_good2`, [65510]), [value("f64", 0)]);
 
-// ./test/core/address.wast:596
+// ./test/core/address.wast:578
 assert_return(() => invoke($3, `64_good3`, [65510]), [value("f64", 0)]);
 
-// ./test/core/address.wast:597
+// ./test/core/address.wast:579
 assert_return(() => invoke($3, `64_good4`, [65510]), [value("f64", 0)]);
 
-// ./test/core/address.wast:598
+// ./test/core/address.wast:580
 assert_return(() => invoke($3, `64_good5`, [65510]), [value("f64", 0)]);
 
-// ./test/core/address.wast:600
+// ./test/core/address.wast:582
 assert_return(() => invoke($3, `64_good1`, [65511]), [value("f64", 0)]);
 
-// ./test/core/address.wast:601
+// ./test/core/address.wast:583
 assert_return(() => invoke($3, `64_good2`, [65511]), [value("f64", 0)]);
 
-// ./test/core/address.wast:602
+// ./test/core/address.wast:584
 assert_return(() => invoke($3, `64_good3`, [65511]), [value("f64", 0)]);
 
-// ./test/core/address.wast:603
+// ./test/core/address.wast:585
 assert_return(() => invoke($3, `64_good4`, [65511]), [value("f64", 0)]);
 
-// ./test/core/address.wast:604
+// ./test/core/address.wast:586
 assert_trap(() => invoke($3, `64_good5`, [65511]), `out of bounds memory access`);
 
-// ./test/core/address.wast:606
-assert_trap(() => invoke($3, `64_good3`, [-1]), `out of bounds memory access`);
-
-// ./test/core/address.wast:607
-assert_trap(() => invoke($3, `64_good3`, [-1]), `out of bounds memory access`);
-
-// ./test/core/address.wast:609
+// ./test/core/address.wast:588
 assert_trap(() => invoke($3, `64_bad`, [0]), `out of bounds memory access`);
 
-// ./test/core/address.wast:610
+// ./test/core/address.wast:589
 assert_trap(() => invoke($3, `64_bad`, [1]), `out of bounds memory access`);

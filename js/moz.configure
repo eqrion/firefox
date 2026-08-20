@@ -918,36 +918,6 @@ def wasm_avx(value, wasm_simd_enabled, simulator, target, no_experimental):
 set_config("ENABLE_WASM_AVX", wasm_avx)
 set_define("ENABLE_WASM_AVX", wasm_avx)
 
-# Support for WebAssembly relaxed SIMD
-# =====================================================
-
-
-@depends("--enable-wasm-simd")
-def default_wasm_relaxed_simd(wasm_simd):
-    if wasm_simd:
-        return True
-
-
-option(
-    "--enable-wasm-relaxed-simd",
-    default=default_wasm_relaxed_simd,
-    help="{Enable|Disable} WebAssembly relaxed SIMD",
-)
-
-
-@depends("--enable-wasm-relaxed-simd", "--enable-wasm-simd")
-def wasm_relaxed_simd(value, wasm_simd):
-    if not value:
-        return
-
-    if not wasm_simd:
-        die("relaxed SIMD requires SIMD")
-
-    return True
-
-
-set_config("ENABLE_WASM_RELAXED_SIMD", wasm_relaxed_simd)
-set_define("ENABLE_WASM_RELAXED_SIMD", wasm_relaxed_simd)
 
 # Support for WebAssembly intgemm private intrinsics
 # =====================================================
@@ -1093,25 +1063,6 @@ def gc_concurrent_marking(value, target):
 
 set_config("JS_GC_CONCURRENT_MARKING", gc_concurrent_marking)
 set_define("JS_GC_CONCURRENT_MARKING", gc_concurrent_marking)
-
-
-# Support for WebAssembly compact imports.
-# ===========================
-
-
-option(
-    "--disable-wasm-compact-imports",
-    help="{Enable|Disable} WebAssembly compact import section support",
-)
-
-set_config(
-    "ENABLE_WASM_COMPACT_IMPORTS",
-    depends_if("--enable-wasm-compact-imports")(lambda x: True),
-)
-set_define(
-    "ENABLE_WASM_COMPACT_IMPORTS",
-    depends_if("--enable-wasm-compact-imports")(lambda x: True),
-)
 
 
 # Support for the WebAssembly component model.

@@ -97,43 +97,22 @@ let $0 = instantiate(`(module
     )
     (local.get 1)
   )
-
-  ;; Iterative factorial without locals.
-  (func \$pick0 (param i64) (result i64 i64)
-    (local.get 0) (local.get 0)
-  )
-  (func \$pick1 (param i64 i64) (result i64 i64 i64)
-    (local.get 0) (local.get 1) (local.get 0)
-  )
-  (func (export "fac-ssa") (param i64) (result i64)
-    (i64.const 1) (local.get 0)
-    (loop \$l (param i64 i64) (result i64)
-      (call \$pick1) (call \$pick1) (i64.mul)
-      (call \$pick1) (i64.const 1) (i64.sub)
-      (call \$pick0) (i64.const 0) (i64.gt_u)
-      (br_if \$l)
-      (drop) (return)
-    )
-  )
 )`);
 
-// ./test/core/fac.wast:102
+// ./test/core/fac.wast:84
 assert_return(() => invoke($0, `fac-rec`, [25n]), [value("i64", 7034535277573963776n)]);
 
-// ./test/core/fac.wast:103
+// ./test/core/fac.wast:85
 assert_return(() => invoke($0, `fac-iter`, [25n]), [value("i64", 7034535277573963776n)]);
 
-// ./test/core/fac.wast:104
+// ./test/core/fac.wast:86
 assert_return(() => invoke($0, `fac-rec-named`, [25n]), [value("i64", 7034535277573963776n)]);
 
-// ./test/core/fac.wast:105
+// ./test/core/fac.wast:87
 assert_return(() => invoke($0, `fac-iter-named`, [25n]), [value("i64", 7034535277573963776n)]);
 
-// ./test/core/fac.wast:106
+// ./test/core/fac.wast:88
 assert_return(() => invoke($0, `fac-opt`, [25n]), [value("i64", 7034535277573963776n)]);
 
-// ./test/core/fac.wast:107
-assert_return(() => invoke($0, `fac-ssa`, [25n]), [value("i64", 7034535277573963776n)]);
-
-// ./test/core/fac.wast:109
+// ./test/core/fac.wast:89
 assert_exhaustion(() => invoke($0, `fac-rec`, [1073741824n]), `call stack exhausted`);

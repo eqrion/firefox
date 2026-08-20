@@ -459,11 +459,13 @@ setJitCompilerOption('wasm.fold-offsets', 1);
 
 // Misc syntax for data.
 
-// When memory index is present it must be zero, and the offset must be present too;
-// but it's OK for there to be neither
+// When memory index is present it must be zero, and the offset must be present too.
 new WebAssembly.Module(wasmTextToBinary(`(module (memory 1) (data 0 (i32.const 0) ""))`));
 new WebAssembly.Module(wasmTextToBinary(`(module (memory 1) (data 0 (offset (i32.const 0)) ""))`));
-new WebAssembly.Module(wasmTextToBinary(`(module (memory 1) (data ""))`));
+// A passive data segment (no offset at all) is not part of wasm 1.0.
+assertErrorMessage(() => new WebAssembly.Module(wasmTextToBinary(`(module (memory 1) (data ""))`)),
+                   WebAssembly.CompileError,
+                   /invalid data initializer-kind field/);
 assertErrorMessage(() => new WebAssembly.Module(wasmTextToBinary(`(module (memory 1) (data 0 ""))`)),
                    SyntaxError,
                    /wasm text error/);
@@ -481,26 +483,6 @@ assertErrorMessage(() => new WebAssembly.Module(wasmTextToBinary(`(module (func 
                    nomem);
 
 assertErrorMessage(() => new WebAssembly.Module(wasmTextToBinary(`(module (func (result i32) (memory.grow (i32.const 1))))`)),
-                   WebAssembly.CompileError,
-                   nomem);
-
-assertErrorMessage(() => new WebAssembly.Module(wasmTextToBinary(`
-(module (func (param i32 i32 i32)
-  (memory.copy (local.get 0) (local.get 1) (local.get 2))))`)),
-                   WebAssembly.CompileError,
-                   nomem);
-
-assertErrorMessage(() => new WebAssembly.Module(wasmTextToBinary(`
-(module (func (param i32 i32 i32)
-  (memory.fill (local.get 0) (local.get 1) (local.get 2))))`)),
-                   WebAssembly.CompileError,
-                   nomem);
-
-assertErrorMessage(() => new WebAssembly.Module(wasmTextToBinary(`
-(module
-  (data $d "01234")
-  (func (param i32 i32)
-    (memory.init $d (local.get 0) (local.get 1))))`)),
                    WebAssembly.CompileError,
                    nomem);
 

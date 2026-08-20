@@ -37,11 +37,6 @@
 // 6. [fuzzing] Add the feature to gluesmith/src/lib.rs, if wasm-smith has
 //    support for it.
 
-#ifdef ENABLE_WASM_RELAXED_SIMD
-#  define WASM_RELAXED_SIMD_ENABLED 1
-#else
-#  define WASM_RELAXED_SIMD_ENABLED 0
-#endif
 #ifdef ENABLE_WASM_MEMORY_CONTROL
 #  define WASM_MEMORY_CONTROL_ENABLED 1
 #else
@@ -57,21 +52,6 @@
 #else
 #  define WASM_MOZ_INTGEMM_ENABLED 0
 #endif
-#ifdef ENABLE_WASM_BRANCH_HINTING
-#  define WASM_BRANCH_HINTING_ENABLED 1
-#else
-#  define WASM_BRANCH_HINTING_ENABLED 0
-#endif
-#ifdef ENABLE_WASM_CUSTOM_PAGE_SIZES
-#  define WASM_CUSTOM_PAGE_SIZES_ENABLED 1
-#else
-#  define WASM_CUSTOM_PAGE_SIZES_ENABLED 0
-#endif
-#ifdef ENABLE_WASM_COMPACT_IMPORTS
-#  define WASM_COMPACT_IMPORTS_ENABLED 1
-#else
-#  define WASM_COMPACT_IMPORTS_ENABLED 0
-#endif
 #ifdef ENABLE_WASM_COMPONENTS
 #  define WASM_COMPONENTS_ENABLED 1
 #else
@@ -80,14 +60,6 @@
 
 // clang-format off
 #define JS_FOR_WASM_FEATURES(FEATURE)                                   \
-  FEATURE(                                                              \
-    /* capitalized name   */ RelaxedSimd,                               \
-    /* lower case name    */ relaxedSimd,                               \
-    /* compile predicate  */ WASM_RELAXED_SIMD_ENABLED,                 \
-    /* compiler predicate */ AnyCompilerAvailable(cx),                  \
-    /* flag predicate     */ js::jit::JitSupportsWasmSimd(),            \
-    /* flag force enable  */ false,                                     \
-    /* preference name    */ relaxed_simd)                              \
   FEATURE(                                                              \
     /* capitalized name   */ MemoryControl,                             \
     /* lower case name    */ memoryControl,                             \
@@ -128,38 +100,6 @@
     /* flag predicate     */ true,                                      \
     /* flag force enable  */ false,                                     \
     /* preference name    */ test_serialization)                        \
-  FEATURE(                                                              \
-    /* capitalized name   */ BranchHinting,                             \
-    /* lower case name    */ branchHinting,                             \
-    /* compile predicate  */ WASM_BRANCH_HINTING_ENABLED,               \
-    /* compiler predicate */ true,                                      \
-    /* flag predicate     */ true,                                      \
-    /* flag force enable  */ false,                                     \
-    /* preference name    */ branch_hinting)                            \
-  FEATURE(                                                              \
-    /* capitalized name   */ CustomPageSizes,                           \
-    /* lower case name    */ customPageSizes,                           \
-    /* compile predicate  */ WASM_CUSTOM_PAGE_SIZES_ENABLED,            \
-    /* compiler predicate */ BaselineAvailable(cx),                     \
-    /* flag predicate     */ !IsFuzzingIon(cx),                         \
-    /* flag force enable  */ false,                                     \
-    /* preference name    */ custom_page_sizes)                         \
-  FEATURE(                                                              \
-    /* capitalized name   */ CompactImports,                            \
-    /* lower case name    */ compactImports,                            \
-    /* compile predicate  */ WASM_COMPACT_IMPORTS_ENABLED,              \
-    /* compiler predicate */ AnyCompilerAvailable(cx),                  \
-    /* flag predicate     */ true,                                      \
-    /* flag force enable  */ false,                                     \
-    /* preference name    */ compact_imports)                           \
-  FEATURE(                                                              \
-    /* capitalized name   */ WideArithmetic,                            \
-    /* lower case name    */ wideArithmetic,                            \
-    /* compile predicate  */ 1,                                         \
-    /* compiler predicate */ AnyCompilerAvailable(cx),                  \
-    /* flag predicate     */ true,                                      \
-    /* flag force enable  */ false,                                     \
-    /* preference name    */ wide_arithmetic)                           \
   FEATURE(                                                              \
     /* capitalized name   */ Components,                                \
     /* lower case name    */ components,                                \

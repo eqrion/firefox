@@ -111,60 +111,6 @@ for (let toBuffer of toBufferOpts) {
         { a: { b: () => {}, c: new WebAssembly.Global({ value: "i32", mutable: true }) } },
     );
 
-    // Compact import encodings
-    if (wasmCompactImportsEnabled()) {
-        // Encoding 1: deduplicated module name
-        {
-            wasmEval(
-                moduleWithSections([v2vSigSection, importSection([{ module: "a", items: [
-                    { item: "b", type: externtype({ funcTypeIndex: 0 }) },
-                    { item: "c", type: externtype({ globalType: globalType({ valType: I32Code, mut: true }) }) },
-                ]}])], toBuffer),
-                { a: { b: () => {}, c: new WebAssembly.Global({ value: "i32", mutable: true }) } },
-            );
-
-            // Zero-length sections are acceptable
-            wasmEval(
-                moduleWithSections([v2vSigSection, importSection([{ module: "a", items: []}])], toBuffer),
-                { a: { b: () => {}, c: new WebAssembly.Global({ value: "i32", mutable: true }) } },
-            );
-        }
-
-        // Encoding 2: deduplicated module name and externtype
-        {
-            wasmEval(
-                moduleWithSections([v2vSigSection, importSection([{
-                    module: "a",
-                    type: externtype({ funcTypeIndex: 0 }),
-                    items: ["b", "c"],
-                }])], toBuffer),
-                { a: { b: () => {}, c: () => {} } },
-            );
-
-            // Zero-length sections are acceptable. There should not be any side
-            // effects from parsing the externtype before learning that there are
-            // zero items!
-            wasmEval(
-                moduleWithSections([v2vSigSection, importSection([{
-                    module: "a",
-                    type: externtype({ funcTypeIndex: 0 }),
-                    items: [],
-                }])], toBuffer),
-            );
-            assertErrorMessage(() => wasmEval(
-                moduleWithSections([
-                    v2vSigSection,
-                    importSection([{
-                        module: "a",
-                        type: externtype({ tableType: tableType(FuncRefCode, limits({ min: 0 })) }),
-                        items: [],
-                    }]),
-                    elemSection([{ mode: "active", table: 0, offset: 0, indices: [] }]),
-                ], toBuffer),
-            ), WebAssembly.CompileError, /table index out of range|active elem segment requires a table/);
-        }
-    }
-
     wasmEval(moduleWithSections([
         v2vSigSection,
         importSection([{module:"a", item:"", type: externtype({ funcTypeIndex:0 })}]),
@@ -200,7 +146,7 @@ for (let toBuffer of toBufferOpts) {
     }
 
     wasmEval(moduleWithSections([memorySection0()], toBuffer));
-    wasmEval(moduleWithSections([memorySection2()], toBuffer));
+    assertErrorMessage(() => wasmEval(moduleWithSections([memorySection2()], toBuffer)), CompileError, /too many memories/);
 
     // Test early 'end'
     const bodyMismatch = /(function body length mismatch)|(operators remaining after end of function)/;
@@ -292,9 +238,10 @@ for (let toBuffer of toBufferOpts) {
     for (var bad of [0xff, 1, 0x3f])
         assertErrorMessage(() => wasmEval(moduleWithSections([sigSection([v2vSig]), declSection([0]), bodySection([funcBody({locals:[], body:[BlockCode, bad, EndCode]})])], toBuffer)), CompileError, /(invalid .*block type)|(unknown type)/);
 
+    // A type-index block type (multi-value proposal) is not valid in wasm 1.0,
+    // even when the referenced type is void-to-void.
     const multiValueModule = moduleWithSections([sigSection([v2vSig]), declSection([0]), bodySection([funcBody({locals:[], body:[BlockCode, 0, EndCode]})])], toBuffer);
-    // In this test module, 0 denotes a void-to-void block type.
-    assertEq(WebAssembly.validate(multiValueModule), true);
+    assertEq(WebAssembly.validate(multiValueModule), false);
 
     // Ensure all invalid opcodes are rejected.  Note that the game here (and for
     // the prefixed cases below) is to present only opcodes which will be rejected by

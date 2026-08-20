@@ -9934,16 +9934,6 @@
   value: true
   mirror: always
 
--   name: javascript.options.wasm_relaxed_simd
-    type: bool
-#if defined(ENABLE_WASM_RELAXED_SIMD)
-    value: true
-#else
-    value: false
-#endif
-    mirror: always
-    set_spidermonkey_pref: always
-
 -   name: javascript.options.wasm_moz_intgemm
     type: bool
 #if defined(ENABLE_WASM_MOZ_INTGEMM)
@@ -9961,32 +9951,12 @@
     set_spidermonkey_pref: always
     fuzzing_safe: false
 
--   name: javascript.options.wasm_branch_hinting
-    type: bool
-#if defined(ENABLE_WASM_BRANCH_HINTING)
-    value: true
-#else
-    value: false
-#endif
-    mirror: always
-    set_spidermonkey_pref: always
-
 -   name: javascript.options.wasm_custom_page_sizes
     type: bool
     value: false
     mirror: always
     set_spidermonkey_pref: startup
     fuzzing_safe: false
-
--   name: javascript.options.wasm_compact_imports
-    type: bool
-#if defined(ENABLE_WASM_COMPACT_IMPORTS)
-    value: true
-#else
-    value: false
-#endif
-    mirror: always
-    set_spidermonkey_pref: always
 
 - name: javascript.options.wasm_components
   type: bool
@@ -10119,13 +10089,6 @@
 - name: javascript.options.wasm_unroll_factor
   type: uint32_t
   value: 3
-  mirror: always
-  set_spidermonkey_pref: always
-
-# Support for the Wide Arithmetic proposal (i64.add/sub128, i64.mul_wide_s/u)
-- name: javascript.options.wasm_wide_arithmetic
-  type: bool
-  value: true
   mirror: always
   set_spidermonkey_pref: always
 

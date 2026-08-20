@@ -194,17 +194,13 @@ bool wasm::IonDisabledByFeatures(JSContext* cx, bool* isDisabled,
                                  JSStringBuilder* reason) {
   // Ion has no debugging support.
   bool debug = WasmDebuggerActive(cx);
-  bool customPageSizes = WasmCustomPageSizesFlag(cx);
   if (reason) {
     char sep = 0;
     if (debug && !Append(reason, "debug", &sep)) {
       return false;
     }
-    if (customPageSizes && !Append(reason, "custom-page-sizes", &sep)) {
-      return false;
-    }
   }
-  *isDisabled = debug || customPageSizes;
+  *isDisabled = debug;
   return true;
 }
 

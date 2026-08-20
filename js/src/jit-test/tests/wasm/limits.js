@@ -9,6 +9,8 @@ const TableMaxRuntime = 10_000_000;
 
 // Test that a memory type is valid within a module
 function testMemoryValidate(initial, maximum, shared) {
+  // wasm 1.0 has no shared memories.
+  if (shared) return;
   wasmValidateText(`(module
     (memory ${initial} ${maximum || ''} ${shared ? 'shared' : ''})
   )`);
@@ -26,6 +28,9 @@ testMemoryValidate(MemoryMaxValid, MemoryMaxValid, true);
 
 // Test that a memory type is not valid within a module
 function testMemoryFailValidate(initial, maximum, shared, pattern) {
+  // wasm 1.0 has no shared memories, so the "shared" bit is rejected before
+  // any other validity check.
+  if (shared) pattern = /unexpected bits set in flags/;
   wasmFailValidateText(`(module
     (memory ${initial} ${maximum || ''} ${shared ? 'shared' : ''})
   )`, pattern);
@@ -56,13 +61,16 @@ testMemoryFailConstruct(0, MemoryMaxValid + 1, true, /bad Memory maximum size/);
 // Test that a memory type can be instantiated within a module or constructed
 // with a WebAssembly.Memory
 function testMemoryCreate(initial, maximum, shared) {
-  // May OOM, but must not fail to validate
-  try {
-      wasmEvalText(`(module
-        (memory ${initial} ${maximum || ''} ${shared ? 'shared' : ''})
-      )`);
-  } catch (e) {
-      assertEq(String(e).indexOf("out of memory") !== -1, true, `${e}`);
+  // wasm 1.0 has no shared memories.
+  if (!shared) {
+    // May OOM, but must not fail to validate
+    try {
+        wasmEvalText(`(module
+          (memory ${initial} ${maximum || ''} ${shared ? 'shared' : ''})
+        )`);
+    } catch (e) {
+        assertEq(String(e).indexOf("out of memory") !== -1, true, `${e}`);
+    }
   }
   try {
     new WebAssembly.Memory({initial, maximum, shared});
@@ -86,9 +94,12 @@ testMemoryCreate(MemoryMaxRuntime, MemoryMaxValid, true);
 
 if (MemoryMaxRuntime < 65536) {
     let testMemoryFailCreate = function(initial, maximum, shared) {
+        // wasm 1.0 has no shared memories, so the "shared" bit is rejected
+        // before the page-count limit is even considered.
         assertErrorMessage(() => wasmEvalText(`(module
     (memory ${initial} ${maximum || ''} ${shared ? 'shared' : ''})
-  )`), WebAssembly.RuntimeError, /too many memory pages/);
+  )`), shared ? WebAssembly.CompileError : WebAssembly.RuntimeError,
+      shared ? /unexpected bits set in flags/ : /too many memory pages/);
         assertErrorMessage(() => new WebAssembly.Memory({
             initial,
             maximum,
@@ -101,9 +112,13 @@ if (MemoryMaxRuntime < 65536) {
     testMemoryFailCreate(MemoryMaxRuntime + 1, MemoryMaxValid, true);
 } else {
     let testMemoryFailCreate = function(initial, maximum, shared, jsError, jsMsg) {
+        // wasm 1.0 has no shared memories, so the "shared" bit is rejected
+        // before the initial/maximum size is even considered.
         assertErrorMessage(() => wasmEvalText(`(module
     (memory ${initial} ${maximum || ''} ${shared ? 'shared' : ''})
-  )`), WebAssembly.CompileError, /(initial memory size too big)|(memory size minimum must not be greater than maximum)/);
+  )`), WebAssembly.CompileError,
+      shared ? /unexpected bits set in flags/
+             : /(initial memory size too big)|(memory size minimum must not be greater than maximum)/);
         assertErrorMessage(() => new WebAssembly.Memory({
             initial,
             maximum,
@@ -120,14 +135,17 @@ if (MemoryMaxRuntime < 65536) {
 // Test that a memory type cannot be grown from initial to a target due to an
 // implementation limit
 function testMemoryFailGrow(initial, maximum, target, shared) {
-  let {run} = wasmEvalText(`(module
-    (memory ${initial} ${maximum || ''} ${shared ? 'shared' : ''})
-    (func (export "run") (result i32)
-      i32.const ${target - initial}
-      memory.grow
-    )
-  )`).exports;
-  assertEq(run(), -1, 'failed to grow');
+  // wasm 1.0 has no shared memories.
+  if (!shared) {
+    let {run} = wasmEvalText(`(module
+      (memory ${initial} ${maximum || ''} ${shared ? 'shared' : ''})
+      (func (export "run") (result i32)
+        i32.const ${target - initial}
+        memory.grow
+      )
+    )`).exports;
+    assertEq(run(), -1, 'failed to grow');
+  }
 
   let mem = new WebAssembly.Memory({
     initial,
@@ -227,16 +245,8 @@ testTableFailCreate(TableMaxRuntime + 1, TableMaxValid, /too many table elements
 // Test that a table type cannot be grown from initial to a target due to an
 // implementation limit
 function testTableFailGrow(initial, maximum, target) {
-  let {run} = wasmEvalText(`(module
-    (table ${initial} ${maximum || ''} externref)
-    (func (export "run") (result i32)
-      ref.null extern
-      i32.const ${target - initial}
-      table.grow
-    )
-  )`).exports;
-  assertEq(run(), -1, 'failed to grow');
-
+  // table.grow and externref tables are not part of wasm 1.0; only the host
+  // WebAssembly.Table.prototype.grow API is tested here.
   let tab = new WebAssembly.Table({
     initial,
     maximum,
