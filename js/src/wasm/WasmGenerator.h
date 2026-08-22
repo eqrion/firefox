@@ -34,6 +34,10 @@ namespace JS {
 class OptimizedEncodingListener;
 }
 
+// itasca's validated module environment. Declared rather than included so
+// that its C ABI header does not reach every consumer of this one.
+struct VwEnv;
+
 namespace js {
 namespace wasm {
 
@@ -47,10 +51,18 @@ struct FuncCompileInput {
   const uint8_t* end;
   uint32_t index;
   uint32_t bytecodeOffset;
+  // Where this function's code section entry starts, at its size prefix. The
+  // body validator is driven from there rather than from `begin`, which is
+  // past the prefix and the local declarations.
+  uint32_t entryOffset;
 
-  FuncCompileInput(uint32_t index, uint32_t bytecodeOffset,
+  FuncCompileInput(uint32_t index, uint32_t bytecodeOffset, uint32_t entryOffset,
                    const uint8_t* begin, const uint8_t* end)
-      : begin(begin), end(end), index(index), bytecodeOffset(bytecodeOffset) {}
+      : begin(begin),
+        end(end),
+        index(index),
+        bytecodeOffset(bytecodeOffset),
+        entryOffset(entryOffset) {}
 
   uint32_t bytecodeSize() const {
     static_assert(wasm::MaxFunctionBytes <= UINT32_MAX);
@@ -184,6 +196,14 @@ struct CompileTask : public HelperThreadTask {
   FuncCompileInputVector inputs;
   CompiledCode output;
 
+  // The code section and the environment its function bodies are validated
+  // against. The environment is null when the bodies in this task have already
+  // been validated, which is every lazy tier-2 compilation: the environment
+  // does not outlive the module's first compilation, and a body reaching tier 2
+  // was accepted then.
+  BytecodeRegion codeBytes;
+  const VwEnv* itascaEnv = nullptr;
+
   CompileTask(const CodeMetadata& codeMeta,
               const CodeTailMetadata* codeTailMeta,
               const CompilerEnvironment& compilerEnv, CompileState compileState,
@@ -278,6 +298,14 @@ class MOZ_STACK_CLASS ModuleGenerator {
   FuncBaselinePerfSpewerVector funcBaselineSpewers_;
   uint32_t lastPatchedCallSite_;
   uint32_t startOfUnpatchedCallsites_;
+
+  // See setItascaContext.
+  BytecodeRegion codeBytes_;
+  const VwEnv* itascaEnv_ = nullptr;
+  SharedItascaModule retainedItascaModule_;
+  // Where each defined function's code section entry starts, relative to the
+  // code section rather than to the module. See compileFuncDef.
+  Uint32Vector funcDefEntryOffsets_;
   uint32_t numCallRefMetrics_;
   uint32_t numAllocSites_;
   CompileAndLinkStats tierStats_;
@@ -350,11 +378,37 @@ class MOZ_STACK_CLASS ModuleGenerator {
   [[nodiscard]] bool initializePartialTier(const Code& code,
                                            uint32_t maybeFuncIndex);
 
+  // Supply the code section and the environment its function bodies are
+  // validated against. Must be called before the first compileFuncDef() on any
+  // path that has them; a partial tier does not, since the environment did not
+  // outlive the module's first compilation.
+  void setItascaContext(const BytecodeRegion& code, const VwEnv* env) {
+    codeBytes_ = code;
+    itascaEnv_ = env;
+  }
+
+  // The environment and code section to retain for tier-2, which recompiles a
+  // body by driving itasca over it again.
+  void setRetainedItascaModule(SharedItascaModule module) {
+    retainedItascaModule_ = std::move(module);
+  }
+
   // Before finishFuncDefs() is called, compileFuncDef() must be called once
   // for each funcIndex in the range [0, env->numFuncDefs()).
+  //
+  // `entryOffset` is where the function's code section entry starts, which is
+  // where its body validator is driven from. Zero when there is no entry to
+  // point at, which is a partial tier recompiling an already-validated body.
+  //
+  // The two offsets are in different frames, and a caller has to keep them
+  // apart: `bytecodeOffset` is a module offset, and `entryOffset` is relative
+  // to the code section, because the section is the region itasca is driven
+  // over and its positions index the bytes it was handed. A later tier reads
+  // `entryOffset` back out of CodeTailMetadata and passes it straight through.
 
   [[nodiscard]] bool compileFuncDef(uint32_t funcIndex, uint32_t bytecodeOffset,
-                                    const uint8_t* begin, const uint8_t* end);
+                                    uint32_t entryOffset, const uint8_t* begin,
+                                    const uint8_t* end);
 
   // Must be called after the last compileFuncDef() and before finishModule()
   // or finishTier2().

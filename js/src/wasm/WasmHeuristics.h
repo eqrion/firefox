@@ -267,6 +267,13 @@ class InliningHeuristics {
                                     bool* largeFunctionBackoff) {
     *largeFunctionBackoff = false;
 
+    // The POC does not inline. Ion inlines a callee by compiling its body,
+    // and a body is compiled by driving itasca over the module's bytes
+    // against the environment it validated -- neither of which outlives the
+    // module's compilation, where an inlined callee's body is reached again
+    // later.
+    return false;
+
     // If this fails, something's seriously wrong; bail out.
     MOZ_RELEASE_ASSERT(inliningDepth <= 10);  // because 10 > (320 / 40)
     MOZ_ASSERT(rootFunctionBodyLength > 0 &&

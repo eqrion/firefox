@@ -43,7 +43,7 @@ const Local& BaseCompiler::localFromSlot(uint32_t slot, MIRType type) {
 }
 
 BytecodeOffset BaseCompiler::bytecodeOffset() const {
-  return iter_.bytecodeOffset();
+  return BytecodeOffset(currentOpOffset_);
 }
 
 TrapSiteDesc BaseCompiler::trapSiteDesc() const {

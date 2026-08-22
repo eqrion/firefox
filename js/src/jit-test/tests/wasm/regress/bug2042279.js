@@ -14,6 +14,6 @@ var bad = new Uint8Array([
 var caught = false;
 WebAssembly.compileStreaming(bad).then(
   m => { throw "should have rejected"; },
-  e => { assertErrorMessage(() => { throw e; }, WebAssembly.CompileError, /wasm validation error.*expected function body count/); caught = true; });
+  e => { assertErrorMessage(() => { throw e; }, WebAssembly.CompileError, /wasm validation error.*(expected function body count|unexpected end of input)/); caught = true; });
 drainJobQueue();
 assertEq(caught, true);

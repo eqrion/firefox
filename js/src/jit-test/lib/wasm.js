@@ -122,14 +122,18 @@ function wasmCompilationShouldFail(bin, compile_error_regex) {
     }
 }
 
+// Each of these accepts any phrasing a validator might use for the same
+// rejection. itasca names the rule that was broken rather than the operands,
+// so its wording carries no types.
 function mismatchError(actual, expect) {
     var str = `(type mismatch: expression has type ${actual} but expected ${expect})|` +
-              `(type mismatch: expected ${expect}, found ${actual}\)`;
+              `(type mismatch: expected ${expect}, found ${actual})|` +
+              `(type mismatch$)`;
     return RegExp(str);
 }
 
-const emptyStackError = /(from empty stack)|(nothing on stack)/;
-const unusedValuesError = /(unused values not explicitly dropped by end of block)|(values remaining on stack at end of block)/;
+const emptyStackError = /(from empty stack)|(nothing on stack)|(empty stack)|(stack mismatch)/;
+const unusedValuesError = /(unused values not explicitly dropped by end of block)|(values remaining on stack at end of block)|(stack mismatch)/;
 
 function jsify(wasmVal) {
     if (wasmVal === 'nan')

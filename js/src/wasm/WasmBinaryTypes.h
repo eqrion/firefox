@@ -20,6 +20,39 @@ namespace wasm {
 
 using BytecodeSpan = mozilla::Span<const uint8_t>;
 
+// One region of a module's bytecode, and where that region starts in the
+// module.
+//
+// A module is not always one buffer: a streamed one arrives as three
+// separately allocated regions (see BytecodeSource), and the validator is
+// driven over one region at a time. Positions it reports index the region, so
+// they are module offsets only once `start` is added.
+struct BytecodeRegion {
+  BytecodeSpan span;
+  uint32_t start = 0;
+
+  BytecodeRegion() = default;
+  BytecodeRegion(const BytecodeSpan& span, uint32_t start)
+      : span(span), start(start) {}
+
+  const uint8_t* data() const { return span.data(); }
+  size_t size() const { return span.size(); }
+
+  uint32_t moduleOffset(size_t posInRegion) const {
+    MOZ_ASSERT(posInRegion <= size());
+    return start + uint32_t(posInRegion);
+  }
+
+  // The part of this region from `posInRegion` onwards.
+  BytecodeRegion from(size_t posInRegion) const {
+    return BytecodeRegion(span.From(posInRegion), moduleOffset(posInRegion));
+  }
+  // The part of this region before `posInRegion`.
+  BytecodeRegion to(size_t posInRegion) const {
+    return BytecodeRegion(span.To(posInRegion), start);
+  }
+};
+
 // This struct captures a range of bytecode.
 struct BytecodeRange {
   BytecodeRange() = default;

@@ -13,10 +13,10 @@ function assertSegmentFitError(f) {
 
 var callee = i => `(func $f${i} (result i32) (i32.const ${i}))`;
 
-wasmFailValidateText(`(module (elem (i32.const 0) $f0) ${callee(0)})`, /elem segment requires a table/);
-wasmFailValidateText(`(module (table 10 funcref) (elem (i32.const 0) 0))`, /element index out of range/);
-wasmFailValidateText(`(module (table 10 funcref) (func) (elem (i32.const 0) 0 1))`, /element index out of range/);
-wasmFailValidateText(`(module (table 10 funcref) (func) (elem (f32.const 0) 0) ${callee(0)})`, /type mismatch/);
+wasmFailValidateText(`(module (elem (i32.const 0) $f0) ${callee(0)})`, /(elem segment requires a table)|(unknown table)/);
+wasmFailValidateText(`(module (table 10 funcref) (elem (i32.const 0) 0))`, /(element index out of range)|(unknown function)/);
+wasmFailValidateText(`(module (table 10 funcref) (func) (elem (i32.const 0) 0 1))`, /(element index out of range)|(unknown function)/);
+wasmFailValidateText(`(module (table 10 funcref) (func) (elem (f32.const 0) 0) ${callee(0)})`, /(type mismatch)|(invalid constant expression)/);
 
 assertSegmentFitError(() => wasmEvalText(`(module (table 10 funcref) (elem (i32.const 10) $f0) ${callee(0)})`));
 assertSegmentFitError(() => wasmEvalText(`(module (table 10 funcref) (elem (i32.const 8) $f0 $f0 $f0) ${callee(0)})`));
@@ -266,17 +266,20 @@ assertEq(tbl.get(0).foo, 42);
                                0x00]);                 // Zero functions
     }
 
-    // Should succeed because this is what an active segment with index looks like
-    new WebAssembly.Module(makeIt(0x02, 0x00));
+    // The flags-prefixed encoding arrived with bulk memory. wasm 1.0 reads the
+    // segment's first field as the table index, so every one of these is a
+    // table index out of range: 2 and 8 name tables that do not exist, and the
+    // one-table module has only table 0.
+    assertErrorMessage(() => new WebAssembly.Module(makeIt(0x02, 0x00)),
+                       WebAssembly.CompileError,
+                       /(table index out of range)|(unknown table)/);
 
-    // Should fail because the kind is unknown
     assertErrorMessage(() => new WebAssembly.Module(makeIt(0x08, 0x00)),
                        WebAssembly.CompileError,
-                       /invalid elem segment flags field/);
+                       /(invalid elem segment flags field)|(unknown table)/);
 
-    // Should fail because the table index is invalid
     assertErrorMessage(() => new WebAssembly.Module(makeIt(0x02, 0x01)),
                        WebAssembly.CompileError,
-                       /table index out of range/);
+                       /(table index out of range)|(unknown table)/);
 }
 

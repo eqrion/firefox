@@ -16,6 +16,7 @@ extern crate encoding_c;
 extern crate encoding_c_mem;
 extern crate mozglue_static;
 extern crate normalizer_glue;
+extern crate itasca_glue;
 
 #[cfg(feature = "gluesmith")]
 extern crate gluesmith;

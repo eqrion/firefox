@@ -35,6 +35,7 @@ UNIFIED_SOURCES += [
     "WasmInitExpr.cpp",
     "WasmInstance.cpp",
     "WasmIonCompile.cpp",
+    "WasmItasca.cpp",
     "WasmJS.cpp",
     "WasmLog.cpp",
     "WasmMemory.cpp",

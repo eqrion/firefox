@@ -10,6 +10,7 @@
 #include "wasm/WasmInstanceData.h"  // various of *InstanceData
 #include "wasm/WasmModuleTypes.h"
 #include "wasm/WasmProcess.h"  // IsHugeMemoryEnabled
+#include "wasm/WasmItascaModule.h"
 
 namespace js {
 namespace wasm {
@@ -329,6 +330,16 @@ struct CodeTailMetadata : public ShareableBase<CodeTailMetadata> {
 
   // The ranges of every function defined in this module.
   BytecodeRangeVector funcDefRanges;
+
+  // Where each defined function's code section entry starts, at its size
+  // prefix, and the environment its body was validated against. Tier-2
+  // recompiles a body by driving itasca over it again, which needs both.
+  //
+  // Relative to the code section, not to the module: itasca is driven over
+  // the section and its positions index the bytes it was handed. funcDefRanges
+  // above is module-relative, so the two are not interchangeable.
+  Uint32Vector funcDefEntryOffsets;
+  SharedItascaModule itascaModule;
 
   // The feature usage for every function defined in this module.
   FeatureUsageVector funcDefFeatureUsages;

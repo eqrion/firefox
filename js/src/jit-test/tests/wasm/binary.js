@@ -4,16 +4,19 @@ const { extractStackFrameFunction } = WasmHelpers;
 
 const { Module, RuntimeError, CompileError } = WebAssembly;
 
-const magicError = /failed to match magic number/;
-const unknownSection = /expected custom section/;
+// Two validators name the same rejection differently, so these accept either
+// phrasing. A header too short to hold a magic number is reported as malformed
+// rather than as the magic not matching.
+const magicError = /(failed to match magic number)|(invalid magic number)|(malformed encoding)/;
+const unknownSection = /(expected custom section)|(unknown section id)|(malformed encoding)|(section out of order)/;
 
 function sectionError(section) {
-    return RegExp(`failed to start ${section} section`);
+    return RegExp(`(failed to start ${section} section)|(section out of order)|(section size does not match its contents)|(malformed encoding)|(unexpected end of input)`);
 }
 
 function versionError(actual) {
     var expect = encodingVersion;
-    var str = `binary version 0x${actual.toString(16)} does not match expected version 0x${expect.toString(16)}`;
+    var str = `(binary version 0x${actual.toString(16)} does not match expected version 0x${expect.toString(16)})|(invalid version)`;
     return RegExp(str);
 }
 
@@ -37,10 +40,10 @@ for (let toBuffer of toBufferOpts) {
     assertErrorMessage(() => wasmEval(toBuffer([42])), CompileError, magicError);
     assertErrorMessage(() => wasmEval(toBuffer([magic0, magic1, magic2])), CompileError, magicError);
     assertErrorMessage(() => wasmEval(toBuffer([1,2,3,4])), CompileError, magicError);
-    assertErrorMessage(() => wasmEval(toBuffer([magic0, magic1, magic2, magic3])), CompileError, /failed to read version/);
-    assertErrorMessage(() => wasmEval(toBuffer([magic0, magic1, magic2, magic3, 1])), CompileError, /failed to read version/);
-    assertErrorMessage(() => wasmEval(toBuffer([magic0, magic1, magic2, magic3, ver0])), CompileError, /failed to read version/);
-    assertErrorMessage(() => wasmEval(toBuffer([magic0, magic1, magic2, magic3, ver0, ver1, ver2])), CompileError, /failed to read version/);
+    assertErrorMessage(() => wasmEval(toBuffer([magic0, magic1, magic2, magic3])), CompileError, /(failed to read version)|(invalid version)|(malformed encoding)/);
+    assertErrorMessage(() => wasmEval(toBuffer([magic0, magic1, magic2, magic3, 1])), CompileError, /(failed to read version)|(invalid version)|(malformed encoding)/);
+    assertErrorMessage(() => wasmEval(toBuffer([magic0, magic1, magic2, magic3, ver0])), CompileError, /(failed to read version)|(invalid version)|(malformed encoding)/);
+    assertErrorMessage(() => wasmEval(toBuffer([magic0, magic1, magic2, magic3, ver0, ver1, ver2])), CompileError, /(failed to read version)|(invalid version)|(malformed encoding)/);
     assertErrorMessage(() => wasmEval(toBuffer([magic0, magic1, magic2, magic3, 1, 2, 3, 4])), CompileError, versionError(0x4030201));
 
     var o = wasmEval(toBuffer(moduleHeaderThen()));
@@ -75,9 +78,9 @@ for (let toBuffer of toBufferOpts) {
     wasmEval(toBuffer(moduleHeaderThen(0, 1, 0,  0, 1, 0)));  // 2x empty id
     wasmEval(toBuffer(moduleHeaderThen(0, 2, 1, 65)));  // id = "A"
 
-    assertErrorMessage(() => wasmEval(moduleWithSections([ {name: typeId, body: U32MAX_LEB } ], toBuffer)), CompileError, /too many types/);
-    assertErrorMessage(() => wasmEval(moduleWithSections([ {name: typeId, body: [1, 0], } ], toBuffer)), CompileError, /expected type form/);
-    assertErrorMessage(() => wasmEval(moduleWithSections([ {name: typeId, body: [1, FuncCode, ...U32MAX_LEB], } ], toBuffer)), CompileError, /too many arguments in signature/);
+    assertErrorMessage(() => wasmEval(moduleWithSections([ {name: typeId, body: U32MAX_LEB } ], toBuffer)), CompileError, /(too many types)|(malformed encoding)/);
+    assertErrorMessage(() => wasmEval(moduleWithSections([ {name: typeId, body: [1, 0], } ], toBuffer)), CompileError, /(expected type form)|(invalid type byte)/);
+    assertErrorMessage(() => wasmEval(moduleWithSections([ {name: typeId, body: [1, FuncCode, ...U32MAX_LEB], } ], toBuffer)), CompileError, /(too many arguments in signature)|(malformed encoding)/);
 
     assertThrowsInstanceOf(() => wasmEval(moduleWithSections([{name: typeId, body: [1]}], toBuffer)), CompileError);
     assertThrowsInstanceOf(() => wasmEval(moduleWithSections([{name: typeId, body: [1, 1, 0]}], toBuffer)), CompileError);
@@ -87,19 +90,19 @@ for (let toBuffer of toBufferOpts) {
     wasmEval(moduleWithSections([sigSection([i2vSig])], toBuffer));
     wasmEval(moduleWithSections([sigSection([v2vSig, i2vSig])], toBuffer));
 
-    assertErrorMessage(() => wasmEval(moduleWithSections([sigSection([{args:[], ret:33}])], toBuffer)), CompileError, /bad type/);
-    assertErrorMessage(() => wasmEval(moduleWithSections([sigSection([{args:[33], ret:VoidCode}])], toBuffer)), CompileError, /bad type/);
+    assertErrorMessage(() => wasmEval(moduleWithSections([sigSection([{args:[], ret:33}])], toBuffer)), CompileError, /(bad type)|(invalid type byte)/);
+    assertErrorMessage(() => wasmEval(moduleWithSections([sigSection([{args:[33], ret:VoidCode}])], toBuffer)), CompileError, /(bad type)|(invalid type byte)/);
 
-    assertThrowsInstanceOf(() => wasmEval(moduleWithSections([sigSection([]), declSection([0])], toBuffer)), CompileError, /signature index out of range/);
-    assertThrowsInstanceOf(() => wasmEval(moduleWithSections([v2vSigSection, declSection([1])], toBuffer)), CompileError, /signature index out of range/);
-    assertErrorMessage(() => wasmEval(moduleWithSections([v2vSigSection, declSection([0])], toBuffer)), CompileError, /expected code section/);
+    assertThrowsInstanceOf(() => wasmEval(moduleWithSections([sigSection([]), declSection([0])], toBuffer)), CompileError, /(signature index out of range)|(unknown type)/);
+    assertThrowsInstanceOf(() => wasmEval(moduleWithSections([v2vSigSection, declSection([1])], toBuffer)), CompileError, /(signature index out of range)|(unknown type)/);
+    assertErrorMessage(() => wasmEval(moduleWithSections([v2vSigSection, declSection([0])], toBuffer)), CompileError, /(expected code section)|(the module declares functions and has no code section)/);
     wasmEval(moduleWithSections([v2vSigSection, declSection([0]), bodySection([v2vBody])], toBuffer));
 
-    assertErrorMessage(() => wasmEval(moduleWithSections([v2vSigSection, declSection([0]), bodySection([v2vBody.concat(v2vBody)])], toBuffer)), CompileError, /byte size mismatch in code section/);
+    assertErrorMessage(() => wasmEval(moduleWithSections([v2vSigSection, declSection([0]), bodySection([v2vBody.concat(v2vBody)])], toBuffer)), CompileError, /((byte size mismatch in code section)|(code section size does not match its contents))|(section size does not match its contents)/);
 
     assertThrowsInstanceOf(() => wasmEval(moduleWithSections([v2vSigSection, {name: importId, body:[]}], toBuffer)), CompileError);
-    assertErrorMessage(() => wasmEval(moduleWithSections([importSection([{module:"a", item:"b", type: externtype({ funcTypeIndex:0 })}])], toBuffer)), CompileError, /signature index out of range/);
-    assertErrorMessage(() => wasmEval(moduleWithSections([v2vSigSection, importSection([{module:"a", item:"b", type: externtype({ funcTypeIndex:1 })}])], toBuffer)), CompileError, /signature index out of range/);
+    assertErrorMessage(() => wasmEval(moduleWithSections([importSection([{module:"a", item:"b", type: externtype({ funcTypeIndex:0 })}])], toBuffer)), CompileError, /(signature index out of range)|(unknown type)/);
+    assertErrorMessage(() => wasmEval(moduleWithSections([v2vSigSection, importSection([{module:"a", item:"b", type: externtype({ funcTypeIndex:1 })}])], toBuffer)), CompileError, /(signature index out of range)|(unknown type)/);
     wasmEval(moduleWithSections([v2vSigSection, importSection([])], toBuffer));
 
     // Normal import encoding
@@ -118,16 +121,16 @@ for (let toBuffer of toBufferOpts) {
         bodySection([v2vBody])
     ], toBuffer), {a:{"":()=>{}}});
 
-    assertErrorMessage(() => wasmEval(moduleWithSections([ dataSection([{offset:1, elems:[]}]) ], toBuffer)), CompileError, /data segment requires a memory section/);
+    assertErrorMessage(() => wasmEval(moduleWithSections([ dataSection([{offset:1, elems:[]}]) ], toBuffer)), CompileError, /(data segment requires a memory section)|(unknown memory)/);
 
     wasmEval(moduleWithSections([defaultTableSection(0)], toBuffer));
     wasmEval(moduleWithSections([elemSection([])], toBuffer));
     wasmEval(moduleWithSections([defaultTableSection(0), elemSection([])], toBuffer));
     wasmEval(moduleWithSections([defaultTableSection(1), elemSection([{ mode: "active", offset: 1, indices: [] }])], toBuffer));
-    assertErrorMessage(() => wasmEval(moduleWithSections([defaultTableSection(1), elemSection([{ mode: "active", offset: 0, indices: [0] }])], toBuffer)), CompileError, /element index out of range/);
+    assertErrorMessage(() => wasmEval(moduleWithSections([defaultTableSection(1), elemSection([{ mode: "active", offset: 0, indices: [0] }])], toBuffer)), CompileError, /(element index out of range)|(unknown function)/);
     wasmEval(moduleWithSections([v2vSigSection, declSection([0]), defaultTableSection(1), elemSection([{ mode: "active", offset: 0, indices: [0] }]), bodySection([v2vBody])], toBuffer));
     wasmEval(moduleWithSections([v2vSigSection, declSection([0]), defaultTableSection(2), elemSection([{ mode: "active", offset: 0, indices: [0, 0] }]), bodySection([v2vBody])], toBuffer));
-    assertErrorMessage(() => wasmEval(moduleWithSections([v2vSigSection, declSection([0]), defaultTableSection(2), elemSection([{ mode: "active", offset: 0, indices: [0, 1] }]), bodySection([v2vBody])], toBuffer)), CompileError, /element index out of range/);
+    assertErrorMessage(() => wasmEval(moduleWithSections([v2vSigSection, declSection([0]), defaultTableSection(2), elemSection([{ mode: "active", offset: 0, indices: [0, 1] }]), bodySection([v2vBody])], toBuffer)), CompileError, /(element index out of range)|(unknown function)/);
     wasmEval(moduleWithSections([v2vSigSection, declSection([0,0,0]), defaultTableSection(4), elemSection([{ mode: "active", offset: 0, indices: [0, 1, 0, 2] }]), bodySection([v2vBody, v2vBody, v2vBody])], toBuffer));
     wasmEval(moduleWithSections([sigSection([v2vSig,i2vSig]), declSection([0,0,1]), defaultTableSection(3), elemSection([{ mode: "active", offset: 0, indices: [0, 1, 2] }]), bodySection([v2vBody, v2vBody, v2vBody])], toBuffer));
 
@@ -146,10 +149,10 @@ for (let toBuffer of toBufferOpts) {
     }
 
     wasmEval(moduleWithSections([memorySection0()], toBuffer));
-    assertErrorMessage(() => wasmEval(moduleWithSections([memorySection2()], toBuffer)), CompileError, /too many memories/);
+    assertErrorMessage(() => wasmEval(moduleWithSections([memorySection2()], toBuffer)), CompileError, /(too many memories)|(multiple memories)/);
 
     // Test early 'end'
-    const bodyMismatch = /(function body length mismatch)|(operators remaining after end of function)/;
+    const bodyMismatch = /((function body length mismatch)|(operators remaining after end of function))|(trailing bytes after the body's end)/;
     assertErrorMessage(() => wasmEval(moduleWithSections([v2vSigSection, declSection([0]), bodySection([funcBody({locals:[], body:[EndCode]})])], toBuffer)), CompileError, bodyMismatch);
     assertErrorMessage(() => wasmEval(moduleWithSections([v2vSigSection, declSection([0]), bodySection([funcBody({locals:[], body:[UnreachableCode,EndCode]})], toBuffer)])), CompileError, bodyMismatch);
     assertErrorMessage(() => wasmEval(moduleWithSections([v2vSigSection, declSection([0]), bodySection([funcBody({locals:[], body:[EndCode,UnreachableCode]})])], toBuffer)), CompileError, bodyMismatch);
@@ -162,7 +165,7 @@ for (let toBuffer of toBufferOpts) {
     wasmEval(moduleWithSections([tooBigNameSection], toBuffer));
 
     // Custom sections must have valid UTF-8 names
-    assertErrorMessage(() => wasmEval(toBuffer([0,97,115,109,1,0,0,0,0,3,2,254,255,])), CompileError, /failed to start custom section/);
+    assertErrorMessage(() => wasmEval(toBuffer([0,97,115,109,1,0,0,0,0,3,2,254,255,])), CompileError, /(failed to start custom section)|(name is not valid UTF-8)/);
 
     // Skip custom sections before any expected section
     var customDefSec = customSection("wee", 42, 13);
@@ -218,6 +221,18 @@ for (let toBuffer of toBufferOpts) {
     const badNameSec3 = nameSection([funcNameSubsection([{name:'blah'}])]);
     badNameSec3.body.pop();
     assertWarning(() => wasmEval(moduleWithSections([v2vSigSection, declSec, bodySec, badNameSec3], toBuffer)), nameWarning);
+    // The name section's span has to run to the end of its region, not to the
+    // end of the section: badNameSec2's overrunning subsection needs 18 more
+    // bytes than the section declares, and here another custom section
+    // follows in the same region to supply them. A span bounded to the
+    // section itself would instead run out of bytes and fail differently.
+    const overrunNameSec = nameSection([funcNameSubsection([{name:'blah'}])]);
+    overrunNameSec.body.push(100, 20, 42, 83);
+    const trailingSec = customSection("trailing", ...new Array(20).fill(0));
+    assertWarning(
+        () => wasmEval(moduleWithSections(
+            [v2vSigSection, declSec, bodySec, overrunNameSec, trailingSec], toBuffer)),
+        /bytes consumed past the end/);
     assertNoWarning(() => wasmEval(moduleWithSections([nameSection([moduleNameSubsection('hi')])])));
     assertWarning(() => wasmEval(moduleWithSections([nameSection([moduleNameSubsection('hi'), moduleNameSubsection('boo')])], toBuffer)), nameWarning);
     // Unknown name subsection
@@ -347,7 +362,7 @@ for (let toBuffer of toBufferOpts) {
         // Prefix without a subsequent opcode.  We must ask funcBody not to add an
         // End code after the prefix, so the body really is just the prefix byte.
         let binary = moduleWithSections([v2vSigSection, declSection([0]), bodySection([funcBody({locals:[], body:[prefix]}, /*withEndCode=*/false)])], toBuffer);
-        assertErrorMessage(() => wasmEval(binary), CompileError, /(unable to read opcode)|(Unexpected EOF)|(Unknown opcode)/);
+        assertErrorMessage(() => wasmEval(binary), CompileError, /((unable to read opcode)|(Unexpected EOF)|(Unknown opcode))|(unrecognized opcode)/);
         assertEq(WebAssembly.validate(binary), false);
     }
 }

@@ -3,15 +3,15 @@ const { Instance, Module, LinkError } = WebAssembly;
 // Locally-defined globals
 assertErrorMessage(() => wasmEvalText(`(module (global))`), SyntaxError, /wasm text error/);
 // A global field in the text format is valid with an empty expression, but this produces an invalid module
-assertErrorMessage(() => wasmEvalText(`(module (global i32))`), WebAssembly.CompileError, /popping value/);
-assertErrorMessage(() => wasmEvalText(`(module (global (mut i32)))`), WebAssembly.CompileError, /popping value/);
+assertErrorMessage(() => wasmEvalText(`(module (global i32))`), WebAssembly.CompileError, /(popping value)|(invalid constant expression)/);
+assertErrorMessage(() => wasmEvalText(`(module (global (mut i32)))`), WebAssembly.CompileError, /(popping value)|(invalid constant expression)/);
 
 // Initializer expressions.
-wasmFailValidateText(`(module (global i32 (f32.const 13.37)))`, /type mismatch/);
-wasmFailValidateText(`(module (global f64 (f32.const 13.37)))`, /type mismatch/);
+wasmFailValidateText(`(module (global i32 (f32.const 13.37)))`, /(type mismatch)|(invalid constant expression)/);
+wasmFailValidateText(`(module (global f64 (f32.const 13.37)))`, /(type mismatch)|(invalid constant expression)/);
 
-wasmFailValidateText(`(module (global i32 (global.get 0)))`, /out of range/);
-wasmFailValidateText(`(module (global i32 (global.get 1)) (global i32 (i32.const 1)))`, /out of range/);
+wasmFailValidateText(`(module (global i32 (global.get 0)))`, /(out of range)|(unknown global)/);
+wasmFailValidateText(`(module (global i32 (global.get 1)) (global i32 (i32.const 1)))`, /(out of range)|(unknown global)/);
 
 // Test a well-defined global section.
 function testInner(type, initialValue, nextValue, coercion)
@@ -98,7 +98,7 @@ testInner('f64', 13.37, 0.1989, x => +x);
 }
 
 // Semantic errors.
-wasmFailValidateText(`(module (global (mut i32) (i32.const 1337)) (func (global.set 1 (i32.const 0))))`, /(out of range)|(global index out of bounds)/);
+wasmFailValidateText(`(module (global (mut i32) (i32.const 1337)) (func (global.set 1 (i32.const 0))))`, /((out of range)|(global index out of bounds))|(unknown global)/);
 wasmFailValidateText(`(module (global i32 (i32.const 1337)) (func (global.set 0 (i32.const 0))))`, /(can't write an immutable global)|(global is immutable)/);
 
 // Big module with many variables: test that setting one doesn't overwrite the
@@ -146,7 +146,7 @@ for (let i = 0; i < 5; i++) {
 }
 
 // Initializer expressions can also be used in elem section initializers.
-wasmFailValidateText(`(module (import "globals" "a" (global f32)) (table 4 funcref) (elem (global.get 0) $f) (func $f))`, /type mismatch/);
+wasmFailValidateText(`(module (import "globals" "a" (global f32)) (table 4 funcref) (elem (global.get 0) $f) (func $f))`, /(type mismatch)|(invalid constant expression)/);
 
 module = wasmEvalText(`(module
     (import "globals" "a" (global i32))
@@ -230,7 +230,7 @@ module = wasmEvalText(`(module
 assertEq(Number(module.imported), 42);
 assertEq(Number(module.defined), 1337);
 
-wasmFailValidateText(`(module (import "globals" "a" (global f32)) (global i32 (global.get 0)))`, /type mismatch/);
+wasmFailValidateText(`(module (import "globals" "a" (global f32)) (global i32 (global.get 0)))`, /(type mismatch)|(invalid constant expression)/);
 
 function testInitExpr(type, initialValue, nextValue, coercion, assertFunc = assertEq) {
     var module = wasmEvalText(`(module

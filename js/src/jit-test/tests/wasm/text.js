@@ -20,7 +20,7 @@ assertErrorMessage(() => wasmEvalText('(module (type $a (func)) (func (call_indi
 assertErrorMessage(() => wasmEvalText('(module (func (br $a)))'), SyntaxError, /failed to find name/);
 assertErrorMessage(() => wasmEvalText('(module (func (block $a ) (br $a)))'), SyntaxError, /failed to find name/);
 
-assertErrorMessage(() => wasmEvalText(`(module (func (call ${0xffffffff})))`), WebAssembly.CompileError, /(callee index out of range)|(function index out of bounds)/);
+assertErrorMessage(() => wasmEvalText(`(module (func (call ${0xffffffff})))`), WebAssembly.CompileError, /((callee index out of range)|(function index out of bounds))|(unknown function)/);
 assertErrorMessage(() => wasmEvalText(`(module (export "func" ${0xffffffff}))`), SyntaxError, parsingError);
 
 wasmEvalText('(module (func (param $a i32)))');
@@ -93,7 +93,7 @@ assertErrorMessage(() => wasmEvalText(`
 // Globals.
 assertErrorMessage(() => wasmEvalText('(module (global $t (export)))'), SyntaxError, parsingError);
 assertErrorMessage(() => wasmEvalText('(module (global $t (export "g")))'), SyntaxError, parsingError);
-assertErrorMessage(() => wasmEvalText('(module (global $t (export "g") i32))'), WebAssembly.CompileError, /popping value/);
+assertErrorMessage(() => wasmEvalText('(module (global $t (export "g") i32))'), WebAssembly.CompileError, /(popping value)|(invalid constant expression)/);
 wasmEvalText('(module (global $t (export "g") i32 (i32.const 42)))');
 
 assertErrorMessage(() => wasmEvalText('(module (global $t (import) i32))'), SyntaxError, parsingError);

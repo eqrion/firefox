@@ -148,6 +148,12 @@ bool CompileBuiltinModule(JSContext* cx,
                           const mozilla::Span<BuiltinModuleFuncId> ids,
                           mozilla::Maybe<BuiltinMemory> memory,
                           MutableHandle<WasmModuleObject*> result) {
+  // The POC excludes builtin modules. They are built here rather than parsed,
+  // so there is no module for itasca to have validated, and their special
+  // opcodes are post-1.0 in any case.
+  JS_ReportErrorASCII(cx, "builtin modules are disabled on the itasca branch");
+  return false;
+
   // Create the options manually, enabling intrinsics
   FeatureOptions featureOptions;
   featureOptions.isBuiltinModule = true;
@@ -289,7 +295,8 @@ bool CompileBuiltinModule(JSContext* cx,
     // Encode function body that will call the builtinModuleFunc using our
     // builtin opcode, and launch a compile task
     if (!EncodeFuncBody(builtinModuleFunc, id, &bytecode) ||
-        !mg.compileFuncDef(funcIndex, funcBytecodeOffset, bytecode.begin(),
+        !mg.compileFuncDef(funcIndex, funcBytecodeOffset, /*entryOffset=*/0,
+                           bytecode.begin(),
                            bytecode.begin() + bytecode.length())) {
       // This must be an OOM and will be reported by the caller
       MOZ_ASSERT(!error);

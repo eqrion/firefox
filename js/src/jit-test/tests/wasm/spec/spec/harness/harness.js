@@ -192,15 +192,30 @@ let linkage = {
   },
 };
 
-function module(source) {
+// Compile a module, checking that WebAssembly.validate agrees about whether it
+// is valid. The two run different code paths over the same bytes, so every
+// module in this suite is a differential test of them for free.
+function compileModule(source) {
   let bytecode = wasmTextToBinary(source);
-  let module = new WebAssembly.Module(bytecode);
+  let valid = WebAssembly.validate(bytecode);
+  try {
+    var module = new WebAssembly.Module(bytecode);
+  } catch (e) {
+    if (!e.toString().match(/out of memory/)) {
+      assertEq(valid, false, `passed WebAssembly.validate but failed to compile: ${e}`);
+    }
+    throw e;
+  }
+  assertEq(valid, true, "failed WebAssembly.validate but compiled successfully");
   return module;
 }
 
+function module(source) {
+  return compileModule(source);
+}
+
 function instantiate(source) {
-  let bytecode = wasmTextToBinary(source);
-  let module = new WebAssembly.Module(bytecode);
+  let module = compileModule(source);
   let instance = new WebAssembly.Instance(module, linkage);
   return instance.exports;
 }

@@ -290,8 +290,6 @@ class ControlStackEntry {
     return kind_ == LabelKind::Loop ? type().params() : type().results();
   }
   uint32_t valueStackBase() const { return valueStackBase_; }
-  ControlItem& controlItem() { return typeAndItem_.second(); }
-  const ControlItem& controlItem() const { return typeAndItem_.second(); }
   void setPolymorphicBase() { polymorphicBase_ = true; }
   bool polymorphicBase() const { return polymorphicBase_; }
 
@@ -510,6 +508,10 @@ class MOZ_STACK_CLASS OpIter : private Policy {
                                              ResultType* type,
                                              ValueVector* values,
                                              bool rewriteStackTypes);
+  [[nodiscard]] bool checkBrTableTargetAndPush(uint32_t relativeDepth,
+                                               ResultType prevBranchType,
+                                               ResultType* type,
+                                               ValueVector* branchValues);
   [[nodiscard]] bool checkBrTableEntryAndPush(uint32_t* relativeDepth,
                                               ResultType prevBranchType,
                                               ResultType* branchType,
@@ -605,12 +607,6 @@ class MOZ_STACK_CLASS OpIter : private Policy {
 
   // Report an unrecognized opcode.
   [[nodiscard]] bool unrecognizedOpcode(const OpBytes* expr) MOZ_COLD;
-
-  // Return whether the innermost block has a polymorphic base of its stack.
-  // Ideally this accessor would be removed; consider using something else.
-  bool currentBlockHasPolymorphicBase() const {
-    return !controlStack_.empty() && controlStack_.back().polymorphicBase();
-  }
 
   // If it exists, return the BranchHint value from a function index and a
   // branch offset.
@@ -871,57 +867,13 @@ class MOZ_STACK_CLASS OpIter : private Policy {
   [[nodiscard]] bool readGuardSuspending(uint32_t* tagIndex);
 #endif  // ENABLE_WASM_JSPI
 
-  // At a location where readOp is allowed, peek at the next opcode
-  // without consuming it or updating any internal state.
-  // Never fails: returns uint16_t(Op::Limit) in op->b0 if it can't read.
-  void peekOp(OpBytes* op);
-
   // ------------------------------------------------------------------------
   // Stack management.
-
-  // Set the top N result values.
-  void setResults(size_t count, const ValueVector& values) {
-    MOZ_ASSERT(valueStack_.length() >= count);
-    size_t base = valueStack_.length() - count;
-    for (size_t i = 0; i < count; i++) {
-      valueStack_[base + i].setValue(values[i]);
-    }
-  }
-
-  bool getResults(size_t count, ValueVector* values) {
-    MOZ_ASSERT(valueStack_.length() >= count);
-    if (!values->resize(count)) {
-      return false;
-    }
-    size_t base = valueStack_.length() - count;
-    for (size_t i = 0; i < count; i++) {
-      (*values)[i] = valueStack_[base + i].value();
-    }
-    return true;
-  }
-
-  // Set the result value of the current top-of-value-stack expression.
-  void setResult(Value value) { valueStack_.back().setValue(value); }
-
-  // Return the result value of the current top-of-value-stack expression.
-  Value getResult() { return valueStack_.back().value(); }
-
-  // Return a reference to the top of the control stack.
-  ControlItem& controlItem() { return controlStack_.back().controlItem(); }
-
-  // Return a reference to an element in the control stack.
-  ControlItem& controlItem(uint32_t relativeDepth) {
-    return controlStack_[controlStack_.length() - 1 - relativeDepth]
-        .controlItem();
-  }
 
   // Return the LabelKind of an element in the control stack.
   LabelKind controlKind(uint32_t relativeDepth) {
     return controlStack_[controlStack_.length() - 1 - relativeDepth].kind();
   }
-
-  // Return a reference to the outermost element on the control stack.
-  ControlItem& controlOutermost() { return controlStack_[0].controlItem(); }
 
   // Test whether the control-stack is empty, meaning we've consumed the final
   // end of the function body.
@@ -929,23 +881,6 @@ class MOZ_STACK_CLASS OpIter : private Policy {
 
   // Return the depth of the control stack.
   size_t controlStackDepth() const { return controlStack_.length(); }
-
-  // Find the innermost control item matching a predicate, starting to search
-  // from a certain relative depth, and returning true if such innermost
-  // control item is found. The relative depth of the found item is returned
-  // via a parameter.
-  template <typename Predicate>
-  bool controlFindInnermostFrom(Predicate predicate, uint32_t fromRelativeDepth,
-                                uint32_t* foundRelativeDepth) const {
-    int32_t fromAbsoluteDepth = controlStack_.length() - fromRelativeDepth - 1;
-    for (int32_t i = fromAbsoluteDepth; i >= 0; i--) {
-      if (predicate(controlStack_[i].kind(), controlStack_[i].controlItem())) {
-        *foundRelativeDepth = controlStack_.length() - 1 - i;
-        return true;
-      }
-    }
-    return false;
-  }
 };
 
 template <typename Policy>
@@ -1268,17 +1203,6 @@ inline bool OpIter<Policy>::readOp(OpBytes* op) {
 }
 
 template <typename Policy>
-inline void OpIter<Policy>::peekOp(OpBytes* op) {
-  const uint8_t* pos = d_.currentPosition();
-
-  if (MOZ_UNLIKELY(!d_.readOp(op))) {
-    op->b0 = uint16_t(Op::Limit);
-  }
-
-  d_.rollbackPosition(pos);
-}
-
-template <typename Policy>
 inline bool OpIter<Policy>::startFunction(uint32_t funcIndex) {
   MOZ_ASSERT(kind_ == OpIter::Func);
   MOZ_ASSERT(elseParamStack_.empty());
@@ -1549,8 +1473,16 @@ inline bool OpIter<Policy>::checkBrTableEntryAndPush(
     return fail("unable to read br_table depth");
   }
 
+  return checkBrTableTargetAndPush(*relativeDepth, prevBranchType, type,
+                                   branchValues);
+}
+
+template <typename Policy>
+inline bool OpIter<Policy>::checkBrTableTargetAndPush(
+    uint32_t relativeDepth, ResultType prevBranchType, ResultType* type,
+    ValueVector* branchValues) {
   Control* block = nullptr;
-  if (!getControl(*relativeDepth, &block)) {
+  if (!getControl(relativeDepth, &block)) {
     return false;
   }
 

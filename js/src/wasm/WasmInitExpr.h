@@ -74,6 +74,17 @@ class InitExpr {
   static bool decodeAndValidate(Decoder& d, CodeMetadata* codeMeta,
                                 ValType expected, InitExpr* expr);
 
+  // Build the expression for an already-validated wasm 1.0 constant
+  // expression, which is exactly one instruction.
+  //
+  // The bytecode is synthesised rather than copied, because a validator that
+  // reports the decoded value has no byte range to hand over. It is still
+  // needed: instantiation reads a non-literal expression back through the
+  // interpreter, and WasmDump.cpp prints it.
+  [[nodiscard]] static bool fromLiteral(LitVal value, InitExpr* expr);
+  [[nodiscard]] static bool fromGlobalGet(ValType type, uint32_t globalIndex,
+                                          InitExpr* expr);
+
   // Decode and evaluate a constant expression at the current position of the
   // decoder. Does not validate the expression first, since all InitExprs are
   // required to have been validated. Failure conditions are the same as

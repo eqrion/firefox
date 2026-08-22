@@ -43,6 +43,7 @@
 #include "wasm/WasmProcess.h"
 #include "wasm/WasmSignalHandlers.h"
 #include "wasm/WasmValidate.h"
+#include "wasm/WasmItasca.h"
 
 using namespace js;
 using namespace js::jit;
@@ -915,63 +916,25 @@ void CompilerEnvironment::computeParameters(const ModuleMetadata& moduleMeta) {
   state_ = Computed;
 }
 
-template <class DecoderT, class ModuleGeneratorT>
-static bool DecodeFunctionBody(DecoderT& d, ModuleGeneratorT& mg,
-                               uint32_t funcIndex) {
-  uint32_t bodySize;
-  if (!d.readVarU32(&bodySize)) {
-    return d.fail("expected number of function body bytes");
+// Hand the environment and the code section to the generator, which retains
+// them for tier-2: recompiling a body means driving itasca over it again.
+// Returns the environment, which the generator owns from here on and the
+// compilation below borrows, or null on out-of-memory.
+static const VwEnv* RetainItascaContext(ModuleGenerator& mg, UniqueVwEnv env,
+                                          const BytecodeRegion& code,
+                                          SharedBytes codeSection) {
+  SharedItascaModule retained = js_new<ItascaModule>();
+  if (!retained) {
+    return nullptr;
   }
+  retained->env = std::move(env);
+  retained->codeSection = std::move(codeSection);
+  retained->codeSectionStart = code.start;
 
-  if (bodySize > MaxFunctionBytes) {
-    return d.fail("function body too big");
-  }
-
-  const size_t offsetInModule = d.currentOffset();
-
-  // Skip over the function body; it will be validated by the compilation
-  // thread.
-  const uint8_t* bodyBegin;
-  if (!d.readBytes(bodySize, &bodyBegin)) {
-    return d.fail("function body length too big");
-  }
-
-  return mg.compileFuncDef(funcIndex, offsetInModule, bodyBegin,
-                           bodyBegin + bodySize);
-}
-
-template <class DecoderT, class ModuleGeneratorT>
-static bool DecodeCodeSection(const CodeMetadata& codeMeta, DecoderT& d,
-                              ModuleGeneratorT& mg) {
-  if (!codeMeta.codeSectionRange) {
-    if (codeMeta.numFuncDefs() != 0) {
-      return d.fail("expected code section");
-    }
-
-    return mg.finishFuncDefs();
-  }
-
-  uint32_t numFuncDefs;
-  if (!d.readVarU32(&numFuncDefs)) {
-    return d.fail("expected function body count");
-  }
-
-  if (numFuncDefs != codeMeta.numFuncDefs()) {
-    return d.fail(
-        "function body count does not match function signature count");
-  }
-
-  for (uint32_t funcDefIndex = 0; funcDefIndex < numFuncDefs; funcDefIndex++) {
-    if (!DecodeFunctionBody(d, mg, codeMeta.numFuncImports + funcDefIndex)) {
-      return false;
-    }
-  }
-
-  if (!d.finishSection(*codeMeta.codeSectionRange, "code")) {
-    return false;
-  }
-
-  return mg.finishFuncDefs();
+  const VwEnv* itascaEnv = retained->env.get();
+  mg.setItascaContext(code, itascaEnv);
+  mg.setRetainedItascaModule(std::move(retained));
+  return itascaEnv;
 }
 
 SharedModule wasm::CompileModule(const CompileArgs& args,
@@ -985,10 +948,32 @@ SharedModule wasm::CompileModule(const CompileArgs& args,
   }
 
   const BytecodeSource& bytecodeSource = bytecode.source();
+  BytecodeRegion envRegion(bytecodeSource.envSpan(), 0);
+
+  CustomSections customs;
+  UniqueVwEnv env;
+  size_t codePos = 0;
+  if (!DecodeEnvWithItasca(envRegion, moduleMeta, &customs, &env, &codePos,
+                             error)) {
+    return nullptr;
+  }
+
+  BytecodeRegion code;
+  BytecodeRegion tail;
+  if (!RegionsAfterEnv(bytecodeSource, codePos, &code, &tail, error)) {
+    return nullptr;
+  }
+
+  // The split already found the code section, and itasca has just agreed
+  // that everything before it is well formed.
+  if (bytecodeSource.hasCodeSection()) {
+    moduleMeta->codeMeta->codeSectionRange = Some(bytecodeSource.codeRange());
+  }
+
   Decoder envDecoder(bytecodeSource.envSpan(), bytecodeSource.envRange().start,
                      error, warnings);
-  if (!DecodeModuleEnvironment(envDecoder, moduleMeta->codeMeta.get(),
-                               moduleMeta)) {
+  if (!CheckBuiltinModuleImports(envDecoder, moduleMeta->codeMeta.get(),
+                                 moduleMeta)) {
     return nullptr;
   }
 
@@ -1004,50 +989,31 @@ SharedModule wasm::CompileModule(const CompileArgs& args,
     return nullptr;
   }
 
-  // If our bytecode has a code section, then we must switch decoders for
-  // these section.
-  if (bytecodeSource.hasCodeSection()) {
-    // DecodeModuleEnvironment will stop and return true if there is an unknown
-    // section before the code section. We must check this and return an error.
-    if (!moduleMeta->codeMeta->codeSectionRange) {
-      envDecoder.fail("unknown section before code section");
-      return nullptr;
-    }
-
-    // Our pre-parse that split the module should ensure that after we've
-    // parsed the environment there are no bytes left.
-    MOZ_RELEASE_ASSERT(envDecoder.done());
-
-    Decoder codeDecoder(bytecodeSource.codeSpan(),
-                        bytecodeSource.codeRange().start, error, warnings);
-    if (!DecodeCodeSection(*moduleMeta->codeMeta, codeDecoder, mg)) {
-      return nullptr;
-    }
-    // Our pre-parse that split the module should ensure that after we've
-    // parsed the code section there are no bytes left.
-    MOZ_RELEASE_ASSERT(codeDecoder.done());
-
-    Decoder tailDecoder(bytecodeSource.tailSpan(),
-                        bytecodeSource.tailRange().start, error, warnings);
-    if (!DecodeModuleTail(tailDecoder, moduleMeta->codeMeta, moduleMeta)) {
-      return nullptr;
-    }
-    // Decoding the module tail should consume all remaining bytes.
-    MOZ_RELEASE_ASSERT(tailDecoder.done());
-  } else {
-    // We still must call this method even without a code section because it
-    // does validation that ensure we aren't missing function definitions.
-    if (!DecodeCodeSection(*moduleMeta->codeMeta, envDecoder, mg)) {
-      return nullptr;
-    }
-
-    if (!DecodeModuleTail(envDecoder, moduleMeta->codeMeta, moduleMeta)) {
-      return nullptr;
-    }
-
-    // Decoding the module tail should consume all remaining bytes.
-    MOZ_RELEASE_ASSERT(envDecoder.done());
+  const VwEnv* itascaEnv = RetainItascaContext(
+      mg, std::move(env), code,
+      bytecodeSource.hasCodeSection() ? bytecode.getOrCreateCodeSection()
+                                      : nullptr);
+  if (!itascaEnv) {
+    return nullptr;
   }
+
+  if (bytecodeSource.hasCodeSection()) {
+    CodeSectionArrival arrival;
+    if (!DecodeCodeSectionWithItasca(code, itascaEnv,
+                                       *moduleMeta->codeMeta, mg, arrival,
+                                       error)) {
+      return nullptr;
+    }
+  } else if (!CheckNoCodeSectionWithItasca(code, itascaEnv, error) ||
+             !mg.finishFuncDefs()) {
+    return nullptr;
+  }
+
+  if (!DecodeTailWithItasca(tail, itascaEnv, moduleMeta, &customs,
+                             error)) {
+    return nullptr;
+  }
+  DecodeNameSectionWithItasca(customs, moduleMeta, warnings);
 
   return mg.finishModule(bytecode, *moduleMeta, listener);
 }
@@ -1110,10 +1076,28 @@ bool wasm::CompileCompleteTier2(const ShareableBytes* codeSection,
     return false;
   }
 
+  const CodeTailMetadata& tailMeta = module.codeTailMeta();
   if (codeMeta.codeSectionRange) {
-    BytecodeSpan codeSpan(codeSection->begin(), codeSection->end());
-    Decoder d(codeSpan, codeMeta.codeSectionRange->start, error);
-    if (!DecodeCodeSection(module.codeMeta(), d, mg)) {
+    const ItascaModule* retained = tailMeta.itascaModule;
+    MOZ_RELEASE_ASSERT(retained);
+    BytecodeRegion section = retained->codeRegion();
+    mg.setItascaContext(section, retained->env.get());
+
+    // Each entry is pointed at within the code section. An entry offset is
+    // already relative to the section, because that is the region tier-1
+    // drove itasca over; a body range is a module range, so it is the one
+    // that has to be re-based.
+    for (uint32_t i = 0; i < codeMeta.numFuncDefs(); i++) {
+      const BytecodeRange& body = tailMeta.funcDefRanges[i];
+      uint32_t entryOffset = tailMeta.funcDefEntryOffsets[i];
+      if (!mg.compileFuncDef(codeMeta.numFuncImports + i, body.start,
+                             entryOffset,
+                             section.data() + (body.start - section.start),
+                             section.data() + (body.end - section.start))) {
+        return false;
+      }
+    }
+    if (!mg.finishFuncDefs()) {
       return false;
     }
   } else {
@@ -1143,60 +1127,64 @@ bool wasm::CompilePartialTier2(const Code& code, uint32_t funcIndex,
     return false;
   }
 
-  const BytecodeRange& funcRange = code.codeTailMeta().funcDefRange(funcIndex);
-  BytecodeSpan funcBytecode = code.codeTailMeta().funcDefBody(funcIndex);
+  const CodeTailMetadata& tailMeta = code.codeTailMeta();
+  const BytecodeRange& funcRange = tailMeta.funcDefRange(funcIndex);
+  BytecodeSpan funcBytecode = tailMeta.funcDefBody(funcIndex);
+
+  const ItascaModule* retained = tailMeta.itascaModule;
+  MOZ_RELEASE_ASSERT(retained);
+  BytecodeRegion section = retained->codeRegion();
+  mg.setItascaContext(section, retained->env.get());
+
+  uint32_t funcDefIndex = funcIndex - codeMeta.numFuncImports;
+  uint32_t entryOffset = tailMeta.funcDefEntryOffsets[funcDefIndex];
 
   // The following sequence will compile/finish this function, on this thread.
   // `error` (as stashed in `mg`) may get set to, for example, "stack frame too
   // large", or to "", denoting OOM.
-  return mg.compileFuncDef(funcIndex, funcRange.start, funcBytecode.data(),
+  return mg.compileFuncDef(funcIndex, funcRange.start, entryOffset,
+                           funcBytecode.data(),
                            funcBytecode.data() + funcBytecode.size()) &&
          mg.finishFuncDefs() && mg.finishPartialTier2();
 }
 
-class StreamingDecoder {
-  Decoder d_;
-  const ExclusiveBytesPtr& codeBytesEnd_;
+// How much of the code section has arrived, for a stream.
+//
+// The region was allocated at the size the section's header declared, so a
+// read of it is a read of memory that may not have been written yet. Every
+// read waits for its bytes first, which is also what paces the walk against
+// the download.
+class StreamingCodeSection : public CodeSectionArrival {
+  const uint8_t* const begin_;
+  const size_t length_;
+  const ExclusiveBytesPtr& arrived_;
   const Atomic<bool>& cancelled_;
+  UniqueChars* const error_;
 
  public:
-  StreamingDecoder(const CodeMetadata& codeMeta, const Bytes& begin,
-                   const ExclusiveBytesPtr& codeBytesEnd,
-                   const Atomic<bool>& cancelled, UniqueChars* error,
-                   UniqueCharsVector* warnings)
-      : d_(begin, codeMeta.codeSectionRange->start, error, warnings),
-        codeBytesEnd_(codeBytesEnd),
-        cancelled_(cancelled) {}
+  StreamingCodeSection(const BytecodeRegion& code,
+                       const ExclusiveBytesPtr& arrived,
+                       const Atomic<bool>& cancelled, UniqueChars* error)
+      : begin_(code.data()),
+        length_(code.size()),
+        arrived_(arrived),
+        cancelled_(cancelled),
+        error_(error) {}
 
-  bool fail(const char* msg) { return d_.fail(msg); }
-
-  bool done() const { return d_.done(); }
-
-  size_t currentOffset() const { return d_.currentOffset(); }
-
-  bool waitForBytes(size_t numBytes) {
-    numBytes = std::min(numBytes, d_.bytesRemain());
-    const uint8_t* requiredEnd = d_.currentPosition() + numBytes;
-    auto codeBytesEnd = codeBytesEnd_.lock();
-    while (codeBytesEnd < requiredEnd) {
+  bool waitFor(size_t end) override {
+    const uint8_t* required = begin_ + std::min(end, length_);
+    auto arrived = arrived_.lock();
+    while (arrived < required) {
       if (cancelled_) {
-        return false;
+        // The stream ended inside the code section, or failed outright:
+        // either way the bytes the section declared are not coming, and this
+        // side of the boundary is the one that saw it. A stream that failed
+        // has its own error, which the caller reports instead of this one.
+        return FailItasca(error_, "unexpected end of input");
       }
-      codeBytesEnd.wait();
+      arrived.wait();
     }
     return true;
-  }
-
-  bool readVarU32(uint32_t* u32) {
-    return waitForBytes(MaxVarU32DecodedBytes) && d_.readVarU32(u32);
-  }
-
-  bool readBytes(size_t size, const uint8_t** begin) {
-    return waitForBytes(size) && d_.readBytes(size, begin);
-  }
-
-  bool finishSection(const BytecodeRange& range, const char* name) {
-    return d_.finishSection(range, name);
   }
 };
 
@@ -1206,49 +1194,65 @@ SharedModule wasm::CompileStreaming(
     const ExclusiveStreamEndData& exclusiveStreamEnd,
     const Atomic<bool>& cancelled, UniqueChars* error,
     UniqueCharsVector* warnings) {
-  CompilerEnvironment compilerEnv(args);
   MutableModuleMetadata moduleMeta = js_new<ModuleMetadata>();
   if (!moduleMeta || !moduleMeta->init(args)) {
     return nullptr;
   }
-  CodeMetadata& codeMeta = *moduleMeta->codeMeta;
 
-  {
-    Decoder d(envBytes.vector, 0, error, warnings);
+  // The environment is all here: the stream is split on the code section, so
+  // reaching this at all means everything before it has arrived.
+  BytecodeRegion envRegion(BytecodeSpan(envBytes.begin(), envBytes.length()),
+                           0);
+  CustomSections customs;
+  UniqueVwEnv env;
+  size_t codePos = 0;
+  if (!DecodeEnvWithItasca(envRegion, moduleMeta, &customs, &env, &codePos,
+                             error)) {
+    return nullptr;
+  }
+  // The tail has not arrived, so its region is empty for now; the code
+  // section's is allocated at the size its header declared.
+  BytecodeSource arrived(envRegion.span,
+                         BytecodeSpan(codeBytes.begin(), codeBytes.length()),
+                         BytecodeSpan());
+  BytecodeRegion code;
+  BytecodeRegion tail;
+  if (!RegionsAfterEnv(arrived, codePos, &code, &tail, error)) {
+    return nullptr;
+  }
+  moduleMeta->codeMeta->codeSectionRange = Some(arrived.codeRange());
 
-    if (!DecodeModuleEnvironment(d, &codeMeta, moduleMeta)) {
-      return nullptr;
-    }
-    compilerEnv.computeParameters(*moduleMeta);
-
-    if (!codeMeta.codeSectionRange) {
-      d.fail("unknown section before code section");
-      return nullptr;
-    }
-
-    MOZ_RELEASE_ASSERT(codeMeta.codeSectionRange->size() == codeBytes.length());
-    MOZ_RELEASE_ASSERT(d.done());
+  Decoder envDecoder(envRegion.span, 0, error, warnings);
+  if (!CheckBuiltinModuleImports(envDecoder, moduleMeta->codeMeta.get(),
+                                 moduleMeta)) {
+    return nullptr;
   }
 
+  CompilerEnvironment compilerEnv(args);
+  compilerEnv.computeParameters(*moduleMeta);
   if (!moduleMeta->prepareForCompile(compilerEnv.mode())) {
     return nullptr;
   }
 
-  ModuleGenerator mg(codeMeta, compilerEnv, compilerEnv.initialState(),
-                     &cancelled, error, warnings);
+  ModuleGenerator mg(*moduleMeta->codeMeta, compilerEnv,
+                     compilerEnv.initialState(), &cancelled, error, warnings);
   if (!mg.initializeCompleteTier()) {
     return nullptr;
   }
 
-  {
-    StreamingDecoder d(codeMeta, codeBytes.vector, codeBytesEnd, cancelled,
-                       error, warnings);
+  const VwEnv* itascaEnv =
+      RetainItascaContext(mg, std::move(env), code, &codeBytes);
+  if (!itascaEnv) {
+    return nullptr;
+  }
 
-    if (!DecodeCodeSection(codeMeta, d, mg)) {
+  {
+    StreamingCodeSection arrival(code, codeBytesEnd, cancelled, error);
+    if (!DecodeCodeSectionWithItasca(code, itascaEnv,
+                                       *moduleMeta->codeMeta, mg, arrival,
+                                       error)) {
       return nullptr;
     }
-
-    MOZ_RELEASE_ASSERT(d.done());
   }
 
   {
@@ -1263,78 +1267,26 @@ SharedModule wasm::CompileStreaming(
 
   const StreamEndData streamEnd = exclusiveStreamEnd.lock();
   const ShareableBytes& tailBytes = *streamEnd.tailBytes;
+  tail.span = BytecodeSpan(tailBytes.begin(), tailBytes.length());
 
-  {
-    Decoder d(tailBytes.vector, codeMeta.codeSectionRange->end, error,
-              warnings);
-
-    if (!DecodeModuleTail(d, &codeMeta, moduleMeta)) {
-      return nullptr;
-    }
-
-    MOZ_RELEASE_ASSERT(d.done());
+  if (!DecodeTailWithItasca(tail, itascaEnv, moduleMeta, &customs,
+                             error)) {
+    return nullptr;
   }
+  DecodeNameSectionWithItasca(customs, moduleMeta, warnings);
 
   BytecodeBuffer bytecodeBuffer(&envBytes, &codeBytes, &tailBytes);
   return mg.finishModule(BytecodeBufferOrSource(std::move(bytecodeBuffer)),
                          *moduleMeta, streamEnd.completeTier2Listener);
 }
 
-class DumpIonModuleGenerator {
- private:
-  const CompilerEnvironment& compilerEnv_;
-  CodeMetadata& codeMeta_;
-  uint32_t targetFuncIndex_;
-  GenericPrinter& out_;
-  UniqueChars* error_;
-
- public:
-  DumpIonModuleGenerator(const CompilerEnvironment& compilerEnv,
-                         CodeMetadata& codeMeta, uint32_t targetFuncIndex,
-                         GenericPrinter& out, UniqueChars* error)
-      : compilerEnv_(compilerEnv),
-        codeMeta_(codeMeta),
-        targetFuncIndex_(targetFuncIndex),
-        out_(out),
-        error_(error) {}
-
-  bool finishFuncDefs() { return true; }
-  bool compileFuncDef(uint32_t funcIndex, uint32_t bytecodeOffset,
-                      const uint8_t* begin, const uint8_t* end) {
-    if (funcIndex != targetFuncIndex_) {
-      return true;
-    }
-
-    FuncCompileInput input(funcIndex, bytecodeOffset, begin, end);
-    return IonDumpFunction(compilerEnv_, codeMeta_, input, out_, error_);
-  }
-};
-
+// wasmDumpIon is a shell testing function, and the only remaining consumer of
+// the decoder itasca replaced. Disabled rather than ported: it dumps Ion MIR
+// for one function, which the compiler restructuring is about to change out
+// from under it anyway.
 bool wasm::DumpIonFunctionInModule(const ShareableBytes& bytecode,
                                    uint32_t targetFuncIndex,
                                    GenericPrinter& out, UniqueChars* error) {
-  SharedCompileArgs compileArgs =
-      CompileArgs::buildForValidation(FeatureArgs::allEnabled());
-  if (!compileArgs) {
-    return false;
-  }
-  CompilerEnvironment compilerEnv(CompileMode::Once, Tier::Optimized,
-                                  DebugEnabled::False);
-  compilerEnv.computeParameters();
-
-  UniqueCharsVector warnings;
-  Decoder d(bytecode.span(), 0, error, &warnings);
-  MutableModuleMetadata moduleMeta = js_new<ModuleMetadata>();
-  if (!moduleMeta || !moduleMeta->init(*compileArgs)) {
-    return false;
-  }
-
-  if (!DecodeModuleEnvironment(d, moduleMeta->codeMeta, moduleMeta)) {
-    return false;
-  }
-
-  DumpIonModuleGenerator mg(compilerEnv, *moduleMeta->codeMeta, targetFuncIndex,
-                            out, error);
-  return moduleMeta->prepareForCompile(CompileMode::Once) &&
-         DecodeCodeSection(*moduleMeta->codeMeta, d, mg);
+  *error = DuplicateString("wasmDumpIon is disabled on the itasca branch");
+  return false;
 }

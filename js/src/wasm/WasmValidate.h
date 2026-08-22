@@ -30,7 +30,9 @@
 namespace js {
 namespace wasm {
 
-// OpIter specialized for validation.
+// OpIter specialized for reading a module without compiling it, which is what
+// the dumper and the initialiser-expression reader do. Validation itself is
+// itasca's.
 
 class NothingVector {
   mozilla::Nothing unused_;
@@ -91,6 +93,10 @@ using ValidatingOpIter = OpIter<ValidatingPolicy>;
 // be a valid module in the special case when there are no function defs and the
 // code section is not present. Such modules can be valid so the caller must
 // handle this special case.
+//
+// The range runs from the section's id byte rather than from its contents, so
+// that a bytecode source split on it hands itasca the section's own framing
+// to read. See BytecodeSource.
 
 [[nodiscard]] bool StartsCodeSection(const uint8_t* begin, const uint8_t* end,
                                      BytecodeRange* codeSection);
@@ -99,21 +105,24 @@ using ValidatingOpIter = OpIter<ValidatingPolicy>;
 [[nodiscard]] bool IsComponent(Decoder& d);
 #endif
 
-// Calling DecodeModuleEnvironment decodes all sections up to the code section
-// and performs full validation of all those sections. The client must then
-// decode the code section itself, reusing ValidateFunctionBody if necessary,
-// and finally call DecodeModuleTail to decode all remaining sections after the
-// code section (again, performing full validation).
+// Check the decoded imports against any enabled builtin module. Part of
+// decoding the environment, and separate only because the environment can also
+// come from itasca. `d` is used for error reporting and nothing else.
 
-[[nodiscard]] bool DecodeModuleEnvironment(Decoder& d, CodeMetadata* codeMeta,
-                                           ModuleMetadata* moduleMeta);
+[[nodiscard]] bool CheckBuiltinModuleImports(Decoder& d,
+                                             CodeMetadata* codeMeta,
+                                             ModuleMetadata* moduleMeta);
 
-[[nodiscard]] bool ValidateFunctionBody(const CodeMetadata& codeMeta,
-                                        uint32_t funcIndex, uint32_t bodySize,
-                                        Decoder& d);
+// Decode the name section's subsections. `customSectionIndex` selects the
+// section from CodeMetadata::customSectionRanges, which must already hold it.
+// Cannot fail: a malformed name section is dropped, since nothing about a
+// module's validity depends on its contents.
 
-[[nodiscard]] bool DecodeModuleTail(Decoder& d, CodeMetadata* codeMeta,
-                                    ModuleMetadata* meta);
+void DecodeNameSectionPayload(const BytecodeSpan& fromPayload,
+                              uint32_t customSectionIndex,
+                              CodeMetadata* codeMeta,
+                              ModuleMetadata* moduleMeta,
+                              UniqueCharsVector* warnings);
 
 #ifdef ENABLE_WASM_COMPONENTS
 [[nodiscard]] bool DecodeComponent(

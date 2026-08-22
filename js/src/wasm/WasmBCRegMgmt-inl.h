@@ -460,16 +460,27 @@ void BaseCompiler::initControl(Control& item, ResultType params) {
   item.bceSafeOnEntry = bceSafe_;
 }
 
-Control& BaseCompiler::controlItem() { return iter_.controlItem(); }
-
-Control& BaseCompiler::controlItem(uint32_t relativeDepth) {
-  return iter_.controlItem(relativeDepth);
+bool BaseCompiler::pushControl(LabelKind kind, BlockType type) {
+  return controlStack_.emplaceBack(kind, type);
 }
 
-Control& BaseCompiler::controlOutermost() { return iter_.controlOutermost(); }
+Control& BaseCompiler::controlItem() { return controlStack_.back().item; }
+
+Control& BaseCompiler::controlItem(uint32_t relativeDepth) {
+  return controlStack_[controlStack_.length() - 1 - relativeDepth].item;
+}
+
+Control& BaseCompiler::controlOutermost() { return controlStack_[0].item; }
 
 LabelKind BaseCompiler::controlKind(uint32_t relativeDepth) {
-  return iter_.controlKind(relativeDepth);
+  return controlStack_[controlStack_.length() - 1 - relativeDepth].kind;
+}
+
+ResultType BaseCompiler::branchTargetType(uint32_t relativeDepth) {
+  const BaseControlFrame& frame =
+      controlStack_[controlStack_.length() - 1 - relativeDepth];
+  return frame.kind == LabelKind::Loop ? frame.type.params()
+                                       : frame.type.results();
 }
 
 }  // namespace wasm

@@ -49,5 +49,35 @@ fn text_to_binary(text: &str) -> Result<Vec<u8>, wast::Error> {
     lexer.allow_confusing_unicode(true);
     let buf = wast::parser::ParseBuffer::new_with_lexer(lexer)?;
     let mut ast = wast::parser::parse::<wast::Wat>(&buf)?;
+    if let wast::Wat::Module(module) = &mut ast {
+        // Resolution is what fills in the table index this drops, and encode()
+        // runs it again, which is a no-op the second time round.
+        module.resolve()?;
+        use_wasm10_elem_encoding(module);
+    }
     return ast.encode();
+}
+
+/// Emit an active element segment against table 0 in the wasm 1.0 encoding.
+///
+/// `wasm_encoder` picks the encoding from whether the table index is present:
+/// absent gives spec 5.5.12's `elem ::= x:tableidx e:expr y*:vec(funcidx)`, and
+/// present gives the bulk-memory flags-2 form with an explicit index and an
+/// element kind. Resolution fills the index in for every segment, including for
+/// the `(table funcref (elem ...))` abbreviation, so without this every segment
+/// this compiler emits is post-1.0 and a 1.0-only engine rejects it.
+fn use_wasm10_elem_encoding(module: &mut wast::core::Module) {
+    let fields = match &mut module.kind {
+        wast::core::ModuleKind::Text(fields) => fields,
+        wast::core::ModuleKind::Binary(_) => return,
+    };
+    for field in fields {
+        if let wast::core::ModuleField::Elem(elem) = field {
+            if let wast::core::ElemKind::Active { table, .. } = &mut elem.kind {
+                if let Some(wast::token::Index::Num(0, _)) = table {
+                    *table = None;
+                }
+            }
+        }
+    }
 }

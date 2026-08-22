@@ -1,4 +1,8 @@
-// |jit-test| test-also=--setpref=wasm_lazy_tiering --setpref=wasm_lazy_tiering_synchronous; skip-if: wasmCompileMode() != "baseline+ion" || !getPrefValue("wasm_lazy_tiering") || helperThreadCount() === 0
+// |jit-test| skip-if: true
+//
+// This measures the inliner, which the itasca branch disables: Ion
+// inlines a callee by compiling its body, and a body is compiled by
+// driving itasca over it.
 
 // Tests the inliner on a recursive function, in particular to establish that
 // the inlining heuristics have some way to stop the compiler looping

@@ -1,4 +1,7 @@
-// |jit-test| skip-if: !hasDisassembler() || wasmCompileMode() != "ion" || !getBuildConfiguration("arm64"); include:codegen-arm64-test.js
+// |jit-test| skip-if: true
+//
+// The cases here store v128 and GC struct fields, which are post-1.0 and
+// so outside what this branch compiles.
 
 // Test that storing an i32.const 0 uses wzr/xzr directly rather than
 // materialising zero into a general-purpose register first (bug 1710087).

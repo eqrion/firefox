@@ -341,8 +341,13 @@ struct CompilerEnvironment {
 // A bytecode source is a wrapper around wasm bytecode that is to be compiled
 // or validated. It has been pre-parsed into three regions:
 //   1. 'env' - everything before the code section
-//   2. 'code' - the code section
+//   2. 'code' - the code section, from its id byte to its last content byte
 //   3. 'tail' - everything after the code section.
+//
+// The code region carries the section's own framing so that itasca reads it:
+// each region is validated on its own, and a region that began at the contents
+// would leave the id and size prefix in a region no validator frames them
+// against.
 //
 // The naming here matches the corresponding validation functions we have. This
 // design comes from the requirements of streaming compilation which assembles

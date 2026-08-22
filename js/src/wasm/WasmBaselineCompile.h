@@ -20,6 +20,8 @@
 #include "jit/ABIArgGenerator.h"
 #include "wasm/WasmGenerator.h"
 
+struct VwEnv;
+
 namespace js {
 namespace wasm {
 
@@ -32,6 +34,7 @@ namespace wasm {
 [[nodiscard]] bool BaselineCompileFunctions(
     const CodeMetadata& codeMeta, const CompilerEnvironment& compilerEnv,
     LifoAlloc& lifo, const FuncCompileInputVector& inputs, CompiledCode* code,
+    const BytecodeRegion& codeBytes, const VwEnv* itascaEnv,
     UniqueChars* error);
 
 // BaseLocalIter iterates over a vector of types of locals and provides offsets

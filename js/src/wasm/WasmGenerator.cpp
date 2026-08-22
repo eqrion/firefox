@@ -31,6 +31,7 @@
 #include "wasm/WasmGC.h"
 #include "wasm/WasmIonCompile.h"
 #include "wasm/WasmStubs.h"
+#include "wasm/WasmItasca.h"
 
 using namespace js;
 using namespace js::jit;
@@ -622,17 +623,20 @@ static bool ExecuteCompileTask(CompileTask* task, UniqueChars* error) {
   MOZ_ASSERT(task->lifo.isEmpty());
   MOZ_ASSERT(task->output.empty());
 
+
   switch (task->compilerEnv.tier()) {
     case Tier::Optimized:
       if (!IonCompileFunctions(task->codeMeta, task->codeTailMeta,
                                task->compilerEnv, task->lifo, task->inputs,
-                               &task->output, error)) {
+                               &task->output, task->codeBytes,
+                               task->itascaEnv, error)) {
         return false;
       }
       break;
     case Tier::Baseline:
       if (!BaselineCompileFunctions(task->codeMeta, task->compilerEnv,
                                     task->lifo, task->inputs, &task->output,
+                                    task->codeBytes, task->itascaEnv,
                                     error)) {
         return false;
       }
@@ -801,6 +805,7 @@ bool ModuleGenerator::finishOutstandingTask() {
 
 bool ModuleGenerator::compileFuncDef(uint32_t funcIndex,
                                      uint32_t bytecodeOffset,
+                                     uint32_t entryOffset,
                                      const uint8_t* begin, const uint8_t* end) {
   MOZ_ASSERT(!finishedFuncDefs_);
   MOZ_ASSERT(funcIndex < codeMeta_->numFuncs());
@@ -809,6 +814,9 @@ bool ModuleGenerator::compileFuncDef(uint32_t funcIndex,
     static_assert(MaxFunctionBytes < UINT32_MAX);
     uint32_t bodyLength = (uint32_t)(end - begin);
     funcDefRanges_.infallibleAppend(BytecodeRange(bytecodeOffset, bodyLength));
+    if (!funcDefEntryOffsets_.append(entryOffset)) {
+      return false;
+    }
   }
 
   uint32_t threshold;
@@ -846,8 +854,11 @@ bool ModuleGenerator::compileFuncDef(uint32_t funcIndex,
     currentTask_ = freeTasks_.popCopy();
   }
 
-  if (!currentTask_->inputs.emplaceBack(funcIndex, bytecodeOffset, begin,
-                                        end)) {
+  currentTask_->codeBytes = codeBytes_;
+  currentTask_->itascaEnv = itascaEnv_;
+
+  if (!currentTask_->inputs.emplaceBack(funcIndex, bytecodeOffset, entryOffset,
+                                        begin, end)) {
     return false;
   }
 
@@ -1270,19 +1281,25 @@ SharedModule ModuleGenerator::finishModule(
   // data blocks.
 
   const BytecodeSource& bytecodeSource = bytecode.source();
-  MOZ_ASSERT(moduleMeta.dataSegments.empty());
-  if (!moduleMeta.dataSegments.reserve(moduleMeta.dataSegmentRanges.length())) {
-    return nullptr;
-  }
-  for (const DataSegmentRange& srcRange : moduleMeta.dataSegmentRanges) {
-    MutableDataSegment dstSeg = js_new<DataSegment>();
-    if (!dstSeg) {
+
+  // The itasca tail fills dataSegments directly, since it is handed a
+  // segment's bytes rather than a range to copy. Streaming compilation still
+  // goes through DecodeModuleTail and its ranges.
+  if (moduleMeta.dataSegments.empty()) {
+    if (!moduleMeta.dataSegments.reserve(
+            moduleMeta.dataSegmentRanges.length())) {
       return nullptr;
     }
-    if (!dstSeg->init(bytecodeSource, srcRange)) {
-      return nullptr;
+    for (const DataSegmentRange& srcRange : moduleMeta.dataSegmentRanges) {
+      MutableDataSegment dstSeg = js_new<DataSegment>();
+      if (!dstSeg) {
+        return nullptr;
+      }
+      if (!dstSeg->init(bytecodeSource, srcRange)) {
+        return nullptr;
+      }
+      moduleMeta.dataSegments.infallibleAppend(std::move(dstSeg));
     }
-    moduleMeta.dataSegments.infallibleAppend(std::move(dstSeg));
   }
 
   MOZ_ASSERT(moduleMeta.customSections.empty());
@@ -1320,6 +1337,8 @@ SharedModule ModuleGenerator::finishModule(
   // Transfer the function definition ranges
   MOZ_ASSERT(funcDefRanges_.length() == codeMeta_->numFuncDefs());
   codeTailMeta->funcDefRanges = std::move(funcDefRanges_);
+  codeTailMeta->funcDefEntryOffsets = std::move(funcDefEntryOffsets_);
+  codeTailMeta->itascaModule = std::move(retainedItascaModule_);
 
   // Transfer the function definition feature usages
   codeTailMeta->funcDefFeatureUsages = std::move(funcDefFeatureUsages_);

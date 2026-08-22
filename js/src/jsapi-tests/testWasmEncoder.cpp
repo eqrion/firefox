@@ -79,7 +79,7 @@ BEGIN_TEST(testWasmEncodeBasic) {
     MOZ_ALWAYS_TRUE(encoder.writeOp(Op::Call) && encoder.writeVarU32(0));
     MOZ_ALWAYS_TRUE(encoder.writeOp(Op::End));
   }
-  MOZ_ALWAYS_TRUE(mg.compileFuncDef(1, 0, bytecode.begin(),
+  MOZ_ALWAYS_TRUE(mg.compileFuncDef(1, 0, /*entryOffset=*/0, bytecode.begin(),
                                     bytecode.begin() + bytecode.length()));
   MOZ_ALWAYS_TRUE(mg.finishFuncDefs());
 

@@ -1616,6 +1616,7 @@ void ComponentInstance::tracePrivate(JSTracer* trc) {
     return false;
   }
   if (!mg.compileFuncDef(/*funcIndex=*/0, CallSite::FIRST_VALID_BYTECODE_OFFSET,
+                         /*entryOffset=*/0,
                          bytecode.begin(),
                          bytecode.begin() + bytecode.length())) {
     ReportOutOfMemory(cx);

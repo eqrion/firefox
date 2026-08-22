@@ -4784,6 +4784,14 @@ static JSFunction* WasmFunctionCreate(JSContext* cx, HandleObject func,
   // that it behaves exactly like a normal wasm function and can be used like
   // one in wasm tables. We synthesize such a module below, instantiate it, and
   // then return the exported function as the result.
+  //
+  // The POC excludes WebAssembly.Function: that synthesised module is built
+  // here rather than parsed, so there is no module for itasca to have
+  // validated.
+  JS_ReportErrorASCII(
+      cx, "WebAssembly.Function is disabled on the itasca branch");
+  return nullptr;
+
   FeatureOptions options;
   SharedCompileArgs compileArgs =
       CompileArgs::buildAndReport(cx, ScriptedCaller::selfHosted(cx), options);

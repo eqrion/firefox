@@ -122,11 +122,11 @@ function testStoreOOB(type, ext, base, offset, align, value) {
 }
 
 function badLoadModule(type, ext) {
-    wasmFailValidateText( `(module (func (param i32) (${type}.load${ext} (local.get 0))) (export "" (func 0)))`, /memory index/);
+    wasmFailValidateText( `(module (func (param i32) (${type}.load${ext} (local.get 0))) (export "" (func 0)))`, /(memory index)|(unknown memory)/);
 }
 
 function badStoreModule(type, ext) {
-    wasmFailValidateText(`(module (func (param i32) (${type}.store${ext} (local.get 0) (${type}.const 0))) (export "" (func 0)))`, /memory index/);
+    wasmFailValidateText(`(module (func (param i32) (${type}.store${ext} (local.get 0) (${type}.const 0))) (export "" (func 0)))`, /(memory index)|(unknown memory)/);
 }
 
 // Can't touch memory.
@@ -205,7 +205,7 @@ for (var foldOffsets = 0; foldOffsets <= 1; foldOffsets++) {
     testStore('i32', '8', 0, 0, 0, 0x23);
     testStore('i32', '16', 0, 0, 0, 0x2345);
 
-    wasmFailValidateText('(module (memory 2 1))', /maximum length 1 is less than initial length 2/);
+    wasmFailValidateText('(module (memory 2 1))', /(maximum length 1 is less than initial length 2)|(limits out of range)/);
 
     // Test bounds checks and edge cases.
 
@@ -443,18 +443,20 @@ setJitCompilerOption('wasm.fold-offsets', 1);
                                0x03]);
     }
 
-    // Should succeed because this is what an active segment with index looks like
-    new WebAssembly.Module(makeIt(0x02, 0x00));
+    // The flags-prefixed encoding arrived with bulk memory. wasm 1.0 reads the
+    // segment's first field as the memory index, so every one of these names a
+    // memory that does not exist: the module has only memory 0.
+    assertErrorMessage(() => new WebAssembly.Module(makeIt(0x02, 0x00)),
+                       WebAssembly.CompileError,
+                       /(invalid memory index)|(unknown memory)/);
 
-    // Should fail because the kind is unknown
     assertErrorMessage(() => new WebAssembly.Module(makeIt(0x03, 0x00)),
                        WebAssembly.CompileError,
-                       /invalid data initializer-kind/);
+                       /(invalid data initializer-kind)|(unknown memory)/);
 
-    // Should fail because the memory index is bad
     assertErrorMessage(() => new WebAssembly.Module(makeIt(0x02, 0x01)),
                        WebAssembly.CompileError,
-                       /invalid memory index/);
+                       /(invalid memory index)|(unknown memory)/);
 }
 
 // Misc syntax for data.
@@ -465,18 +467,18 @@ new WebAssembly.Module(wasmTextToBinary(`(module (memory 1) (data 0 (offset (i32
 // A passive data segment (no offset at all) is not part of wasm 1.0.
 assertErrorMessage(() => new WebAssembly.Module(wasmTextToBinary(`(module (memory 1) (data ""))`)),
                    WebAssembly.CompileError,
-                   /invalid data initializer-kind field/);
+                   /(invalid data initializer-kind field)|(unknown memory)/);
 assertErrorMessage(() => new WebAssembly.Module(wasmTextToBinary(`(module (memory 1) (data 0 ""))`)),
                    SyntaxError,
                    /wasm text error/);
 assertErrorMessage(() => new WebAssembly.Module(wasmTextToBinary(`(module (memory 1) (data 1 (i32.const 0) ""))`)),
                    WebAssembly.CompileError,
-                   /invalid memory index/);
+                   /(invalid memory index)|(unknown memory)/);
 
 
 // Make sure we handle memory instructions without memory
 
-var nomem = /memory index out of range/;
+var nomem = /(memory index out of range)|(unknown memory)/;
 
 assertErrorMessage(() => new WebAssembly.Module(wasmTextToBinary(`(module (func (result i32) memory.size))`)),
                    WebAssembly.CompileError,

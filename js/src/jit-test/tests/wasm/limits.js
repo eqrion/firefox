@@ -30,17 +30,17 @@ testMemoryValidate(MemoryMaxValid, MemoryMaxValid, true);
 function testMemoryFailValidate(initial, maximum, shared, pattern) {
   // wasm 1.0 has no shared memories, so the "shared" bit is rejected before
   // any other validity check.
-  if (shared) pattern = /unexpected bits set in flags/;
+  if (shared) pattern = /(unexpected bits set in flags)|(invalid type byte)/;
   wasmFailValidateText(`(module
     (memory ${initial} ${maximum || ''} ${shared ? 'shared' : ''})
   )`, pattern);
 }
 
-testMemoryFailValidate(2, 1, false, /size minimum must not be greater than maximum/);
+testMemoryFailValidate(2, 1, false, /(size minimum must not be greater than maximum)|(limits out of range)/);
 testMemoryFailValidate(1, undefined, true, /maximum length required for shared memory/);
-testMemoryFailValidate(MemoryMaxValid + 1, undefined, false, /initial memory size too big/);
-testMemoryFailValidate(MemoryMaxValid, MemoryMaxValid + 1, false, /maximum memory size too big/);
-testMemoryFailValidate(MemoryMaxValid, MemoryMaxValid + 1, true, /maximum memory size too big/);
+testMemoryFailValidate(MemoryMaxValid + 1, undefined, false, /(initial memory size too big)|(limits out of range)/);
+testMemoryFailValidate(MemoryMaxValid, MemoryMaxValid + 1, false, /(maximum memory size too big)|(limits out of range)/);
+testMemoryFailValidate(MemoryMaxValid, MemoryMaxValid + 1, true, /(maximum memory size too big)|(limits out of range)/);
 
 // Test that a memory type is invalid for constructing a WebAssembly.Memory
 function testMemoryFailConstruct(initial, maximum, shared, pattern) {
@@ -99,7 +99,7 @@ if (MemoryMaxRuntime < 65536) {
         assertErrorMessage(() => wasmEvalText(`(module
     (memory ${initial} ${maximum || ''} ${shared ? 'shared' : ''})
   )`), shared ? WebAssembly.CompileError : WebAssembly.RuntimeError,
-      shared ? /unexpected bits set in flags/ : /too many memory pages/);
+      shared ? /(unexpected bits set in flags)|(invalid type byte)/ : /too many memory pages/);
         assertErrorMessage(() => new WebAssembly.Memory({
             initial,
             maximum,
@@ -117,8 +117,8 @@ if (MemoryMaxRuntime < 65536) {
         assertErrorMessage(() => wasmEvalText(`(module
     (memory ${initial} ${maximum || ''} ${shared ? 'shared' : ''})
   )`), WebAssembly.CompileError,
-      shared ? /unexpected bits set in flags/
-             : /(initial memory size too big)|(memory size minimum must not be greater than maximum)/);
+      shared ? /(unexpected bits set in flags)|(invalid type byte)/
+             : /((initial memory size too big)|(memory size minimum must not be greater than maximum))|(limits out of range)/);
         assertErrorMessage(() => new WebAssembly.Memory({
             initial,
             maximum,
@@ -180,7 +180,7 @@ function testTableFailValidate(initial, maximum, pattern) {
   )`, pattern);
 }
 
-testTableFailValidate(2, 1, /size minimum must not be greater than maximum/);
+testTableFailValidate(2, 1, /(size minimum must not be greater than maximum)|(limits out of range)/);
 // The maximum valid table value is equivalent to the maximum encodable limit
 // value, so we cannot test too large of a table limit in a module.
 assertEq(TableMaxValid + 1 > 0xffffffff, true);
@@ -271,4 +271,4 @@ function generateMemories(count) {
 wasmValidateText(generateMemories(MaxMemories));
 
 assertErrorMessage(() => wasmEvalText(generateMemories(MaxMemories+1)),
-    WebAssembly.CompileError, /too many memories/);
+    WebAssembly.CompileError, /(too many memories)|(multiple memories)/);

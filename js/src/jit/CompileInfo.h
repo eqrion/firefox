@@ -151,6 +151,16 @@ class CompileInfo {
     nslots_ = nlocals_ + nstack_;
   }
 
+  // Grows the local count set by the CompileInfo(unsigned) constructor, once
+  // the real count becomes known. wasm's itasca-driven compilers construct
+  // their CompileInfo before locals are decoded, so they start at 0 and fix
+  // it up here.
+  void setWasmNumLocals(unsigned nlocals) {
+    MOZ_ASSERT(compilingWasm());
+    nlocals_ = nlocals;
+    nslots_ = nlocals_ + nstack_;
+  }
+
   JSScript* script() const { return script_; }
   bool compilingWasm() const { return script() == nullptr; }
   ModuleObject* module() const { return script_->module(); }

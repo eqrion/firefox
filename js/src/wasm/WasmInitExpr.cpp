@@ -531,6 +531,59 @@ bool InitExpr::decodeAndValidate(Decoder& d, CodeMetadata* codeMeta,
   return true;
 }
 
+/* static */ bool InitExpr::fromLiteral(LitVal value, InitExpr* expr) {
+  MOZ_ASSERT(expr->kind_ == InitExprKind::None);
+
+  Encoder e(expr->bytecode_);
+  switch (value.type().kind()) {
+    case ValType::Kind::I32:
+      if (!e.writeOp(Op::I32Const) || !e.writeVarS32(value.i32())) {
+        return false;
+      }
+      break;
+    case ValType::Kind::I64:
+      if (!e.writeOp(Op::I64Const) || !e.writeVarS64(value.i64())) {
+        return false;
+      }
+      break;
+    case ValType::Kind::F32:
+      if (!e.writeOp(Op::F32Const) || !e.writeFixedF32(value.f32())) {
+        return false;
+      }
+      break;
+    case ValType::Kind::F64:
+      if (!e.writeOp(Op::F64Const) || !e.writeFixedF64(value.f64())) {
+        return false;
+      }
+      break;
+    default:
+      MOZ_CRASH("not a wasm 1.0 constant expression");
+  }
+  if (!e.writeOp(Op::End)) {
+    return false;
+  }
+
+  expr->kind_ = InitExprKind::Literal;
+  expr->literal_ = value;
+  expr->type_ = value.type();
+  return true;
+}
+
+/* static */ bool InitExpr::fromGlobalGet(ValType type, uint32_t globalIndex,
+                                          InitExpr* expr) {
+  MOZ_ASSERT(expr->kind_ == InitExprKind::None);
+
+  Encoder e(expr->bytecode_);
+  if (!e.writeOp(Op::GlobalGet) || !e.writeVarU32(globalIndex) ||
+      !e.writeOp(Op::End)) {
+    return false;
+  }
+
+  expr->kind_ = InitExprKind::Variable;
+  expr->type_ = type;
+  return true;
+}
+
 /* static */ bool InitExpr::decodeAndEvaluate(
     JSContext* cx, Handle<WasmInstanceObject*> instanceObj, Decoder& d,
     ValType expectedType, MutableHandleVal result) {

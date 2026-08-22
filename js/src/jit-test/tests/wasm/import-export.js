@@ -78,10 +78,10 @@ assertErrorMessage(() => new Instance(m7, {a:{b:tab2Elem}}), LinkError, /importe
 assertErrorMessage(() => new Instance(m7, {a:{b:tab3Elem}}), LinkError, /imported Table with incompatible maximum size/);
 assertErrorMessage(() => new Instance(m7, {a:{b:tab4Elem}}), LinkError, /imported Table with incompatible size/);
 
-wasmFailValidateText('(module (memory 2 1))', /maximum length 1 is less than initial length 2/);
-wasmFailValidateText('(module (import "a" "b" (memory 2 1)))', /maximum length 1 is less than initial length 2/);
-wasmFailValidateText('(module (table 2 1 funcref))', /maximum length 1 is less than initial length 2/);
-wasmFailValidateText('(module (import "a" "b" (table 2 1 funcref)))', /maximum length 1 is less than initial length 2/);
+wasmFailValidateText('(module (memory 2 1))', /(maximum length 1 is less than initial length 2)|(limits out of range)/);
+wasmFailValidateText('(module (import "a" "b" (memory 2 1)))', /(maximum length 1 is less than initial length 2)|(limits out of range)/);
+wasmFailValidateText('(module (table 2 1 funcref))', /(maximum length 1 is less than initial length 2)|(limits out of range)/);
+wasmFailValidateText('(module (import "a" "b" (table 2 1 funcref)))', /(maximum length 1 is less than initial length 2)|(limits out of range)/);
 
 // Import wasm-wasm type mismatch
 
@@ -395,10 +395,10 @@ assertEq(e2.f(), 52);
 
 // Non-existent export errors
 
-wasmFailValidateText('(module (export "a" (func 0)))', /exported function index out of bounds/);
-wasmFailValidateText('(module (export "a" (global 0)))', /exported global index out of bounds/);
-wasmFailValidateText('(module (export "a" (memory 0)))', /exported memory index out of bounds/);
-wasmFailValidateText('(module (export "a" (table 0)))', /exported table index out of bounds/);
+wasmFailValidateText('(module (export "a" (func 0)))', /(exported function index out of bounds)|(unknown function)/);
+wasmFailValidateText('(module (export "a" (global 0)))', /(exported global index out of bounds)|(unknown global)/);
+wasmFailValidateText('(module (export "a" (memory 0)))', /(exported memory index out of bounds)|(unknown memory)/);
+wasmFailValidateText('(module (export "a" (table 0)))', /(exported table index out of bounds)|(unknown table)/);
 
 // Data segments on imports
 

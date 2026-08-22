@@ -3974,6 +3974,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "itasca"
+version = "0.1.0"
+
+[[package]]
+name = "itasca_glue"
+version = "0.1.0"
+dependencies = [
+ "itasca",
+]
+
+[[package]]
 name = "itertools"
 version = "0.13.0"
 dependencies = [
@@ -4079,6 +4090,7 @@ dependencies = [
  "encoding_c_mem",
  "gluesmith",
  "icu_capi",
+ "itasca_glue",
  "locale_glue",
  "mozglue-static",
  "normalizer_glue",

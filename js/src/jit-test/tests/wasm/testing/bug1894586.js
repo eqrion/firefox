@@ -1,4 +1,7 @@
-// |jit-test| skip-if: !getBuildConfiguration("jitspew")
+// |jit-test| skip-if: true
+//
+// wasmDumpIon is disabled on the itasca branch, and this module's
+// struct type is post-1.0 in any case.
 
 var it = 100;
 function f() {

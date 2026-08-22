@@ -26,6 +26,8 @@
 #include "wasm/WasmBCRegDefs.h"
 #include "wasm/WasmBCStk.h"
 #include "wasm/WasmConstants.h"
+#include "wasm/WasmItascaOps.h"
+#include "wasm/itasca.h"
 
 namespace js {
 namespace wasm {
@@ -90,34 +92,6 @@ struct Control {
   Control(Control&&) = default;
   Control(const Control&) = delete;
 };
-
-// A vector of Nothing values, used for reading opcodes.
-class BaseNothingVector {
-  mozilla::Nothing unused_;
-
- public:
-  bool reserve(size_t size) { return true; }
-  bool resize(size_t length) { return true; }
-  mozilla::Nothing& operator[](size_t) { return unused_; }
-  mozilla::Nothing& back() { return unused_; }
-  size_t length() const { return 0; }
-  bool append(mozilla::Nothing& nothing) { return true; }
-  void infallibleAppend(mozilla::Nothing& nothing) {}
-};
-
-// The baseline compiler tracks values on a stack of its own -- it needs to scan
-// that stack for spilling -- and thus has no need for the values maintained by
-// the iterator.
-struct BaseCompilePolicy {
-  using Value = mozilla::Nothing;
-  using ValueVector = BaseNothingVector;
-
-  // The baseline compiler uses the iterator's control stack, attaching
-  // its own control information.
-  using ControlItem = Control;
-};
-
-using BaseOpIter = OpIter<BaseCompilePolicy>;
 
 // Latent operation for boolean-evaluation-for-control optimization.
 enum class LatentOp { None, Compare, Eqz };
@@ -235,7 +209,11 @@ struct BaseCompiler final {
   const CodeMetadata& codeMeta_;
   const CompilerEnvironment& compilerEnv_;
   const FuncCompileInput& func_;
-  const ValTypeVector& locals_;
+
+  // Bound by init(), once the validator's on_function_start hook has read
+  // the function's locals: the compiler exists before that, so this cannot
+  // be a reference bound at construction.
+  const ValTypeVector* locals_ = nullptr;
 
   // Information about the locations of locals, this is set up during
   // initialization and read-only after that.
@@ -293,8 +271,23 @@ struct BaseCompiler final {
   // Decoder for this function, used for misc error reporting.
   Decoder& decoder_;
 
-  // Opcode reader.
-  BaseOpIter iter_;
+  // The byte offset of the operator currently being emitted, within the
+  // function body's own bytes. There is no readOp to record this, since the
+  // validator read the operator; hooks hand it over instead.
+  size_t currentOpOffset_ = 0;
+
+  // The control stack. Baseline's own: each frame's Control is its labels and
+  // stack-height bookkeeping, its LabelKind is what closed it (and, for a
+  // bare `if`, what it becomes once its `else` arrives), and its BlockType is
+  // what a branch to it, or the `end` that closes it, needs.
+  struct BaseControlFrame {
+    Control item;
+    LabelKind kind;
+    BlockType type;
+    BaseControlFrame(LabelKind kind, BlockType type)
+        : kind(kind), type(type) {}
+  };
+  Vector<BaseControlFrame, 16, SystemAllocPolicy> controlStack_;
 
   // Register allocator.
   BaseRegAlloc ra;
@@ -362,20 +355,20 @@ struct BaseCompiler final {
   //
   // Main compilation API.
   //
-  // A client will create a compiler object, and then call init(),
-  // emitFunction(), and finish() in that order.
+  // A client will create a compiler object, then call init() once the
+  // function's locals are known, then the hooks, then finish(), in that
+  // order.
 
   BaseCompiler(const CodeMetadata& codeMetadata,
                const CompilerEnvironment& compilerEnv,
-               const FuncCompileInput& func, const ValTypeVector& locals,
+               const FuncCompileInput& func,
                const RegisterOffsets& trapExitLayout,
                size_t trapExitLayoutNumWords, Decoder& decoder,
                StkVector& stkSource, TempAllocator* alloc, MacroAssembler* masm,
                StackMaps* stackMaps);
   ~BaseCompiler();
 
-  [[nodiscard]] bool init();
-  [[nodiscard]] bool emitFunction();
+  [[nodiscard]] bool init(const ValTypeVector& locals);
   [[nodiscard]] FuncOffsets finish();
 
   //////////////////////////////////////////////////////////////////////////////
@@ -972,10 +965,17 @@ struct BaseCompiler final {
   // Control stack
 
   inline void initControl(Control& item, ResultType params);
+  // Push a frame for `kind`/`type`, with a freshly-constructed Control that
+  // the caller still has to initControl().
+  [[nodiscard]] inline bool pushControl(LabelKind kind, BlockType type);
   inline Control& controlItem();
   inline Control& controlItem(uint32_t relativeDepth);
   inline Control& controlOutermost();
   inline LabelKind controlKind(uint32_t relativeDepth);
+  // The result type a branch to this depth carries: a loop's parameters (it
+  // is not a control join, so nothing joins there) or every other kind's
+  // results.
+  inline ResultType branchTargetType(uint32_t relativeDepth);
 
   ////////////////////////////////////////////////////////////
   //
@@ -1503,40 +1503,51 @@ struct BaseCompiler final {
 
   //////////////////////////////////////////////////////////////////////
 
-  [[nodiscard]] bool emitBody();
-  [[nodiscard]] bool emitBlock();
-  [[nodiscard]] bool emitLoop();
-  [[nodiscard]] bool emitIf();
+  // Open the function's body.
+  [[nodiscard]] bool beginPushedBody();
+  // What every operator hook runs before and after calling the one method
+  // below that emits it.
+  [[nodiscard]] bool beginPushedOp(OpBytes op, size_t opOffset);
+  void endPushedOp();
+
+  // One method per numeric operator and per constant, named after the
+  // opcode: a hook calls its method directly, so there is no switch mapping
+  // an opcode to one of these.
+  [[nodiscard]] bool emitOpUnreachable();
+  [[nodiscard]] bool emitOpNop();
+  [[nodiscard]] bool emitOpI32Const(int32_t value);
+  [[nodiscard]] bool emitOpI64Const(int64_t value);
+  [[nodiscard]] bool emitOpF32Const(float value);
+  [[nodiscard]] bool emitOpF64Const(double value);
+#define BC_DECLARE_NUMERIC_METHOD(hook, Name) \
+  [[nodiscard]] bool emitOp##Name();
+  SM_VW_FOR_EACH_NUMERIC_OP(BC_DECLARE_NUMERIC_METHOD)
+#undef BC_DECLARE_NUMERIC_METHOD
+
+  [[nodiscard]] bool emitBlock(BlockType type);
+  [[nodiscard]] bool emitLoop(BlockType type);
+  [[nodiscard]] bool emitIf(BlockType type);
   [[nodiscard]] bool emitElse();
   // Used for common setup for catch and catch_all.
   void emitCatchSetup(LabelKind kind, Control& tryCatch,
                       const ResultType& resultType);
 
-  [[nodiscard]] bool emitTry();
-  [[nodiscard]] bool emitTryTable();
-  [[nodiscard]] bool emitCatch();
-  [[nodiscard]] bool emitCatchAll();
-  [[nodiscard]] bool emitDelegate();
-  [[nodiscard]] bool emitThrow();
-  [[nodiscard]] bool emitThrowRef();
-  [[nodiscard]] bool emitRethrow();
   [[nodiscard]] bool emitEnd();
-  [[nodiscard]] bool emitBr();
-  [[nodiscard]] bool emitBrIf();
-  [[nodiscard]] bool emitBrTable();
+  [[nodiscard]] bool emitBr(uint32_t relativeDepth);
+  [[nodiscard]] bool emitBrIf(uint32_t relativeDepth);
+  [[nodiscard]] bool emitBrTable(const Uint32Vector& depths,
+                                 uint32_t defaultDepth);
   [[nodiscard]] bool emitDrop();
   [[nodiscard]] bool emitReturn();
-  [[nodiscard]] bool emitCall();
-  [[nodiscard]] bool emitReturnCall();
-  [[nodiscard]] bool emitCallIndirect();
-  [[nodiscard]] bool emitReturnCallIndirect();
+  [[nodiscard]] bool emitCall(uint32_t funcIndex);
+  [[nodiscard]] bool emitCallIndirect(uint32_t funcTypeIndex);
   [[nodiscard]] bool emitUnaryMathBuiltinCall(SymbolicAddress callee,
                                               ValType operandType);
-  [[nodiscard]] bool emitGetLocal();
-  [[nodiscard]] bool emitSetLocal();
-  [[nodiscard]] bool emitTeeLocal();
-  [[nodiscard]] bool emitGetGlobal();
-  [[nodiscard]] bool emitSetGlobal();
+  [[nodiscard]] bool emitGetLocal(uint32_t slot);
+  [[nodiscard]] bool emitSetLocal(uint32_t slot);
+  [[nodiscard]] bool emitTeeLocal(uint32_t slot);
+  [[nodiscard]] bool emitGetGlobal(uint32_t id);
+  [[nodiscard]] bool emitSetGlobal(uint32_t id);
   [[nodiscard]] RegPtr maybeLoadMemoryBaseForAccess(
       RegPtr instance, const MemoryAccessDesc* access);
   [[nodiscard]] RegPtr maybeLoadInstanceForAccess(
@@ -1544,9 +1555,11 @@ struct BaseCompiler final {
   [[nodiscard]] RegPtr maybeLoadInstanceForAccess(
       const MemoryAccessDesc* access, const AccessCheck& check,
       RegPtr specific);
-  [[nodiscard]] bool emitLoad(ValType type, Scalar::Type viewType);
-  [[nodiscard]] bool emitStore(ValType resultType, Scalar::Type viewType);
-  [[nodiscard]] bool emitSelect(bool typed);
+  [[nodiscard]] bool emitLoad(ValType type, Scalar::Type viewType,
+                              uint32_t alignLog2, uint32_t offset);
+  [[nodiscard]] bool emitStore(ValType resultType, Scalar::Type viewType,
+                               uint32_t alignLog2, uint32_t offset);
+  [[nodiscard]] bool emitSelect(VwStackType type);
 
   template <bool isSetLocal>
   [[nodiscard]] bool emitSetOrTeeLocal(uint32_t slot);
@@ -1722,78 +1735,24 @@ struct BaseCompiler final {
   [[nodiscard]] bool emitMemoryGrow();
   [[nodiscard]] bool emitMemorySize();
 
-  [[nodiscard]] bool emitRefFunc();
-  [[nodiscard]] bool emitRefNull();
-  [[nodiscard]] bool emitRefIsNull();
-  [[nodiscard]] bool emitRefAsNonNull();
-  [[nodiscard]] bool emitBrOnNull();
-  [[nodiscard]] bool emitBrOnNonNull();
-  [[nodiscard]] bool emitCallRef();
-  [[nodiscard]] bool emitReturnCallRef();
 
-  [[nodiscard]] bool emitAtomicCmpXchg(ValType type, Scalar::Type viewType);
-  [[nodiscard]] bool emitAtomicLoad(ValType type, Scalar::Type viewType);
-  [[nodiscard]] bool emitAtomicRMW(ValType type, Scalar::Type viewType,
-                                   AtomicOp op);
-  [[nodiscard]] bool emitAtomicStore(ValType type, Scalar::Type viewType);
-  [[nodiscard]] bool emitWait(ValType type, uint32_t byteSize);
   [[nodiscard]] bool atomicWait(ValType type, MemoryAccessDesc* access);
-  [[nodiscard]] bool emitNotify();
   [[nodiscard]] bool atomicNotify(MemoryAccessDesc* access);
-  [[nodiscard]] bool emitFence();
-  [[nodiscard]] bool emitAtomicXchg(ValType type, Scalar::Type viewType);
-  [[nodiscard]] bool emitMemInit();
-  [[nodiscard]] bool emitMemCopy();
   [[nodiscard]] bool memCopyCall(uint32_t dstMemIndex, uint32_t srcMemIndex);
   void memCopyInlineM32();
-  [[nodiscard]] bool emitTableCopy();
-  [[nodiscard]] bool emitDataOrElemDrop(bool isData);
-  [[nodiscard]] bool emitMemFill();
   [[nodiscard]] bool memFillCall(uint32_t memoryIndex);
   void memFillInlineM32();
-  [[nodiscard]] bool emitTableInit();
-  [[nodiscard]] bool emitTableFill();
-  [[nodiscard]] bool emitMemDiscard();
-  [[nodiscard]] bool emitTableGet();
-  [[nodiscard]] bool emitTableGrow();
-  [[nodiscard]] bool emitTableSet();
-  [[nodiscard]] bool emitTableSize();
-  [[nodiscard]] bool emitI64AddSub128(bool isAdd);
-  [[nodiscard]] bool emitI64MulWide(bool isSigned);
 
   void emitTableBoundsCheck(uint32_t tableIndex, RegI32 address,
                             RegPtr instance);
   [[nodiscard]] bool emitTableGetAnyRef(uint32_t tableIndex);
   [[nodiscard]] bool emitTableSetAnyRef(uint32_t tableIndex);
 
-  [[nodiscard]] bool emitStructNew();
-  [[nodiscard]] bool emitStructNewDefault();
-  [[nodiscard]] bool emitStructGet(FieldWideningOp wideningOp);
-  [[nodiscard]] bool emitStructSet();
-  [[nodiscard]] bool emitArrayNew();
-  [[nodiscard]] bool emitArrayNewFixed();
-  [[nodiscard]] bool emitArrayNewDefault();
-  [[nodiscard]] bool emitArrayNewData();
-  [[nodiscard]] bool emitArrayNewElem();
-  [[nodiscard]] bool emitArrayInitData();
-  [[nodiscard]] bool emitArrayInitElem();
-  [[nodiscard]] bool emitArrayGet(FieldWideningOp wideningOp);
-  [[nodiscard]] bool emitArraySet();
-  [[nodiscard]] bool emitArrayLen();
-  [[nodiscard]] bool emitArrayCopy();
-  [[nodiscard]] bool emitArrayFill();
-  [[nodiscard]] bool emitRefI31();
-  [[nodiscard]] bool emitI31Get(FieldWideningOp wideningOp);
-  [[nodiscard]] bool emitRefTest(bool nullable);
-  [[nodiscard]] bool emitRefCast(bool nullable);
   [[nodiscard]] bool emitBrOnCastCommon(bool onSuccess,
                                         uint32_t labelRelativeDepth,
                                         const ResultType& labelType,
                                         MaybeRefType sourceType,
                                         RefType destType);
-  [[nodiscard]] bool emitBrOnCast(bool onSuccess);
-  [[nodiscard]] bool emitAnyConvertExtern();
-  [[nodiscard]] bool emitExternConvertAny();
 
   // Utility classes/methods to add trap information related to
   // null pointer dereferences/accesses.
@@ -1888,7 +1847,6 @@ struct BaseCompiler final {
   [[nodiscard]] bool emitVectorShiftRightI64x2();
 #  endif
 #endif
-  [[nodiscard]] bool emitCallBuiltinModuleFunc();
 };
 
 }  // namespace wasm

@@ -366,7 +366,7 @@ class SuspendingFunctionModuleFactory {
       ReportOutOfMemory(cx);
       return nullptr;
     }
-    if (!mg.compileFuncDef(ExportedFnIndex, funcBytecodeOffset,
+    if (!mg.compileFuncDef(ExportedFnIndex, funcBytecodeOffset, /*entryOffset=*/0,
                            bytecode.begin(),
                            bytecode.begin() + bytecode.length())) {
       ReportOutOfMemory(cx);
@@ -1104,7 +1104,7 @@ class PromisingFunctionModuleFactory {
       ReportOutOfMemory(cx);
       return nullptr;
     }
-    if (!mg.compileFuncDef(ExportedFnIndex, funcBytecodeOffset,
+    if (!mg.compileFuncDef(ExportedFnIndex, funcBytecodeOffset, /*entryOffset=*/0,
                            bytecode.begin(),
                            bytecode.begin() + bytecode.length())) {
       ReportOutOfMemory(cx);
@@ -1117,7 +1117,7 @@ class PromisingFunctionModuleFactory {
       ReportOutOfMemory(cx);
       return nullptr;
     }
-    if (!mg.compileFuncDef(TrampolineFnIndex, funcBytecodeOffset,
+    if (!mg.compileFuncDef(TrampolineFnIndex, funcBytecodeOffset, /*entryOffset=*/0,
                            bytecode2.begin(),
                            bytecode2.begin() + bytecode2.length())) {
       ReportOutOfMemory(cx);
@@ -1130,7 +1130,7 @@ class PromisingFunctionModuleFactory {
       ReportOutOfMemory(cx);
       return nullptr;
     }
-    if (!mg.compileFuncDef(ReactionFnIndex, funcBytecodeOffset,
+    if (!mg.compileFuncDef(ReactionFnIndex, funcBytecodeOffset, /*entryOffset=*/0,
                            bytecode3.begin(),
                            bytecode3.begin() + bytecode3.length())) {
       ReportOutOfMemory(cx);
