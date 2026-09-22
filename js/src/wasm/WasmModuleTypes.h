@@ -17,8 +17,10 @@
 #ifndef wasm_module_types_h
 #define wasm_module_types_h
 
+#include "mozilla/Maybe.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/Span.h"
+#include "mozilla/Variant.h"
 
 #include "js/AllocPolicy.h"
 #include "js/HashTable.h"
@@ -33,6 +35,7 @@
 #include "wasm/WasmSerialize.h"
 #include "wasm/WasmShareable.h"
 #include "wasm/WasmTypeDecls.h"
+#include "wasm/WasmTypeDef.h"
 #include "wasm/WasmValType.h"
 #include "wasm/WasmValue.h"
 
@@ -977,6 +980,94 @@ struct TableDesc {
 };
 
 using TableDescVector = Vector<TableDesc, 0, SystemAllocPolicy>;
+
+// The type of an item that can be imported into or exported from a core
+// module, independent of any particular module:
+// https://webassembly.github.io/spec/core/syntax/types.html#external-types
+//
+// Value types within the extern type refer to TypeDefs by raw pointer, so the
+// owner of this type must keep the relevant type context alive.
+class CoreExternType {
+  using Payload = mozilla::Variant<SharedTypeDef, TableType, Limits, GlobalType,
+                                   SharedTagType>;
+  Payload payload_;
+
+  explicit CoreExternType(Payload&& payload) : payload_(std::move(payload)) {}
+
+ public:
+  static CoreExternType func(const TypeDef& funcType) {
+    return CoreExternType(Payload(SharedTypeDef(&funcType)));
+  }
+  static CoreExternType table(TableType tableType) {
+    return CoreExternType(Payload(tableType));
+  }
+  static CoreExternType memory(Limits limits) {
+    return CoreExternType(Payload(limits));
+  }
+  static CoreExternType global(GlobalType globalType) {
+    return CoreExternType(Payload(globalType));
+  }
+  static CoreExternType tag(const SharedTagType& tagType) {
+    return CoreExternType(Payload(tagType));
+  }
+
+  DefinitionKind kind() const;
+
+  const TypeDef& asFunc() const { return *payload_.as<SharedTypeDef>(); }
+  TableType asTable() const { return payload_.as<TableType>(); }
+  Limits asMemory() const { return payload_.as<Limits>(); }
+  GlobalType asGlobal() const { return payload_.as<GlobalType>(); }
+  const TagType& asTag() const { return *payload_.as<SharedTagType>(); }
+
+  // Checks whether an item of the `src` type can be used where the `dst` type
+  // is expected, e.g. for imports:
+  // https://webassembly.github.io/spec/core/valid/matching.html#external-types
+  static bool matches(const CoreExternType& src, const CoreExternType& dst);
+};
+
+// The type of a core module instance, which is just its named exports.
+class CoreInstanceType : public AtomicRefCounted<CoreInstanceType> {
+  using ExportMap = HashMap<CacheableName, CoreExternType, CacheableNameHasher,
+                            SystemAllocPolicy>;
+  ExportMap exports_;
+
+ public:
+  [[nodiscard]] bool addExport(CacheableName&& name, CoreExternType&& type);
+  mozilla::Maybe<const CoreExternType&> getExport(
+      const CacheableName& name) const;
+};
+
+using MutableCoreInstanceType = RefPtr<CoreInstanceType>;
+using SharedCoreInstanceType = RefPtr<const CoreInstanceType>;
+
+struct CoreImportType {
+  CacheableName module;
+  CacheableName field;
+  CoreExternType type;
+};
+
+using CoreImportTypeVector = Vector<CoreImportType, 0, SystemAllocPolicy>;
+
+// The type of a core module: its imports in order, and the type of the
+// instances it produces.
+class CoreModuleType : public AtomicRefCounted<CoreModuleType> {
+  // Keeps alive all TypeDefs referenced by the imports and exports.
+  SharedTypeContext types_;
+  CoreImportTypeVector imports_;
+  SharedCoreInstanceType instanceType_;
+
+ public:
+  CoreModuleType(SharedTypeContext types, CoreImportTypeVector&& imports,
+                 SharedCoreInstanceType instanceType)
+      : types_(std::move(types)),
+        imports_(std::move(imports)),
+        instanceType_(std::move(instanceType)) {}
+
+  const CoreImportTypeVector& imports() const { return imports_; }
+  const SharedCoreInstanceType& instanceType() const { return instanceType_; }
+};
+
+using SharedCoreModuleType = RefPtr<const CoreModuleType>;
 
 }  // namespace wasm
 }  // namespace js
