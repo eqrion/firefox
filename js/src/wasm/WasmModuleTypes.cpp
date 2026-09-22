@@ -197,7 +197,8 @@ size_t Export::sizeOfExcludingThis(MallocSizeOf mallocSizeOf) const {
 }
 
 bool Limits::matches(Limits src, Limits dst) {
-  if (src.addressType != dst.addressType) {
+  if (src.addressType != dst.addressType || src.shared != dst.shared ||
+      src.pageSize != dst.pageSize) {
     return false;
   }
   if (src.initial < dst.initial) {
@@ -219,23 +220,14 @@ bool TableType::matches(TableType src, TableType dst) {
          Limits::matches(src.limits, dst.limits);
 }
 
-bool MemoryDesc::matches(const MemoryDesc& src, const MemoryDesc& dst) {
-  return src.addressType() == dst.addressType() &&
-         src.isShared() == dst.isShared() && src.pageSize() == dst.pageSize() &&
-         Limits::matches(src.limits, dst.limits);
-}
-
-bool GlobalDesc::matches(const GlobalDesc& src, const GlobalDesc& dst) {
-  if (src.isMutable() != dst.isMutable()) {
+bool GlobalType::matches(GlobalType src, GlobalType dst) {
+  if (src.isMutable != dst.isMutable) {
     return false;
   }
-  if (src.isMutable() && src.type() != dst.type()) {
-    return false;
+  if (src.isMutable) {
+    return src.type == dst.type;
   }
-  if (!src.isMutable() && !ValType::isSubTypeOf(src.type(), dst.type())) {
-    return false;
-  }
-  return true;
+  return ValType::isSubTypeOf(src.type, dst.type);
 }
 
 size_t GlobalDesc::sizeOfExcludingThis(MallocSizeOf mallocSizeOf) const {

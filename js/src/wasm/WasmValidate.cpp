@@ -5887,9 +5887,9 @@ enum class CoreInstanceExprKind : uint8_t {
               }
 
               uint32_t index = memoryIndex++;
-              MemoryDesc importMemory = mod->codeMeta().memories[index];
-              MemoryDesc exportMemory = instance.getMemory(exp.index);
-              if (!MemoryDesc::matches(exportMemory, importMemory)) {
+              const MemoryDesc& importMemory = mod->codeMeta().memories[index];
+              const MemoryDesc& exportMemory = instance.getMemory(exp.index);
+              if (!Limits::matches(exportMemory.limits, importMemory.limits)) {
                 return d.fail("incompatible memory type for import");
               }
             } break;
@@ -5901,7 +5901,8 @@ enum class CoreInstanceExprKind : uint8_t {
               uint32_t index = globalIndex++;
               const GlobalDesc& importGlobal = mod->codeMeta().globals[index];
               const GlobalDesc& exportGlobal = instance.getGlobal(exp.index);
-              if (!GlobalDesc::matches(exportGlobal, importGlobal)) {
+              if (!GlobalType::matches(exportGlobal.globalType(),
+                                       importGlobal.globalType())) {
                 return d.fail("incompatible global type for import");
               }
             } break;

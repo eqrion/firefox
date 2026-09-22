@@ -458,6 +458,12 @@ struct GlobalType {
 
   GlobalType() = default;
   GlobalType(ValType type, bool isMutable) : type(type), isMutable(isMutable) {}
+
+  // Checks whether the `src` global type is compatible with the `dst` global
+  // type. This is a subtyping relationship on the value type + extra rules for
+  // mutability.
+  // https://webassembly.github.io/spec/core/valid/matching.html#global-types
+  static bool matches(GlobalType src, GlobalType dst);
 };
 
 // A GlobalDesc describes a single global variable.
@@ -550,15 +556,10 @@ class GlobalDesc {
   bool isIndirect() const { return isMutable() && (isImport() || isExport()); }
 
   ValType type() const { return initial_.type(); }
+  GlobalType globalType() const { return GlobalType(type(), isMutable()); }
 
   size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
   WASM_DECLARE_FRIEND_SERIALIZE(GlobalDesc);
-
-  // Checks whether the `src` global's type is compatible with the `dst` global
-  // type. This is a subtyping relationship on the value type + extra rules for
-  // mutability.
-  // https://webassembly.github.io/spec/core/valid/matching.html#global-types
-  static bool matches(const GlobalDesc& src, const GlobalDesc& dst);
 };
 
 using GlobalDescVector = Vector<GlobalDesc, 0, SystemAllocPolicy>;
@@ -866,8 +867,10 @@ struct Limits {
 
   // Checks whether the `src` limits are compatible with the `dst` limits; i.e.
   // that a memory or table with the `src` limits can be used in a context where
-  // the `dst` limits are expected:
+  // the `dst` limits are expected. This also checks the memory-only `shared`
+  // and `pageSize` fields, which are always the same for tables:
   // https://webassembly.github.io/spec/core/valid/matching.html#match-limits
+  // https://webassembly.github.io/spec/core/valid/matching.html#memory-types
   static bool matches(Limits src, Limits dst);
 };
 
@@ -921,10 +924,6 @@ struct MemoryDesc {
   MemoryDesc() = default;
   explicit MemoryDesc(Limits limits)
       : limits(limits), importIndex(mozilla::Nothing()) {}
-
-  // Checks if the `src` memory's type is compatible with the `dst` memory type:
-  // https://webassembly.github.io/spec/core/valid/matching.html#memory-types
-  static bool matches(const MemoryDesc& src, const MemoryDesc& dst);
 };
 
 WASM_DECLARE_CACHEABLE_POD(MemoryDesc);
