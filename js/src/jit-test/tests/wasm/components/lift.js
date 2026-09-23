@@ -109,12 +109,3 @@ for (const [type, expected] of [
   assertEq(a === b, false);
   assertEq(b.name, "b");
 }
-
-// Unsupported types fail at instantiation.
-assertErrorMessage(() => instantiate(`(component
-  (type $r (resource (rep i32)))
-  (core module $m (func (export "f") (result i32) i32.const 0))
-  (core instance $i (instantiate $m))
-  (func $f (result (own $r)) (canon lift (core func $i "f")))
-  (export "f" (func $f))
-)`), Error, /component function type is not supported yet/);

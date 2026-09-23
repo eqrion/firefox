@@ -1223,4 +1223,72 @@
   fail_mode: FailOnNegI32
   uses_memory: false
 
+- op: CmLowerResource
+  symbolic_address:
+    name: CmLowerResource
+    type: Args_Int32_GeneralGeneralGeneralInt32Int32
+    needs_thunk: true
+  entry: CmLowerResource
+  export: cmLowerResource
+  params:
+    - 'externref'
+    - 'externref'
+    - 'i32'
+    - 'i32'
+  result: 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmLiftResource
+  symbolic_address:
+    name: CmLiftResource
+    type: Args_General_GeneralGeneralInt32Int32Int32
+    needs_thunk: true
+  entry: CmLiftResource
+  export: cmLiftResource
+  params:
+    - 'externref'
+    - 'i32'
+    - 'i32'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: CmPushCallScope
+  symbolic_address:
+    name: CmPushCallScope
+    type: Args_Int32_GeneralGeneral
+    needs_thunk: true
+  entry: CmPushCallScope
+  export: cmPushCallScope
+  params:
+    - 'externref'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmPopCallScope
+  symbolic_address:
+    name: CmPopCallScope
+    type: Args_Void_GeneralGeneral
+    needs_thunk: true
+  entry: CmPopCallScope
+  export: cmPopCallScope
+  params:
+    - 'externref'
+  fail_mode: Infallible
+  uses_memory: false
+
+- op: CmCheckBorrowsDropped
+  symbolic_address:
+    name: CmCheckBorrowsDropped
+    type: Args_Int32_GeneralGeneral
+    needs_thunk: true
+  entry: CmCheckBorrowsDropped
+  export: cmCheckBorrowsDropped
+  params:
+    - 'externref'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
 #endif // ENABLE_WASM_COMPONENTS

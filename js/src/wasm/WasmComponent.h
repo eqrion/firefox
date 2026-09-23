@@ -564,6 +564,10 @@ JSAtom* ComponentLabelToJS(JSContext* cx, mozilla::Span<const char> label,
 // Returns the JS-API's JSName for an import or export named `name`.
 JSAtom* ComponentJSName(JSContext* cx, const ComponentName& name, bool isType);
 
+// The label of the resource type named by a `[constructor]`, `[method]`, or
+// `[static]` name.
+mozilla::Span<const char> ComponentResourceLabelOf(const ComponentName& name);
+
 // A class which can be used to check if a set of component model names is
 // strongly-unique. The set owns its keys.
 class StronglyUniqueNameSet {
@@ -1192,6 +1196,18 @@ using MutableComponent = RefPtr<Component>;
 using SharedComponent = RefPtr<const Component>;
 
 struct CanonOptValues;
+struct ComponentImportScope;
+
+// The canonical ABI's state of a call into or out of a component instance, for
+// tracking borrowed handles. A call into the instance (a task) lends it
+// handles, which it must drop before returning. A call out of it (a subtask) is
+// lent handles from its table, which can't be dropped until it returns.
+struct ComponentCallScope {
+  // The number of handles lent to the instance by a call into it.
+  uint32_t numBorrows = 0;
+  // The handles lent by the instance to a call out of it.
+  mozilla::Vector<uint32_t, 0, SystemAllocPolicy> lentHandles;
+};
 
 // A handle to a resource in a component instance's handle table.
 struct ComponentResourceHandle {
@@ -1279,6 +1295,19 @@ class ComponentInstance {
 
   ComponentHandleTable handles_;
 
+  // The calls into or out of this instance that are in progress, innermost
+  // last.
+  mozilla::Vector<ComponentCallScope, 0, SystemAllocPolicy> callScopes_;
+
+  // The constructor that each imported resource type was read from. Indices
+  // correspond 1:1 with Component::resourceTypes(), and are null for resource
+  // types defined by the component.
+  ObjectVector hostResourceCtors_;
+  // The %Symbol.dispose% method of each imported resource type's prototype,
+  // called when an own handle of the resource type is dropped, or null if it
+  // has none.
+  ObjectVector hostResourceDisposers_;
+
   // The data of the ComponentError that a lifted function returning a
   // `result` error is about to throw.
   bool hasPendingError_ = false;
@@ -1314,13 +1343,12 @@ class ComponentInstance {
       JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
       const ComponentInlineExports& inlineExports,
       MutableHandleObject exportsObj);
-  // Reads the import (or instance export) `name` from `importObj`, if it is
-  // not null, into the imported items starting at `firstItem`. Builtins are
-  // only resolved for the component's own imports, when `resolveBuiltins`.
-  [[nodiscard]] bool readImport(JSContext* cx, HandleObject importObj,
+  // Reads the import (or instance export) `name` in `scope` into the imported
+  // items starting at `firstItem`.
+  [[nodiscard]] bool readImport(JSContext* cx, ComponentImportScope& scope,
                                 const ComponentName& name,
                                 const ComponentExternDesc& desc,
-                                uint32_t firstItem, bool resolveBuiltins);
+                                uint32_t firstItem);
   // The JS-API's "resolve a builtin specifier", which sets `isBuiltin` and
   // `value` if `name` is an enabled builtin.
   [[nodiscard]] bool resolveBuiltin(JSContext* cx, const ComponentName& name,
@@ -1362,6 +1390,25 @@ class ComponentInstance {
   void setMayLeave(bool mayLeave) { mayLeave_ = mayLeave; }
 
   ComponentHandleTable& handles() { return handles_; }
+
+  const Component& component() const { return *component_; }
+
+  // The constructor of an imported resource type, or null for a resource type
+  // defined by the component.
+  JSObject* hostResourceCtor(uint32_t resourceType) const {
+    return hostResourceCtors_[resourceType];
+  }
+  JSObject* hostResourceDisposer(uint32_t resourceType) const {
+    return hostResourceDisposers_[resourceType];
+  }
+
+  size_t callScopeDepth() const { return callScopes_.length(); }
+  ComponentCallScope& callScope(size_t depth) { return callScopes_[depth]; }
+  [[nodiscard]] bool pushCallScope() { return callScopes_.emplaceBack(); }
+  // Pops the innermost call scope, returning the handles it lent.
+  void popCallScope();
+  // Pops call scopes until there are `depth` left.
+  void popCallScopesTo(size_t depth);
 
   void setPendingError(const JS::Value& data) {
     hasPendingError_ = true;
