@@ -5103,22 +5103,74 @@ static bool IsSemverChar(uint8_t c, bool digitsOnly) {
   return true;
 }
 
-// The type index space that types are decoded in.
+enum class ComponentExternNameFlagsRaw : uint8_t {
+  // Strangely, the binary encoding currently allows either 0x00 or 0x01 for the
+  // flags. Both do exactly the same thing. This is supposed to be cleaned up
+  // eventually.
+  Plain1 = 0x00,
+  Plain2 = 0x01,
+  VersionSuffix = 0x02,
+};
+
+// Decodes the name of an import or export (`importname'` or `exportname'`),
+// where `thing` is "import" or "export".
+[[nodiscard]] static bool DecodeComponentExternName(Decoder& d,
+                                                    const char* thing,
+                                                    ComponentName* name) {
+  uint8_t flags;
+  if (!d.readFixedU8(&flags)) {
+    return d.failf("expected %s flags", thing);
+  }
+
+  switch (flags) {
+    case uint8_t(ComponentExternNameFlagsRaw::Plain1):
+    case uint8_t(ComponentExternNameFlagsRaw::Plain2):
+      break;
+    case uint8_t(ComponentExternNameFlagsRaw::VersionSuffix):
+      // TODO(wasm-cm): Support semver?
+      return d.failf("version suffixes on %ss are not allowed", thing);
+    default:
+      return d.failf("invalid %s flags %#x", thing, flags);
+  }
+
+  return DecodeComponentName(d, thing, name, /*allowInterfaceName=*/true);
+}
+
+// The type index space that types are decoded in. This is a component's, or
+// that of an instance type being declared.
 class ComponentTypeScope {
   Component* component_;
+  const ComponentTypeScope* outer_;
+  ComponentTypeVector localTypes_;
 
  public:
-  explicit ComponentTypeScope(Component* component) : component_(component) {}
+  explicit ComponentTypeScope(Component* component)
+      : component_(component), outer_(nullptr) {}
+  // The scope of an instance type declared in `outer`.
+  explicit ComponentTypeScope(const ComponentTypeScope& outer)
+      : component_(nullptr), outer_(&outer) {}
 
-  // The component whose index space this is.
+  // The component whose index space this is, or null for an instance type.
   Component* component() const { return component_; }
 
-  uint32_t numTypes() const { return component_->types().length(); }
+  // The scope `count` levels out from this one, or null if there is none.
+  const ComponentTypeScope* outer(uint32_t count) const {
+    const ComponentTypeScope* scope = this;
+    for (uint32_t i = 0; i < count && scope; i++) {
+      scope = scope->outer_;
+    }
+    return scope;
+  }
+
+  uint32_t numTypes() const {
+    return component_ ? component_->types().length() : localTypes_.length();
+  }
   ComponentType getType(uint32_t index) const {
-    return component_->getType(index);
+    return component_ ? component_->getType(index) : localTypes_[index];
   }
   [[nodiscard]] bool addType(ComponentType&& type) {
-    return component_->addType(std::move(type));
+    return component_ ? component_->addType(std::move(type))
+                      : localTypes_.append(std::move(type));
   }
 };
 
@@ -5200,6 +5252,9 @@ enum class ComponentTypeKindRaw : uint8_t {
 
   Resource = 0x3f,
 };
+
+[[nodiscard]] static bool DecodeComponentInstanceType(
+    Decoder& d, const ComponentTypeScope& outer, ComponentType* t);
 
 [[nodiscard]] static bool DecodeComponentType(Decoder& d,
                                               ComponentTypeScope& scope) {
@@ -5633,8 +5688,17 @@ enum class ComponentTypeKindRaw : uint8_t {
       }
     } break;
 
+    case uint8_t(ComponentTypeKindRaw::Instance): {
+      if (!DecodeComponentInstanceType(d, scope, &t)) {
+        return false;
+      }
+    } break;
+
     case uint8_t(ComponentTypeKindRaw::Resource): {
       const Component* c = scope.component();
+      if (!c) {
+        return d.fail("resource types cannot be defined in instance types");
+      }
       uint8_t repType;
       if (!d.readFixedU8(&repType)) {
         return d.fail("expected rep type for resource type");
@@ -5855,8 +5919,20 @@ enum class ComponentTypeBoundKindRaw : uint8_t {
       return d.fail("extern components are not supported yet");
     } break;
     case ComponentSort::Instance: {
-      // TODO(wasm-cm): Add support for these
-      return d.fail("extern instances are not supported yet");
+      uint32_t typeIndex;
+      if (!d.readVarU32(&typeIndex)) {
+        return d.fail("expected instance type index");
+      }
+
+      if (scope.numTypes() <= typeIndex) {
+        return d.failf("invalid type index %d", typeIndex);
+      }
+      ComponentType instanceType = scope.getType(typeIndex);
+      if (instanceType.kind() != ComponentTypeKind::Instance) {
+        return d.failf("type %d is not an instance type", typeIndex);
+      }
+
+      *desc = ComponentExternDesc::instance(std::move(instanceType));
     } break;
     case ComponentSort::CoreModule: {
       // TODO(wasm-cm): Add support for these
@@ -5868,6 +5944,135 @@ enum class ComponentTypeBoundKindRaw : uint8_t {
   }
 
   return true;
+}
+
+enum class ComponentInstanceDeclKindRaw : uint8_t {
+  CoreType = 0x00,
+  Type = 0x01,
+  Alias = 0x02,
+  Export = 0x04,
+};
+
+enum class AliasKindRaw : uint8_t {
+  ComponentExport = 0x00,
+  CoreExport = 0x01,
+  Outer = 0x02,
+};
+
+// Decodes an alias in an instance type, which must be an outer alias of a
+// type.
+[[nodiscard]] static bool DecodeComponentInstanceTypeAlias(
+    Decoder& d, ComponentTypeScope& scope) {
+  ComponentSort sort;
+  if (!DecodeComponentSort(d, &sort, /*forExterndesc=*/false)) {
+    return false;
+  }
+  uint8_t targetType;
+  if (!d.readFixedU8(&targetType)) {
+    return d.fail("expected alias target");
+  }
+  if (targetType != uint8_t(AliasKindRaw::Outer)) {
+    return d.fail("instance types can only contain outer aliases");
+  }
+  if (sort != ComponentSort::Type) {
+    // TODO(wasm-cm): Support core type aliases.
+    return d.fail("instance types can only alias types");
+  }
+
+  uint32_t count;
+  uint32_t typeIndex;
+  if (!d.readVarU32(&count) || !d.readVarU32(&typeIndex)) {
+    return d.fail("expected outer alias count and index");
+  }
+  const ComponentTypeScope* target = scope.outer(count);
+  if (!target) {
+    return d.failf("invalid outer alias count %d", count);
+  }
+  if (target->numTypes() <= typeIndex) {
+    return d.failf("invalid type index %d", typeIndex);
+  }
+  if (scope.numTypes() >= MaxComponentTypes) {
+    return d.failf("too many types (max %d)", MaxComponentTypes);
+  }
+  return scope.addType(target->getType(typeIndex));
+}
+
+// Decodes the declarations of an instance type (`instancetype`) declared in
+// the scope `outer`.
+[[nodiscard]] static bool DecodeComponentInstanceType(
+    Decoder& d, const ComponentTypeScope& outer, ComponentType* t) {
+  uint32_t numDecls;
+  if (!d.readVarU32(&numDecls)) {
+    return d.fail("expected number of instance type declarations");
+  }
+
+  ComponentTypeScope scope(outer);
+  ComponentInstanceType instanceType;
+  StronglyUniqueNameSet exportNameDedup;
+  for (uint32_t i = 0; i < numDecls; i++) {
+    uint8_t kind;
+    if (!d.readFixedU8(&kind)) {
+      return d.fail("expected instance type declaration");
+    }
+
+    switch (kind) {
+      case uint8_t(ComponentInstanceDeclKindRaw::CoreType):
+        // TODO(wasm-cm): Support core types.
+        return d.fail("core types in instance types are not supported yet");
+      case uint8_t(ComponentInstanceDeclKindRaw::Type): {
+        if (scope.numTypes() >= MaxComponentTypes) {
+          return d.failf("too many types (max %d)", MaxComponentTypes);
+        }
+        if (!DecodeComponentType(d, scope)) {
+          return false;
+        }
+      } break;
+      case uint8_t(ComponentInstanceDeclKindRaw::Alias): {
+        if (!DecodeComponentInstanceTypeAlias(d, scope)) {
+          return false;
+        }
+      } break;
+      case uint8_t(ComponentInstanceDeclKindRaw::Export): {
+        if (instanceType.exports().length() >= MaxComponentExports) {
+          return d.failf("too many exports (max %d)", MaxComponentExports);
+        }
+        ComponentName name;
+        if (!DecodeComponentExternName(d, "export", &name)) {
+          return false;
+        }
+        ComponentExternDesc desc;
+        bool unused;
+        if (!DecodeComponentExternDesc(d, scope, &desc, &unused)) {
+          return false;
+        }
+
+        bool duplicate;
+        if (!exportNameDedup.add(name.name.utf8Bytes(), &duplicate)) {
+          return false;
+        }
+        if (duplicate) {
+          return d.failf("export name \"%.*s\" is not strongly-unique",
+                         ComponentName_Printf(name.name));
+        }
+
+        if (desc.sort() == ComponentSort::Type) {
+          if (scope.numTypes() >= MaxComponentTypes) {
+            return d.failf("too many types (max %d)", MaxComponentTypes);
+          }
+          if (!scope.addType(desc.asType())) {
+            return false;
+          }
+        }
+        if (!instanceType.addExport(std::move(name), std::move(desc))) {
+          return false;
+        }
+      } break;
+      default:
+        return d.failf("unexpected instance type declaration 0x%02x", kind);
+    }
+  }
+
+  return ComponentType::instance(std::move(instanceType), t);
 }
 
 // Validates that a `(core:)?sortidx` from the component spec corresponds to a
@@ -5912,9 +6117,11 @@ static const char* CoreItemName(DefinitionKind kind) {
     case ComponentSort::Component:
       // TODO(wasm-cm): Support nested components
       return d.fail("nested components are not supported yet");
-    case ComponentSort::Instance:
-      // TODO(wasm-cm): Support nested components
-      return d.fail("nested components are not supported yet");
+    case ComponentSort::Instance: {
+      if (c.instances().length() <= sortIndex.index) {
+        return d.failf("invalid instance index %d", sortIndex.index);
+      }
+    } break;
 
     case ComponentSort::CoreFunction:
     case ComponentSort::CoreTable:
@@ -5988,6 +6195,31 @@ enum class CoreInstanceExprKind : uint8_t {
     return d.failf("too many core %s (max %u)", items, max);
   }
   return true;
+}
+
+// Checks that there is room for one more func, type, or instance in the
+// component's index space for `sort`.
+[[nodiscard]] static bool CheckCanAddItem(Decoder& d, const Component& c,
+                                          ComponentSort sort) {
+  switch (sort) {
+    case ComponentSort::Func:
+      if (c.funcs().length() >= MaxComponentFuncs) {
+        return d.failf("too many funcs (max %u)", MaxComponentFuncs);
+      }
+      return true;
+    case ComponentSort::Type:
+      if (c.types().length() >= MaxComponentTypes) {
+        return d.failf("too many types (max %u)", MaxComponentTypes);
+      }
+      return true;
+    case ComponentSort::Instance:
+      if (c.instances().length() >= MaxComponentInstances) {
+        return d.failf("too many instances (max %u)", MaxComponentInstances);
+      }
+      return true;
+    default:
+      MOZ_CRASH();
+  }
 }
 
 [[nodiscard]] static bool DecodeCoreInstance(Decoder& d, MutableComponent& c) {
@@ -6150,12 +6382,6 @@ enum class CoreInstanceExprKind : uint8_t {
   return true;
 }
 
-enum class AliasKindRaw : uint8_t {
-  ComponentExport = 0x00,
-  CoreExport = 0x01,
-  Outer = 0x02,
-};
-
 [[nodiscard]] static bool DecodeComponentAlias(Decoder& d,
                                                MutableComponent& c) {
   ComponentSort sort;
@@ -6170,8 +6396,38 @@ enum class AliasKindRaw : uint8_t {
 
   switch (targetType) {
     case uint8_t(AliasKindRaw::ComponentExport): {
-      // TODO(wasm-cm)
-      return d.fail("component export aliases are not yet supported");
+      uint32_t instanceIndex;
+      if (!d.readVarU32(&instanceIndex)) {
+        return d.fail("expected instance index");
+      }
+
+      CacheableName exportName;
+      if (!DecodeName(d, &exportName)) {
+        return d.fail("expected instance export name");
+      }
+
+      if (c->instances().length() <= instanceIndex) {
+        return d.failf("invalid instance index %d", instanceIndex);
+      }
+      ComponentType instanceType = c->getTypeForInstance(instanceIndex);
+      mozilla::Maybe<uint32_t> exportIndex =
+          instanceType.asInstance().findExport(exportName);
+      if (exportIndex.isNothing()) {
+        return d.failf("instance %d has no export \"%.*s\"", instanceIndex,
+                       ComponentName_Printf(exportName));
+      }
+      if (instanceType.asInstance().exports()[*exportIndex].desc.sort() !=
+          sort) {
+        return d.failf("export \"%.*s\" of instance %d has a different sort",
+                       ComponentName_Printf(exportName), instanceIndex);
+      }
+      if (!CheckCanAddItem(d, *c, sort)) {
+        return false;
+      }
+
+      if (!c->addExportAlias(instanceIndex, *exportIndex)) {
+        return false;
+      }
     } break;
     case uint8_t(AliasKindRaw::CoreExport): {
       uint32_t instanceIndex;
@@ -6592,39 +6848,6 @@ enum class CanonDefKindRaw : uint8_t {
   return true;
 }
 
-enum class ComponentExternNameFlagsRaw : uint8_t {
-  // Strangely, the binary encoding currently allows either 0x00 or 0x01 for the
-  // flags. Both do exactly the same thing. This is supposed to be cleaned up
-  // eventually.
-  Plain1 = 0x00,
-  Plain2 = 0x01,
-  VersionSuffix = 0x02,
-};
-
-// Decodes the name of an import or export (`importname'` or `exportname'`),
-// where `thing` is "import" or "export".
-[[nodiscard]] static bool DecodeComponentExternName(Decoder& d,
-                                                    const char* thing,
-                                                    ComponentName* name) {
-  uint8_t flags;
-  if (!d.readFixedU8(&flags)) {
-    return d.failf("expected %s flags", thing);
-  }
-
-  switch (flags) {
-    case uint8_t(ComponentExternNameFlagsRaw::Plain1):
-    case uint8_t(ComponentExternNameFlagsRaw::Plain2):
-      break;
-    case uint8_t(ComponentExternNameFlagsRaw::VersionSuffix):
-      // TODO(wasm-cm): Support semver?
-      return d.failf("version suffixes on %ss are not allowed", thing);
-    default:
-      return d.failf("invalid %s flags %#x", thing, flags);
-  }
-
-  return DecodeComponentName(d, thing, name, /*allowInterfaceName=*/true);
-}
-
 static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
                                   StronglyUniqueNameSet& nameDedup) {
   ComponentName importName;
@@ -6635,7 +6858,8 @@ static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
   ComponentTypeScope scope(c.get());
   ComponentExternDesc externDesc;
   bool unused;
-  if (!DecodeComponentExternDesc(d, scope, &externDesc, &unused)) {
+  if (!DecodeComponentExternDesc(d, scope, &externDesc, &unused) ||
+      !CheckCanAddItem(d, *c, externDesc.sort())) {
     return false;
   }
   if (externDesc.sort() == ComponentSort::Type) {
