@@ -31,11 +31,23 @@ class Instance;
 // WasmComponentInstanceObject, which every adapter module imports as an
 // immutable externref global.
 
+// The runtime values of a lifted or lowered function's canonical options.
+struct MOZ_STACK_CLASS CanonOptValues {
+  ComponentStringEncoding stringEncoding = ComponentStringEncoding::UTF8;
+  Rooted<WasmMemoryObject*> memory;
+  RootedFunction realloc;
+  RootedFunction postReturn;
+
+  explicit CanonOptValues(JSContext* cx)
+      : memory(cx), realloc(cx), postReturn(cx) {}
+};
+
 // Creates the JS function for a component function lifted from `callee`.
 [[nodiscard]] bool CreateLiftedFunction(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     const ComponentFuncType& funcType, HandleFunction callee,
-    Handle<JSAtom*> name, MutableHandleFunction result);
+    const CanonOptValues& opts, Handle<JSAtom*> name,
+    MutableHandleFunction result);
 
 // Creates the core function for a component function lowered from `host`, a
 // function read from the imports object. `coreFuncType` is the flattened type
@@ -43,7 +55,8 @@ class Instance;
 [[nodiscard]] bool CreateLoweredFunction(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     const ComponentFuncType& funcType, const TypeDef& coreFuncType,
-    HandleObject host, MutableHandleFunction result);
+    HandleObject host, const CanonOptValues& opts,
+    MutableHandleFunction result);
 
 // ToComponentValue for an integer of type `kind`, a ComponentTypeKind. On
 // success, returns 0 and puts the integer's bits in the instance's scratch.
@@ -69,6 +82,34 @@ void* CmIntegerToJS(Instance* instance, int32_t value, int32_t kind);
 void* CmInt64ToJS(Instance* instance, int64_t value, int32_t kind);
 void* CmFloatToJS(Instance* instance, double value);
 void* CmCharToJS(Instance* instance, int32_t value);
+
+// Records that the current call has entered the guest.
+void CmEnterGuest(Instance* instance, void* ctxRef);
+
+// Traps unless [ptr, ptr + length) is in memory and ptr is aligned.
+int32_t CmCheckRange(Instance* instance, int32_t ptr, int32_t length,
+                     int32_t alignment);
+
+// The steps of storing a JS string with the canonical ABI's store_string.
+// CmToString converts a JS value to a string, and the rest take that string.
+void* CmToString(Instance* instance, void* valueRef);
+int32_t CmStringLength(Instance* instance, void* strRef);
+// Stores the string's code units at `ptr` until the first that is not ASCII,
+// and returns how many were stored.
+int32_t CmStoreASCII(Instance* instance, void* strRef, int32_t ptr,
+                     int32_t length);
+// Stores the string as UTF-8 in the `length` bytes at `ptr`, and puts the
+// number of bytes stored in the instance's scratch.
+int32_t CmStoreUTF8(Instance* instance, void* ctxRef, void* strRef, int32_t ptr,
+                    int32_t length);
+// Stores the string's `length` code units as UTF-16 at `ptr`.
+int32_t CmStoreUTF16(Instance* instance, void* strRef, int32_t ptr,
+                     int32_t length);
+
+// The canonical ABI's load_string, converted to a JS string. `encoding` is a
+// ComponentStringEncoding.
+void* CmStringToJS(Instance* instance, int32_t ptr, int32_t taggedLength,
+                   int32_t encoding);
 
 // Traps for the given AdapterTrap reason. Always fails.
 int32_t CmTrap(Instance* instance, int32_t reason);

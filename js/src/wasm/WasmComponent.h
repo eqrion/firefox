@@ -1059,6 +1059,8 @@ class Component : public JS::WasmComponent {
 using MutableComponent = RefPtr<Component>;
 using SharedComponent = RefPtr<const Component>;
 
+struct CanonOptValues;
+
 class ComponentInstance {
   // The containing JS::Realm.
   JS::Realm* realm_;
@@ -1089,6 +1091,10 @@ class ComponentInstance {
   // Whether a call into this instance has trapped, which locks it down.
   bool trapped_ = false;
 
+  // Whether the current call into this instance has entered the guest, by
+  // calling any of its functions, after which any failure locks it down.
+  bool enteredGuest_ = false;
+
   // Holds the result of a canonical ABI builtin whose result type has no
   // failure value, until the adapter code reads it.
   uint64_t scratch_ = 0;
@@ -1102,6 +1108,9 @@ class ComponentInstance {
   [[nodiscard]] bool getCoreItemValue(
       JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
       ComponentSortIndex sortIndex, MutableHandleValue val);
+  [[nodiscard]] bool getCanonOptValues(
+      JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+      const ComponentCanonOpts& opts, CanonOptValues* values);
   [[nodiscard]] bool getLoweredFunc(
       JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
       uint32_t coreFuncIndex, const ComponentLoweredFuncDesc& lowered,
@@ -1141,6 +1150,9 @@ class ComponentInstance {
 
   bool trapped() const { return trapped_; }
   void setTrapped() { trapped_ = true; }
+
+  bool enteredGuest() const { return enteredGuest_; }
+  void setEnteredGuest(bool entered) { enteredGuest_ = entered; }
 
   uint64_t scratch() const { return scratch_; }
   void setScratch(uint64_t value) { scratch_ = value; }

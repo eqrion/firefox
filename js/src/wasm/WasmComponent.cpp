@@ -1703,6 +1703,42 @@ bool ComponentInstance::readImports(JSContext* cx, HandleObject importObj) {
   return true;
 }
 
+bool ComponentInstance::getCanonOptValues(
+    JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+    const ComponentCanonOpts& opts, CanonOptValues* values) {
+  values->stringEncoding = opts.stringEncoding;
+
+  RootedValue value(cx);
+  if (opts.memoryIndex) {
+    if (!getCoreItemValue(
+            cx, instanceObj,
+            ComponentSortIndex(ComponentSort::CoreMemory, *opts.memoryIndex),
+            &value)) {
+      return false;
+    }
+    values->memory = &value.toObject().as<WasmMemoryObject>();
+  }
+  if (opts.reallocIndex) {
+    if (!getCoreItemValue(
+            cx, instanceObj,
+            ComponentSortIndex(ComponentSort::CoreFunction, *opts.reallocIndex),
+            &value)) {
+      return false;
+    }
+    values->realloc = &value.toObject().as<JSFunction>();
+  }
+  if (opts.postReturnIndex) {
+    if (!getCoreItemValue(cx, instanceObj,
+                          ComponentSortIndex(ComponentSort::CoreFunction,
+                                             *opts.postReturnIndex),
+                          &value)) {
+      return false;
+    }
+    values->postReturn = &value.toObject().as<JSFunction>();
+  }
+  return true;
+}
+
 bool ComponentInstance::getLoweredFunc(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     uint32_t coreFuncIndex, const ComponentLoweredFuncDesc& lowered,
@@ -1721,11 +1757,13 @@ bool ComponentInstance::getLoweredFunc(
   }
 
   RootedObject host(cx, importValues_[func.itemIndex()]);
+  CanonOptValues opts(cx);
   RootedFunction result(cx);
-  if (!CreateLoweredFunction(
+  if (!getCanonOptValues(cx, instanceObj, lowered.canonOpts, &opts) ||
+      !CreateLoweredFunction(
           cx, instanceObj,
           component_->getTypeForFunc(lowered.funcIndex).asFunc(), coreFuncType,
-          host, &result)) {
+          host, opts, &result)) {
     return false;
   }
   loweredFuncs_[coreFuncIndex] = result;
@@ -1883,9 +1921,11 @@ bool ComponentInstance::createLiftedFunction(
     return false;
   }
   RootedFunction calleeFunc(cx, &callee.toObject().as<JSFunction>());
-  return CreateLiftedFunction(cx, instanceObj,
+  CanonOptValues opts(cx);
+  return getCanonOptValues(cx, instanceObj, lifted->canonOpts(), &opts) &&
+         CreateLiftedFunction(cx, instanceObj,
                               component_->getType(lifted->typeIndex()).asFunc(),
-                              calleeFunc, name, result);
+                              calleeFunc, opts, name, result);
 }
 
 bool ComponentInstance::createExportsObject(
