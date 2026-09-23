@@ -1,0 +1,211 @@
+// META: global=window,dedicatedworker,jsshell
+// META: script=/wasm/component/jsapi/harness/component-helpers.js
+// META: script=/wasm/component/jsapi/harness/assertions.js
+
+// list<T> for T other than u8: any iterable object converts, and the output
+// is a dense Array.
+
+let exports;
+const received = {};
+const imports = {
+  echoU32s: x => { received.u32s = x; return x; },
+  echoStrings: x => { received.strings = x; return x; },
+  echoNested: x => { received.nested = x; return x; },
+};
+promise_setup(async () => {
+  exports = await componentExports("values/list", imports);
+});
+
+function assert_dense_array(actual, expected, description) {
+  assert_true(Array.isArray(actual), `${description}: Array.isArray`);
+  assert_equals(Object.getPrototypeOf(actual), Array.prototype, `${description}: prototype`);
+  assert_equals(actual.length, expected.length, `${description}: length`);
+  assert_array_equals(Object.keys(actual), expected.map((_, i) => `${i}`), `${description}: dense`);
+  assert_value_equals(actual, expected, description);
+}
+
+for (const [input, description] of [
+  [[], "empty"],
+  [[0], "one element"],
+  [[1, 2, 3, 0xffffffff], "several elements"],
+  [Array.from({ length: 10000 }, (_, i) => i), "10000 elements"],
+]) {
+  promise_test(async () => {
+    const result = exports.roundtripU32s(input);
+    assert_dense_array(received.u32s, input, "value seen by echo");
+    assert_dense_array(result, input, "result");
+    assert_not_equals(result, input, "result is a fresh Array");
+    assert_not_equals(received.u32s, input, "echo sees a fresh Array");
+  }, `list<u32>: an Array of ${description} roundtrips`);
+}
+
+promise_test(async () => {
+  const input = ["", "a", "héllo", "😀", "x".repeat(1000)];
+  assert_dense_array(exports.roundtripStrings(input), input, "result");
+  assert_dense_array(received.strings, input, "value seen by echo");
+}, "list<string>: roundtrips");
+
+promise_test(async () => {
+  const input = [[], [1], [2, 3], []];
+  assert_dense_array(exports.roundtripNested(input), input, "result");
+  assert_dense_array(received.nested, input, "value seen by echo");
+  for (const inner of received.nested) {
+    assert_true(Array.isArray(inner), "inner lists are Arrays");
+  }
+}, "list<list<u32>>: roundtrips");
+
+for (const [make, expected, description] of [
+  [() => new Set([1, 2, 2, 3]), [1, 2, 3], "a Set"],
+  [() => (function* () { yield 4; yield 5; })(), [4, 5], "a generator"],
+  [() => ({ *[Symbol.iterator]() { yield 6; yield 7; } }), [6, 7], "a custom iterable"],
+  [() => new Map([[1, 2]]).keys(), [1], "a Map iterator"],
+  [() => new Uint32Array([8, 9]), [8, 9], "a Uint32Array"],
+  [() => new Float32Array([1.5]), [1], "a Float32Array (elements truncate)"],
+  [() => ["1", true, null, [2]], [1, 1, 0, 2], "an Array of coercible elements"],
+]) {
+  promise_test(async () => {
+    assert_dense_array(exports.roundtripU32s(make()), expected, "result");
+  }, `list<u32>: ${description} is converted through the iterable path`);
+}
+
+promise_test(async () => {
+  assert_dense_array(exports.roundtripStrings("abc"[Symbol.iterator]()), ["a", "b", "c"], "result");
+}, "list<string>: a string iterator is an iterable object and converts");
+
+promise_test(async () => {
+  assert_dense_array(exports.roundtripStrings([1, null, undefined, true]), ["1", "null", "undefined", "true"],
+                     "result");
+}, "list<string>: elements go through ToString");
+
+promise_test(async () => {
+  assert_dense_array(exports.roundtripStrings([, "a", , ]), ["undefined", "a", "undefined"], "result");
+}, "list<string>: holes are undefined, which stringifies");
+
+promise_test(async () => {
+  assert_throws_js(TypeError, () => exports.roundtripU32s([1, , 3]));
+}, "list<u32>: a hole is undefined, which is a TypeError for u32");
+
+for (const [make, description] of [
+  [() => "abc", "a string (not an Object, even though iterable)"],
+  [() => 42, "a Number"],
+  [() => null, "null"],
+  [() => undefined, "undefined"],
+  [() => true, "a boolean"],
+  [() => Symbol.iterator, "a Symbol"],
+  [() => ({}), "a plain object"],
+  [() => ({ length: 1, 0: 1 }), "an array-like that is not iterable"],
+  [() => ({ [Symbol.iterator]: 1 }), "an object whose Symbol.iterator is not callable"],
+  [() => ({ [Symbol.iterator]() { return 1; } }), "an object whose iterator is not an object"],
+  [() => ({ [Symbol.iterator]() { return { next: 1 }; } }), "an iterator whose next is not callable"],
+  [() => ({ [Symbol.iterator]() { return { next() { return 1; } }; } }),
+   "an iterator whose result is not an object"],
+  [() => [-1], "an Array with an out-of-range element"],
+  [() => [1n], "an Array with a BigInt element"],
+  [() => [[1, 2]], "an Array whose element is a two-element Array (ToNumber gives NaN)"],
+]) {
+  promise_test(async () => {
+    received.u32s = "unchanged";
+    assert_throws_js(TypeError, () => exports.roundtripU32s(make()));
+    assert_equals(received.u32s, "unchanged", "echo must not be called");
+  }, `list<u32>: ${description} throws TypeError`);
+}
+
+promise_test(async () => {
+  assert_throws_js(TypeError, () => exports.roundtripNested([[1], 2]));
+  assert_throws_js(TypeError, () => exports.roundtripNested([[1], [-1]]));
+  assert_throws_js(TypeError, () => exports.roundtripNested(["ab"]));
+}, "list<list<u32>>: inner elements are checked with the same rules");
+
+promise_test(async () => {
+  const visited = [];
+  const iterable = {
+    *[Symbol.iterator]() {
+      for (const v of [1, -1, 2]) {
+        visited.push(v);
+        yield v;
+      }
+    },
+  };
+  assert_throws_js(TypeError, () => exports.roundtripU32s(iterable));
+  assert_array_equals(visited, [1, -1], "iteration stops at the failing element");
+}, "list<u32>: a failing element stops iteration");
+
+promise_test(async () => {
+  const error = new Error("from iterator");
+  const iterable = { [Symbol.iterator]() { return { next() { throw error; } }; } };
+  assert_throws_exactly(error, () => exports.roundtripU32s(iterable));
+}, "list<u32>: an exception from next() propagates as-is");
+
+promise_test(async () => {
+  const error = new Error("from getter");
+  const iterable = { get [Symbol.iterator]() { throw error; } };
+  assert_throws_exactly(error, () => exports.roundtripU32s(iterable));
+}, "list<u32>: an exception from the Symbol.iterator getter propagates as-is");
+
+promise_test(async () => {
+  let calls = 0;
+  const iterable = { get [Symbol.iterator]() { calls++; return function* () { yield 1; }; } };
+  exports.roundtripU32s(iterable);
+  assert_equals(calls, 1);
+}, "list<u32>: Symbol.iterator is read exactly once");
+
+promise_test(async () => {
+  const e = await componentExports("values/list", { ...imports, echoU32s: () => new Set([1, 2]) });
+  assert_dense_array(e.roundtripU32s([]), [1, 2], "result");
+}, "list<u32>: an import returning a Set is converted");
+
+for (const [value, description] of [
+  [5, "a Number"],
+  ["ab", "a string"],
+  [undefined, "undefined"],
+  [{}, "a non-iterable object"],
+  [[-1], "an Array with an out-of-range element"],
+]) {
+  promise_test(async () => {
+    const e = await componentExports("values/list", { ...imports, echoU32s: () => value });
+    assert_traps(() => e.roundtripU32s([]));
+  }, `list<u32>: an import returning ${description} traps`);
+}
+
+promise_test(async () => {
+  let closed = 0;
+  const iterable = {
+    [Symbol.iterator]() {
+      const values = [1, -1, 2];
+      return {
+        next() { return values.length ? { value: values.shift(), done: false } : { done: true }; },
+        return() { closed++; return {}; },
+      };
+    },
+  };
+  assert_throws_js(TypeError, () => exports.roundtripU32s(iterable));
+  assert_equals(closed, 1, "return() is called once");
+}, "list<u32>: a failing element closes the iterator");
+
+promise_test(async () => {
+  let closed = 0;
+  const iterable = {
+    [Symbol.iterator]() {
+      const values = [1, 2];
+      return {
+        next() { return values.length ? { value: values.shift(), done: false } : { done: true }; },
+        return() { closed++; return {}; },
+      };
+    },
+  };
+  assert_dense_array(exports.roundtripU32s(iterable), [1, 2], "result");
+  assert_equals(closed, 0, "an exhausted iterator is not closed again");
+}, "list<u32>: a completed iteration does not call return()");
+
+promise_test(async () => {
+  const closeError = new Error("from return");
+  const iterable = {
+    [Symbol.iterator]() {
+      return {
+        next() { return { value: -1, done: false }; },
+        return() { throw closeError; },
+      };
+    },
+  };
+  assert_throws_js(TypeError, () => exports.roundtripU32s(iterable));
+}, "list<u32>: the conversion error wins over an error thrown by return()");

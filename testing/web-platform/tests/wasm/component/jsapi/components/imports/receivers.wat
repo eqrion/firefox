@@ -1,0 +1,27 @@
+;; `[constructor]`, `[method]` and `[static]` imports of a host resource `r`.
+(component
+  (import "r" (type $r (sub resource)))
+  (import "[constructor]r" (func $make (param "x" u32) (result (own $r))))
+  (import "[method]r.m" (func $m (param "self" (borrow $r)) (param "y" u32) (result u32)))
+  (import "[static]r.s" (func $s (param "z" u32) (result u32)))
+  (core func $make' (canon lower (func $make)))
+  (core func $m' (canon lower (func $m)))
+  (core func $s' (canon lower (func $s)))
+  (core module $M
+    (import "" "make" (func $make (param i32) (result i32)))
+    (import "" "m" (func $m (param i32 i32) (result i32)))
+    (import "" "s" (func $s (param i32) (result i32)))
+    (func (export "make") (param i32) (result i32) (call $make (local.get 0)))
+    (func (export "call-m") (param i32 i32) (result i32) (call $m (local.get 0) (local.get 1)))
+    (func (export "call-s") (param i32) (result i32) (call $s (local.get 0))))
+  (core instance $m (instantiate $M (with "" (instance
+    (export "make" (func $make'))
+    (export "m" (func $m'))
+    (export "s" (func $s'))))))
+  (func $make-export (param "x" u32) (result (own $r)) (canon lift (core func $m "make")))
+  (func $call-m (param "self" (borrow $r)) (param "y" u32) (result u32) (canon lift (core func $m "call-m")))
+  (func $call-s (param "z" u32) (result u32) (canon lift (core func $m "call-s")))
+  (export "make" (func $make-export))
+  (export "call-m" (func $call-m))
+  (export "call-s" (func $call-s))
+)

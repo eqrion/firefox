@@ -1,0 +1,10 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>An unresolvable import specifier fails module loading</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script type="module">
+// No import map, so the bare specifier `log` cannot be resolved.
+promise_test(t => promise_rejects_js(t, TypeError, import("./resources/logger.wasm")),
+             "a bare specifier without an import map is a resolution error");
+</script>

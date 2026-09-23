@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Components cannot participate in module cycles</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script type="importmap">
+{ "imports": { "log": "./resources/cycle.mjs" } }
+</script>
+<script type="module">
+// cycle.mjs imports logger.wasm, whose `log` import maps back to cycle.mjs.
+// The component snapshots its imports when it is evaluated, before cycle.mjs
+// has evaluated, so its `log` binding is still uninitialized.
+promise_test(async t => {
+  let error;
+  try {
+    await import("./resources/cycle.mjs");
+  } catch (e) {
+    error = e;
+  }
+  assert_not_equals(error, undefined, "loading the cycle must fail");
+  assert_true(error instanceof ReferenceError, `unexpected error ${error}`);
+}, "a component in a cycle reads an uninitialized binding and fails with ReferenceError");
+</script>

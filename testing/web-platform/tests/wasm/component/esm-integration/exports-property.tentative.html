@@ -1,0 +1,22 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>[get]/[set] exports have no module namespace binding</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script type="module">
+import * as ns from "./resources/property-export.wasm";
+
+test(() => {
+  assert_array_equals(Object.keys(ns), ["answer"]);
+  assert_false("counter" in ns);
+  assert_equals(ns.answer(), 42);
+}, "a [get]/[set] export pair is omitted from the namespace");
+
+promise_test(async () => {
+  const { exports } = await WebAssembly.instantiate(
+    await (await fetch("./resources/property-export.wasm")).arrayBuffer()).then(r => r.instance);
+  assert_equals(exports.counter, 1);
+  exports.counter = 9;
+  assert_equals(exports.counter, 9);
+}, "the same export pair is an accessor on the imperative exports object");
+</script>

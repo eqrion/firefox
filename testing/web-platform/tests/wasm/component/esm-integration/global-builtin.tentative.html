@@ -1,0 +1,11 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>wasm:js/global is enabled by default under ESM-integration</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script type="module">
+promise_test(async () => {
+  const { encode } = await import("./resources/global-builtin.wasm");
+  assert_equals(encode("hello"), btoa("hello"));
+}, "wasm:js/global resolves to globalThis without an import map");
+</script>
