@@ -101,13 +101,12 @@ wasmValidateText(`
 `);
 
 // Valid interface export name.
-// TODO(wasm-cm): Should we support interface names?
-wasmFailValidateText(`
+wasmValidateText(`
 (component
   (core module)
   (export "wasi:http/handler" (core module 0))
 )
-`, /invalid characters in export name/);
+`);
 
 // Export name must not be empty.
 wasmFailValidateText(`
