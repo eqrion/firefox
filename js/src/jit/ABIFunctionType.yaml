@@ -354,6 +354,9 @@
   args: [General, General]
 
 - ret: Void
+  args: [General, General, General, Int32]
+
+- ret: Void
   args: [General, Int32]
 
 - ret: Void
