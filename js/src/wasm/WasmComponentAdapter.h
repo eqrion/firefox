@@ -213,6 +213,25 @@ int32_t CmResourceRep(Instance* instance, void* ctxRef, int32_t handle,
 int32_t CmResourceDrop(Instance* instance, void* ctxRef, int32_t handle,
                        int32_t resourceType);
 
+// ToComponentValue for an own or borrow of the resource type at index
+// `resourceType` of Component::resourceTypes(), returning its handle in the
+// instance's table.
+int32_t CmLowerResource(Instance* instance, void* ctxRef, void* valueRef,
+                        int32_t resourceType, int32_t borrow);
+// ToJSValue for an own or borrow of the resource type at index `resourceType`,
+// from its handle in the instance's table. An own is removed from the table,
+// and a borrow is lent to the current call.
+void* CmLiftResource(Instance* instance, void* ctxRef, int32_t handle,
+                     int32_t resourceType, int32_t borrow);
+
+// Begins and ends a call out of the instance, which borrowed handles are lent
+// to.
+int32_t CmPushCallScope(Instance* instance, void* ctxRef);
+void CmPopCallScope(Instance* instance, void* ctxRef);
+// Traps unless the handles lent to the current call into the instance have
+// been dropped.
+int32_t CmCheckBorrowsDropped(Instance* instance, void* ctxRef);
+
 // Sets the canonical ABI's may_leave, and traps unless it is set.
 void CmSetMayLeave(Instance* instance, void* ctxRef, int32_t mayLeave);
 int32_t CmCheckMayLeave(Instance* instance, void* ctxRef);

@@ -5965,27 +5965,6 @@ class ComponentExternNames {
   // The names with a `[get]` annotation.
   NameSet getters_;
 
-  static mozilla::Span<const char> WithoutPrefix(mozilla::Span<const char> name,
-                                                 std::string_view prefix) {
-    if (name.size() >= prefix.size() &&
-        std::string_view(name.data(), prefix.size()) == prefix) {
-      return name.From(prefix.size());
-    }
-    return name;
-  }
-
-  // The label of the resource type named by a `[constructor]`, `[method]`, or
-  // `[static]` name.
-  static mozilla::Span<const char> ResourceLabel(const ComponentName& name) {
-    mozilla::Span<const char> label = name.name.utf8Bytes();
-    for (std::string_view prefix :
-         {"[constructor]", "[method]", "[static]", "[get]", "[set]"}) {
-      label = WithoutPrefix(label, prefix);
-    }
-    auto dot = std::find(label.begin(), label.end(), '.');
-    return label.To(dot - label.begin());
-  }
-
   static bool IsOwnOf(const ComponentType& type,
                       const ComponentType& resource) {
     return type.kind() == ComponentTypeKind::Own && type.asOwn() == resource;
@@ -6084,7 +6063,7 @@ class ComponentExternNames {
     mozilla::Maybe<ComponentType> resource;
     if (attrs.contains(Attr::Constructor) || attrs.contains(Attr::Method) ||
         attrs.contains(Attr::Static)) {
-      auto p = resources_.lookup(ResourceLabel(name));
+      auto p = resources_.lookup(ComponentResourceLabelOf(name));
       if (!p) {
         return d.failf("%s \"%.*s\" does not name a preceding resource type %s",
                        thing_, ComponentName_Printf(name.name), thing_);
