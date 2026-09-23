@@ -5002,12 +5002,31 @@ enum class ComponentNameFragmentKind {
   return true;
 }
 
+// The type index space that types are decoded in.
+class ComponentTypeScope {
+  Component* component_;
+
+ public:
+  explicit ComponentTypeScope(Component* component) : component_(component) {}
+
+  // The component whose index space this is.
+  Component* component() const { return component_; }
+
+  uint32_t numTypes() const { return component_->types().length(); }
+  ComponentType getType(uint32_t index) const {
+    return component_->getType(index);
+  }
+  [[nodiscard]] bool addType(ComponentType&& type) {
+    return component_->addType(std::move(type));
+  }
+};
+
 // TODO(wasm-cm): Documentation
 //
 // Note that this function need not concern itself with canonicalization,
 // because primitives don't need to be canonicalized and types already in the
 // type section will have been canonicalized on their way in.
-static bool DecodeComponentValType(Decoder& d, MutableComponent& c,
+static bool DecodeComponentValType(Decoder& d, ComponentTypeScope& scope,
                                    ComponentType* t) {
   // Types in the binary are organized so that negative numbers are
   // primitives, while positive numbers are type indices.
@@ -5033,10 +5052,10 @@ static bool DecodeComponentValType(Decoder& d, MutableComponent& c,
 
   int32_t typeIndex;
   if (!d.readVarS32(&typeIndex) || typeIndex < 0 ||
-      c->types().length() <= size_t(typeIndex)) {
+      scope.numTypes() <= size_t(typeIndex)) {
     return d.failf("invalid type index %d", typeIndex);
   }
-  ComponentType referencedType = c->getType(typeIndex);
+  ComponentType referencedType = scope.getType(typeIndex);
   if (!ComponentTypeKindIsValueType(referencedType.kind())) {
     return d.failf("type %d is not a value type", typeIndex);
   }
@@ -5081,7 +5100,8 @@ enum class ComponentTypeKindRaw : uint8_t {
   Resource = 0x3f,
 };
 
-[[nodiscard]] static bool DecodeComponentType(Decoder& d, MutableComponent& c) {
+[[nodiscard]] static bool DecodeComponentType(Decoder& d,
+                                              ComponentTypeScope& scope) {
   uint8_t kind;
   if (!d.readFixedU8(&kind)) {
     return d.fail("expected type kind");
@@ -5133,7 +5153,7 @@ enum class ComponentTypeKindRaw : uint8_t {
           return false;
         }
         ComponentType type;
-        if (!DecodeComponentValType(d, c, &type)) {
+        if (!DecodeComponentValType(d, scope, &type)) {
           return false;
         }
 
@@ -5196,7 +5216,7 @@ enum class ComponentTypeKindRaw : uint8_t {
         }
         if (hasType) {
           ComponentType t;
-          if (!DecodeComponentValType(d, c, &t)) {
+          if (!DecodeComponentValType(d, scope, &t)) {
             return false;
           }
           type = mozilla::Some(t);
@@ -5217,7 +5237,7 @@ enum class ComponentTypeKindRaw : uint8_t {
 
     case uint8_t(ComponentTypeKindRaw::List): {
       ComponentType type;
-      if (!DecodeComponentValType(d, c, &type)) {
+      if (!DecodeComponentValType(d, scope, &type)) {
         return false;
       }
       if (!ComponentType::list(std::move(type), &t)) {
@@ -5227,7 +5247,7 @@ enum class ComponentTypeKindRaw : uint8_t {
 
     case uint8_t(ComponentTypeKindRaw::FixedList): {
       ComponentFixedListType fixedList;
-      if (!DecodeComponentValType(d, c, &fixedList.elemType)) {
+      if (!DecodeComponentValType(d, scope, &fixedList.elemType)) {
         return false;
       }
       if (!d.readVarU32(&fixedList.length)) {
@@ -5243,8 +5263,8 @@ enum class ComponentTypeKindRaw : uint8_t {
 
     case uint8_t(ComponentTypeKindRaw::Map): {
       ComponentMapType map;
-      if (!DecodeComponentValType(d, c, &map.keyType) ||
-          !DecodeComponentValType(d, c, &map.valueType)) {
+      if (!DecodeComponentValType(d, scope, &map.keyType) ||
+          !DecodeComponentValType(d, scope, &map.valueType)) {
         return false;
       }
       switch (map.keyType.kind()) {
@@ -5287,7 +5307,7 @@ enum class ComponentTypeKindRaw : uint8_t {
       }
       for (uint32_t i = 0; i < numTypes; i++) {
         ComponentType type;
-        if (!DecodeComponentValType(d, c, &type)) {
+        if (!DecodeComponentValType(d, scope, &type)) {
           return false;
         }
         types.infallibleAppend(type);
@@ -5378,7 +5398,7 @@ enum class ComponentTypeKindRaw : uint8_t {
 
     case uint8_t(ComponentTypeKindRaw::Option): {
       ComponentType type;
-      if (!DecodeComponentValType(d, c, &type)) {
+      if (!DecodeComponentValType(d, scope, &type)) {
         return false;
       }
       if (!ComponentType::option(std::move(type), &t)) {
@@ -5396,7 +5416,7 @@ enum class ComponentTypeKindRaw : uint8_t {
       }
       if (hasType) {
         ComponentType theType;
-        if (!DecodeComponentValType(d, c, &theType)) {
+        if (!DecodeComponentValType(d, scope, &theType)) {
           return false;
         }
         type = mozilla::Some(theType);
@@ -5408,7 +5428,7 @@ enum class ComponentTypeKindRaw : uint8_t {
       }
       if (hasErrorType) {
         ComponentType theErrorType;
-        if (!DecodeComponentValType(d, c, &theErrorType)) {
+        if (!DecodeComponentValType(d, scope, &theErrorType)) {
           return false;
         }
         errorType = mozilla::Some(theErrorType);
@@ -5427,10 +5447,10 @@ enum class ComponentTypeKindRaw : uint8_t {
         return d.fail("expected resource type index");
       }
 
-      if (c->types().length() <= typeIndex) {
+      if (scope.numTypes() <= typeIndex) {
         return d.failf("invalid type index %d", typeIndex);
       }
-      ComponentType rt = c->getType(typeIndex);
+      ComponentType rt = scope.getType(typeIndex);
       if (rt.kind() != ComponentTypeKind::Resource &&
           rt.kind() != ComponentTypeKind::SubResource) {
         return d.failf("type %d is not a resource type", typeIndex);
@@ -5470,7 +5490,7 @@ enum class ComponentTypeKindRaw : uint8_t {
           return false;
         }
         ComponentType type;
-        if (!DecodeComponentValType(d, c, &type)) {
+        if (!DecodeComponentValType(d, scope, &type)) {
           return false;
         }
 
@@ -5501,7 +5521,7 @@ enum class ComponentTypeKindRaw : uint8_t {
         }
       } else {
         ComponentType resultType;
-        if (!DecodeComponentValType(d, c, &resultType)) {
+        if (!DecodeComponentValType(d, scope, &resultType)) {
           return false;
         }
         ft.resultType = mozilla::Some(resultType);
@@ -5513,6 +5533,7 @@ enum class ComponentTypeKindRaw : uint8_t {
     } break;
 
     case uint8_t(ComponentTypeKindRaw::Resource): {
+      const Component* c = scope.component();
       uint8_t repType;
       if (!d.readFixedU8(&repType)) {
         return d.fail("expected rep type for resource type");
@@ -5561,7 +5582,7 @@ enum class ComponentTypeKindRaw : uint8_t {
   if (!CanonicalizeComponentType(t, &canonical)) {
     return false;
   }
-  if (!c->addType(std::move(canonical))) {
+  if (!scope.addType(std::move(canonical))) {
     return false;
   }
 
@@ -5668,7 +5689,7 @@ enum class ComponentTypeBoundKindRaw : uint8_t {
 };
 
 [[nodiscard]] static bool DecodeComponentExternDesc(Decoder& d,
-                                                    MutableComponent c,
+                                                    ComponentTypeScope& scope,
                                                     ComponentExternDesc* desc,
                                                     bool* isNewSubResource) {
   *isNewSubResource = false;
@@ -5685,10 +5706,10 @@ enum class ComponentTypeBoundKindRaw : uint8_t {
         return d.fail("expected func type index");
       }
 
-      if (c->types().length() <= funcTypeIndex) {
+      if (scope.numTypes() <= funcTypeIndex) {
         return d.failf("invalid type index %d", funcTypeIndex);
       }
-      ComponentType funcType = c->getType(funcTypeIndex);
+      ComponentType funcType = scope.getType(funcTypeIndex);
       if (funcType.kind() != ComponentTypeKind::Func) {
         return d.failf("type %d is not a func type", funcTypeIndex);
       }
@@ -5708,11 +5729,11 @@ enum class ComponentTypeBoundKindRaw : uint8_t {
             return d.fail("expected type index");
           }
 
-          if (c->types().length() <= typeIndex) {
+          if (scope.numTypes() <= typeIndex) {
             return d.failf("invalid type index %d", typeIndex);
           }
 
-          *desc = ComponentExternDesc::type(c->getType(typeIndex));
+          *desc = ComponentExternDesc::type(scope.getType(typeIndex));
         } break;
         case uint8_t(ComponentTypeBoundKindRaw::SubResource): {
           // We do not need to canonicalize this new type, as all resource types
@@ -6502,9 +6523,10 @@ static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
     return false;
   }
 
+  ComponentTypeScope scope(c.get());
   ComponentExternDesc externDesc;
   bool unused;
-  if (!DecodeComponentExternDesc(d, c, &externDesc, &unused)) {
+  if (!DecodeComponentExternDesc(d, scope, &externDesc, &unused)) {
     return false;
   }
   if (externDesc.sort() == ComponentSort::Type) {
@@ -6601,9 +6623,10 @@ enum class ComponentExportFlagsRaw : uint8_t {
     return d.fail("expected possible explicit external type");
   }
   if (hasExplicitExternDesc) {
+    ComponentTypeScope scope(c.get());
     ComponentExternDesc explicitExternDesc;
     bool isNewSubResource;
-    if (!DecodeComponentExternDesc(d, c, &explicitExternDesc,
+    if (!DecodeComponentExternDesc(d, scope, &explicitExternDesc,
                                    &isNewSubResource)) {
       return false;
     }
@@ -6710,8 +6733,9 @@ enum class ComponentExportFlagsRaw : uint8_t {
     return d.failf("too many types (max %d)", MaxComponentTypes);
   }
 
+  ComponentTypeScope scope(c.get());
   for (uint32_t i = 0; i < numTypes; i++) {
-    if (!DecodeComponentType(d, c)) {
+    if (!DecodeComponentType(d, scope)) {
       return false;
     }
   }
