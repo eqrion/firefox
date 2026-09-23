@@ -586,7 +586,7 @@ class WasmComponentInstanceObject : public NativeObject {
 
   static WasmComponentInstanceObject* create(
       JSContext* cx, HandleObject proto,
-      const RefPtr<const wasm::Component> component);
+      const RefPtr<const wasm::Component> component, HandleObject importObj);
 
   wasm::ComponentInstance& instance() const;
 };

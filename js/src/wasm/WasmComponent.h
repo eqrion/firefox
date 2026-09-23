@@ -930,6 +930,9 @@ class Component : public JS::WasmComponent {
   // TODO(wasm-cm): Functions for component instances
 
   const CoreItemVector& coreFuncs() const { return coreFuncs_; }
+  const ComponentCoreFuncDesc& definedCoreFunc(uint32_t definedIndex) const {
+    return definedCoreFuncs_[definedIndex];
+  }
   [[nodiscard]] bool addDefinedCoreFunc(ComponentCoreFuncDesc&& coreFunc,
                                         const TypeDef& coreFuncType) {
     uint32_t funcIndex = definedCoreFuncs_.length();
@@ -1032,7 +1035,7 @@ class Component : public JS::WasmComponent {
   // Instantiation
 
   [[nodiscard]] bool instantiate(
-      JSContext* cx, HandleObject instanceProto,
+      JSContext* cx, HandleObject instanceProto, HandleObject importObj,
       MutableHandle<WasmComponentInstanceObject*> instance) const;
 
  private:
@@ -1060,6 +1063,16 @@ class ComponentInstance {
   // Component::coreInstances().
   CoreInstanceExportsVector coreInstanceExports_;
 
+  using ObjectVector = GCVector<HeapPtr<JSObject*>, 0, SystemAllocPolicy>;
+  // The callable read from the imports object for each function import, or
+  // null for other imports. Indices correspond 1:1 with Component::imports().
+  ObjectVector importValues_;
+
+  // The function for each core func defined by (canon lower), created when it
+  // is first used, so that every use gets the same function. Indices
+  // correspond 1:1 with Component::coreFuncs().
+  ObjectVector loweredFuncs_;
+
   // Whether a call into this instance has trapped, which locks it down.
   bool trapped_ = false;
 
@@ -1073,19 +1086,23 @@ class ComponentInstance {
 
   // Gets the JS value of a core func, table, memory, global, or tag in the
   // component's index spaces.
-  [[nodiscard]] bool getCoreItemValue(JSContext* cx,
-                                      ComponentSortIndex sortIndex,
-                                      MutableHandleValue val) const;
+  [[nodiscard]] bool getCoreItemValue(
+      JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+      ComponentSortIndex sortIndex, MutableHandleValue val);
+  [[nodiscard]] bool getLoweredFunc(
+      JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+      uint32_t coreFuncIndex, const ComponentLoweredFuncDesc& lowered,
+      MutableHandleValue val);
   [[nodiscard]] bool instantiateCoreModule(
       JSContext* cx, const CoreInstanceDescFromModule& desc,
       MutableHandleObject exportsObj) const;
   [[nodiscard]] bool createLiftedFunction(
       JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
-      uint32_t funcIndex, Handle<JSAtom*> name,
-      MutableHandleFunction result) const;
+      uint32_t funcIndex, Handle<JSAtom*> name, MutableHandleFunction result);
   [[nodiscard]] bool createInlineExportsObject(
-      JSContext* cx, const ComponentInlineExports& inlineExports,
-      MutableHandleObject exportsObj) const;
+      JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+      const ComponentInlineExports& inlineExports,
+      MutableHandleObject exportsObj);
 
  public:
   ComponentInstance(JSContext* cx, Handle<WasmComponentInstanceObject*> object,
@@ -1097,12 +1114,17 @@ class ComponentInstance {
                                    const SharedComponent component);
   static void destroy(ComponentInstance* instance);
 
-  [[nodiscard]] bool init(JSContext* cx);
+  // The JS-API's "read the imports", from `importObj` if it is not null. This
+  // must be called before init.
+  [[nodiscard]] bool readImports(JSContext* cx, HandleObject importObj);
+
+  [[nodiscard]] bool init(JSContext* cx,
+                          Handle<WasmComponentInstanceObject*> instanceObj);
 
   // Creates the JS-API's exports object for this instance.
   [[nodiscard]] bool createExportsObject(
       JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
-      MutableHandleObject exportsObj) const;
+      MutableHandleObject exportsObj);
 
   bool trapped() const { return trapped_; }
   void setTrapped() { trapped_ = true; }

@@ -1276,9 +1276,10 @@ ComponentItem Component::resolveSortIndex(ComponentSortIndex sortIndex) const {
 }
 
 bool Component::instantiate(
-    JSContext* cx, HandleObject instanceProto,
+    JSContext* cx, HandleObject instanceProto, HandleObject importObj,
     MutableHandle<WasmComponentInstanceObject*> instance) const {
-  instance.set(WasmComponentInstanceObject::create(cx, instanceProto, this));
+  instance.set(
+      WasmComponentInstanceObject::create(cx, instanceProto, this, importObj));
   if (!instance) {
     return false;
   }
@@ -1312,6 +1313,139 @@ void ComponentInstance::destroy(ComponentInstance* instance) {
 
 void ComponentInstance::tracePrivate(JSTracer* trc) {
   coreInstanceExports_.trace(trc);
+  importValues_.trace(trc);
+  loweredFuncs_.trace(trc);
+}
+
+// The JS-API's "find an accessor".
+[[nodiscard]] static bool FindAccessor(JSContext* cx, HandleObject target,
+                                       HandleId key, bool getter,
+                                       MutableHandleValue result) {
+  RootedObject obj(cx, target);
+  Rooted<mozilla::Maybe<PropertyDescriptor>> desc(cx);
+  while (obj) {
+    if (!GetOwnPropertyDescriptor(cx, obj, key, &desc)) {
+      return false;
+    }
+    if (desc.isSome()) {
+      if (!desc->isAccessorDescriptor()) {
+        result.setUndefined();
+        return true;
+      }
+      if (JSObject* accessor = getter ? desc->getter() : desc->setter()) {
+        result.setObject(*accessor);
+      } else {
+        result.setUndefined();
+      }
+      return true;
+    }
+    if (!GetPrototype(cx, obj, &obj)) {
+      return false;
+    }
+  }
+  result.setUndefined();
+  return true;
+}
+
+// Calls extended slot 0 with extended slot 1 as the receiver.
+static bool CallWithReceiver(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  JSFunction& callee = args.callee().as<JSFunction>();
+  RootedValue target(cx, callee.getExtendedSlot(0));
+  RootedValue receiver(cx, callee.getExtendedSlot(1));
+  InvokeArgs targetArgs(cx);
+  if (!targetArgs.init(cx, args.length())) {
+    return false;
+  }
+  for (size_t i = 0; i < args.length(); i++) {
+    targetArgs[i].set(args[i]);
+  }
+  return Call(cx, target, receiver, targetArgs, args.rval());
+}
+
+bool ComponentInstance::readImports(JSContext* cx, HandleObject importObj) {
+  using Attr = ComponentNameAttribute;
+
+  if (!importValues_.resize(component_->imports().length())) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+
+  for (size_t i = 0; i < component_->imports().length(); i++) {
+    const ComponentImport& imp = component_->imports()[i];
+    const ComponentExternDesc& desc = imp.externDesc();
+    ComponentNameAttributes attrs = imp.name().attributes;
+
+    if (desc.sort() == ComponentSort::Type) {
+      ComponentTypeKind kind = desc.asType().kind();
+      if (kind != ComponentTypeKind::Resource &&
+          kind != ComponentTypeKind::SubResource) {
+        continue;
+      }
+      JS_ReportErrorASCII(cx, "resource type imports are not supported yet");
+      return false;
+    }
+    MOZ_RELEASE_ASSERT(desc.sort() == ComponentSort::Func);
+    if (attrs.contains(Attr::Constructor) || attrs.contains(Attr::Method) ||
+        attrs.contains(Attr::Static)) {
+      JS_ReportErrorASCII(cx,
+                          "resource function imports are not supported yet");
+      return false;
+    }
+
+    if (!importObj) {
+      JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
+                               JSMSG_WASM_BAD_IMPORT_ARG);
+      return false;
+    }
+
+    Rooted<JSAtom*> name(cx, ComponentJSName(cx, imp.name(), /*isType=*/false));
+    if (!name) {
+      return false;
+    }
+    RootedId nameId(cx, AtomToId(name));
+
+    RootedValue value(cx);
+    RootedValue receiver(cx);
+    if (attrs.contains(Attr::Get) || attrs.contains(Attr::Set)) {
+      receiver.setObject(*importObj);
+      if (!FindAccessor(cx, importObj, nameId, attrs.contains(Attr::Get),
+                        &value)) {
+        return false;
+      }
+    } else if (!GetProperty(cx, importObj, importObj, nameId, &value)) {
+      return false;
+    }
+
+    if (!IsCallable(value)) {
+      UniqueChars nameChars = AtomToPrintableString(cx, name);
+      if (nameChars) {
+        JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
+                                 JSMSG_WASM_BAD_IMPORT_TYPE, nameChars.get(),
+                                 "function");
+      }
+      return false;
+    }
+
+    // A wrapper is needed to call with a receiver, and also to prevent a wasm
+    // function from being linked directly into an adapter, which would check
+    // its type.
+    RootedObject callable(cx, &value.toObject());
+    if (!receiver.isUndefined() ||
+        (callable->is<JSFunction>() && callable->as<JSFunction>().isWasm())) {
+      JSFunction* wrapper = NewNativeFunction(cx, CallWithReceiver, 0, nullptr,
+                                              gc::AllocKind::FUNCTION_EXTENDED);
+      if (!wrapper) {
+        return false;
+      }
+      wrapper->initExtendedSlot(0, value);
+      wrapper->initExtendedSlot(1, receiver);
+      callable = wrapper;
+    }
+    importValues_[i] = callable;
+  }
+
+  return true;
 }
 
 // Gets a named property from a plain object. The actual GetProperty call is
@@ -1419,19 +1553,54 @@ void ComponentInstance::tracePrivate(JSTracer* trc) {
   return true;
 }
 
-bool ComponentInstance::getCoreItemValue(JSContext* cx,
-                                         ComponentSortIndex sortIndex,
-                                         MutableHandleValue val) const {
+bool ComponentInstance::getLoweredFunc(
+    JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+    uint32_t coreFuncIndex, const ComponentLoweredFuncDesc& lowered,
+    MutableHandleValue val) {
+  if (loweredFuncs_[coreFuncIndex]) {
+    val.setObject(*loweredFuncs_[coreFuncIndex]);
+    return true;
+  }
+
+  const TypeDef& coreFuncType = component_->getTypeForCoreFunc(coreFuncIndex);
+  ComponentItem func = component_->funcs()[lowered.funcIndex];
+  if (func.kind() != ComponentItem::ItemKind::Import) {
+    // TODO(wasm-cm): Lowering a function lifted in this component needs an
+    // adapter between two core functions. For now, it just traps.
+    return GenerateDummyLoweredFunc(cx, &coreFuncType, val);
+  }
+
+  RootedObject host(cx, importValues_[func.itemIndex()]);
+  RootedFunction result(cx);
+  if (!CreateLoweredFunction(
+          cx, instanceObj,
+          component_->getTypeForFunc(lowered.funcIndex).asFunc(), coreFuncType,
+          host, &result)) {
+    return false;
+  }
+  loweredFuncs_[coreFuncIndex] = result;
+  val.setObject(*result);
+  return true;
+}
+
+bool ComponentInstance::getCoreItemValue(
+    JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+    ComponentSortIndex sortIndex, MutableHandleValue val) {
   ComponentItem item = component_->resolveSortIndex(sortIndex);
   switch (item.kind()) {
     case ComponentItem::ItemKind::Defined: {
       // The only core things that can be defined directly in a component,
       // rather than aliased from a core module, are core functions.
       MOZ_RELEASE_ASSERT(item.sort() == ComponentSort::CoreFunction);
+      const ComponentCoreFuncDesc& desc =
+          component_->definedCoreFunc(item.itemIndex());
+      if (desc.payload().is<ComponentLoweredFuncDesc>()) {
+        return getLoweredFunc(cx, instanceObj, sortIndex.index,
+                              desc.payload().as<ComponentLoweredFuncDesc>(),
+                              val);
+      }
 
-      // TODO(wasm-cm): Right now we always synthesize a function with the
-      // correct signature that just traps. This will be fleshed out in the
-      // future.
+      // TODO(wasm-cm): Resource builtins just trap for now.
       return GenerateDummyLoweredFunc(
           cx, &component_->getTypeForCoreFunc(sortIndex.index), val);
     }
@@ -1486,8 +1655,9 @@ bool ComponentInstance::instantiateCoreModule(
 }
 
 bool ComponentInstance::createInlineExportsObject(
-    JSContext* cx, const ComponentInlineExports& inlineExports,
-    MutableHandleObject exportsObj) const {
+    JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+    const ComponentInlineExports& inlineExports,
+    MutableHandleObject exportsObj) {
   // Matches the shape of a core instance's exports object.
   exportsObj.set(NewPlainObjectWithProto(cx, nullptr));
   if (!exportsObj) {
@@ -1500,7 +1670,7 @@ bool ComponentInstance::createInlineExportsObject(
     }
     RootedId id(cx, AtomToId(atom));
     RootedValue val(cx);
-    if (!getCoreItemValue(cx, iter.get().value(), &val) ||
+    if (!getCoreItemValue(cx, instanceObj, iter.get().value(), &val) ||
         !JS_DefinePropertyById(
             cx, exportsObj, id, val,
             JSPROP_ENUMERATE | JSPROP_READONLY | JSPROP_PERMANENT)) {
@@ -1510,7 +1680,13 @@ bool ComponentInstance::createInlineExportsObject(
   return PreventExtensions(cx, exportsObj);
 }
 
-bool ComponentInstance::init(JSContext* cx) {
+bool ComponentInstance::init(JSContext* cx,
+                             Handle<WasmComponentInstanceObject*> instanceObj) {
+  if (!loweredFuncs_.resize(component_->coreFuncs().length())) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+
   // We have to instantiate all core instances regardless of whether they are
   // even reachable by the component's exports, because they can have start
   // functions that can trap. (There are probably other reasons too.) This means
@@ -1524,7 +1700,8 @@ bool ComponentInstance::init(JSContext* cx) {
           return instantiateCoreModule(cx, desc, &exportsObj);
         },
         [&](const ComponentInlineExports& inlineExports) {
-          return createInlineExportsObject(cx, inlineExports, &exportsObj);
+          return createInlineExportsObject(cx, instanceObj, inlineExports,
+                                           &exportsObj);
         });
     if (!ok) {
       return false;
@@ -1540,8 +1717,7 @@ bool ComponentInstance::init(JSContext* cx) {
 
 bool ComponentInstance::createLiftedFunction(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
-    uint32_t funcIndex, Handle<JSAtom*> name,
-    MutableHandleFunction result) const {
+    uint32_t funcIndex, Handle<JSAtom*> name, MutableHandleFunction result) {
   const ComponentLiftedFuncDesc* lifted = component_->getLiftedFunc(funcIndex);
   if (!lifted) {
     JS_ReportErrorASCII(cx,
@@ -1550,7 +1726,7 @@ bool ComponentInstance::createLiftedFunction(
   }
 
   RootedValue callee(cx);
-  if (!getCoreItemValue(cx,
+  if (!getCoreItemValue(cx, instanceObj,
                         ComponentSortIndex(ComponentSort::CoreFunction,
                                            lifted->coreFuncIndex()),
                         &callee)) {
@@ -1564,7 +1740,7 @@ bool ComponentInstance::createLiftedFunction(
 
 bool ComponentInstance::createExportsObject(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
-    MutableHandleObject exportsObj) const {
+    MutableHandleObject exportsObj) {
   using Attr = ComponentNameAttribute;
 
   exportsObj.set(NewPlainObjectWithProto(cx, nullptr));
