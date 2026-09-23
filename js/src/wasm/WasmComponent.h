@@ -381,6 +381,14 @@ mozilla::Maybe<FuncType> FlattenFuncType(const ComponentFuncType& funcType,
                                          CanonMode mode, bool* memoryRequired,
                                          bool* reallocRequired, bool* tooDeep);
 
+// The canonical ABI's alignment and elem_size of a value type in a 32-bit
+// memory.
+uint32_t CanonAlignment(const ComponentType& type);
+uint32_t CanonElemSize(const ComponentType& type);
+
+// The size in bytes of the discriminant of a variant with `numCases` cases.
+uint32_t CanonDiscriminantSize(size_t numCases);
+
 enum class ComponentNameAttribute : uint8_t {
   Constructor,
   Method,
