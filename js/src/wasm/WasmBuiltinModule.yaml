@@ -768,6 +768,57 @@
   fail_mode: FailOnNegI32
   uses_memory: false
 
+- op: CmCheckObject
+  symbolic_address:
+    name: CmCheckObject
+    type: Args_Int32_GeneralGeneral
+    needs_thunk: true
+  entry: CmCheckObject
+  export: cmCheckObject
+  params:
+    - 'externref'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmGetField
+  symbolic_address:
+    name: CmGetField
+    type: Args_General3
+    needs_thunk: true
+  entry: CmGetField
+  export: cmGetField
+  params:
+    - 'externref'
+    - 'externref'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: CmNewRecord
+  symbolic_address:
+    name: CmNewRecord
+    type: Args_General1
+    needs_thunk: true
+  entry: CmNewRecord
+  export: cmNewRecord
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: CmDefineField
+  symbolic_address:
+    name: CmDefineField
+    type: Args_Int32_GeneralGeneralGeneralGeneral
+    needs_thunk: true
+  entry: CmDefineField
+  export: cmDefineField
+  params:
+    - 'externref'
+    - 'externref'
+    - 'externref'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
 - op: CmScalarListToJS
   symbolic_address:
     name: CmScalarListToJS

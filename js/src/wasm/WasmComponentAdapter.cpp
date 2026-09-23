@@ -65,6 +65,8 @@ class MOZ_STACK_CLASS AdapterModuleBuilder {
 
   [[nodiscard]] bool init(Handle<WasmComponentInstanceObject*> instanceObj);
 
+  JSContext* cx() const { return cx_; }
+
   const TypeContext& types() const { return *codeMeta_->types; }
 
   // Imports a wasm function with its own type. Function imports must all be
@@ -78,6 +80,10 @@ class MOZ_STACK_CLASS AdapterModuleBuilder {
 
   // Imports the memory for the canonical ABI as memory 0.
   [[nodiscard]] bool importMemory(Handle<WasmMemoryObject*> memory);
+
+  // Imports a string as an immutable externref global, for the adapter to
+  // pass to builtins. A string is only imported once.
+  [[nodiscard]] bool importString(JSString* str, uint32_t* globalIndex);
 
   [[nodiscard]] bool defineAdapterFunc(ValTypeVector&& params,
                                        ValTypeVector&& results);
@@ -168,6 +174,29 @@ bool AdapterModuleBuilder::importMemory(Handle<WasmMemoryObject*> memory) {
     return false;
   }
   codeMeta_->memories.back().importIndex = mozilla::Some(importIndex);
+  return true;
+}
+
+bool AdapterModuleBuilder::importString(JSString* str, uint32_t* globalIndex) {
+  ValVector& values = imports_.get().globalValues;
+  for (size_t i = 0; i < values.length(); i++) {
+    JS::Value value = values[i].ref().toJSValue();
+    if (value.isString() && value.toString() == str) {
+      *globalIndex = i;
+      return true;
+    }
+  }
+
+  *globalIndex = codeMeta_->globals.length();
+  GlobalType type(ValType(RefType::extern_()), /*isMutable=*/false);
+  if (!codeMeta_->globals.append(GlobalDesc(type, *globalIndex)) ||
+      !moduleMeta_->imports.emplaceBack(CacheableName(), CacheableName(),
+                                        DefinitionKind::Global) ||
+      !values.append(
+          Val(ValType(RefType::extern_()), AnyRef::fromJSString(str)))) {
+    ReportOutOfMemory(cx_);
+    return false;
+  }
   return true;
 }
 
@@ -270,10 +299,10 @@ class AdapterFuncEncoder {
   [[nodiscard]] bool localSet(uint32_t index) {
     return encoder_.writeOp(Op::LocalSet) && encoder_.writeVarU32(index);
   }
-  [[nodiscard]] bool ctx() {
-    return encoder_.writeOp(Op::GlobalGet) &&
-           encoder_.writeVarU32(CtxGlobalIndex);
+  [[nodiscard]] bool globalGet(uint32_t index) {
+    return encoder_.writeOp(Op::GlobalGet) && encoder_.writeVarU32(index);
   }
+  [[nodiscard]] bool ctx() { return globalGet(CtxGlobalIndex); }
   [[nodiscard]] bool i32Const(int32_t value) {
     return encoder_.writeOp(Op::I32Const) && encoder_.writeVarS32(value);
   }
@@ -370,6 +399,13 @@ static bool IsSupportedAdapterType(const ComponentType& type) {
     case ComponentTypeKind::Tuple:
       for (const ComponentType& item : type.asTuple()) {
         if (!IsSupportedAdapterType(item)) {
+          return false;
+        }
+      }
+      return true;
+    case ComponentTypeKind::Record:
+      for (const ComponentRecordField& field : type.asRecord()) {
+        if (!IsSupportedAdapterType(field.type)) {
           return false;
         }
       }
@@ -520,6 +556,7 @@ static constexpr uint64_t CanonicalFloat64NaN = 0x7ff8000000000000;
 
 // State shared by the code converting the values of one adapter.
 struct AdapterContext {
+  AdapterModuleBuilder& builder;
   AdapterFuncEncoder& f;
   ComponentStringEncoding stringEncoding;
   // The realloc function, or UINT32_MAX if there is none.
@@ -798,6 +835,80 @@ template <typename F>
   return f.localGet(array);
 }
 
+// Pushes the JS name of a label.
+[[nodiscard]] static bool EmitName(AdapterContext& a,
+                                   const CacheableName& label,
+                                   ComponentJSCase jsCase) {
+  JSAtom* atom = ComponentLabelToJS(a.builder.cx(), label.utf8Bytes(), jsCase);
+  uint32_t global;
+  return atom && a.builder.importString(atom, &global) && a.f.globalGet(global);
+}
+
+[[nodiscard]] static bool GetRecordFieldTypes(const ComponentType& type,
+                                              ComponentTypeVector* types) {
+  for (const ComponentRecordField& field : type.asRecord()) {
+    if (!types->append(field.type)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// The JS-API's ToComponentValueRecord.
+[[nodiscard]] static bool EmitToComponentValueRecord(AdapterContext& a,
+                                                     const ComponentType& type,
+                                                     uint32_t jsValue,
+                                                     const ValueLoc& loc) {
+  using Id = BuiltinModuleFuncId;
+  AdapterFuncEncoder& f = a.f;
+  const ComponentRecordFieldVector& fields = type.asRecord();
+  ComponentTypeVector fieldTypes;
+  Vector<ValueLoc, 8, SystemAllocPolicy> fieldLocs;
+  if (!GetRecordFieldTypes(type, &fieldTypes) ||
+      !GetFieldLocs(fieldTypes, loc, &fieldLocs) || !f.localGet(jsValue) ||
+      !f.callBuiltin(Id::CmCheckObject)) {
+    return false;
+  }
+  for (size_t i = 0; i < fields.length(); i++) {
+    uint32_t field;
+    if (!f.addLocal(ValType(RefType::extern_()), &field) ||
+        !f.localGet(jsValue) ||
+        !EmitName(a, fields[i].name, ComponentJSCase::Camel) ||
+        !f.callBuiltin(Id::CmGetField) || !f.localSet(field) ||
+        !EmitToComponentValue(a, fields[i].type, field, fieldLocs[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// The JS-API's ToJSValueRecord.
+[[nodiscard]] static bool EmitToJSValueRecord(AdapterContext& a,
+                                              const ComponentType& type,
+                                              const ValueLoc& loc) {
+  using Id = BuiltinModuleFuncId;
+  AdapterFuncEncoder& f = a.f;
+  const ComponentRecordFieldVector& fields = type.asRecord();
+  ComponentTypeVector fieldTypes;
+  Vector<ValueLoc, 8, SystemAllocPolicy> fieldLocs;
+  uint32_t record;
+  if (!GetRecordFieldTypes(type, &fieldTypes) ||
+      !GetFieldLocs(fieldTypes, loc, &fieldLocs) ||
+      !f.addLocal(ValType(RefType::extern_()), &record) ||
+      !f.callBuiltin(Id::CmNewRecord) || !f.localSet(record)) {
+    return false;
+  }
+  for (size_t i = 0; i < fields.length(); i++) {
+    if (!f.localGet(record) ||
+        !EmitName(a, fields[i].name, ComponentJSCase::Camel) ||
+        !EmitToJSValue(a, fields[i].type, fieldLocs[i]) ||
+        !f.callBuiltin(Id::CmDefineField)) {
+      return false;
+    }
+  }
+  return f.localGet(record);
+}
+
 // ToComponentValue for a list, with the canonical ABI's store_list.
 [[nodiscard]] static bool EmitToComponentValueList(AdapterContext& a,
                                                    const ComponentType& type,
@@ -928,6 +1039,8 @@ template <typename F>
       return EmitToComponentValueList(a, type, jsValue, loc);
     case ComponentTypeKind::Tuple:
       return EmitToComponentValueTuple(a, type, jsValue, loc);
+    case ComponentTypeKind::Record:
+      return EmitToComponentValueRecord(a, type, jsValue, loc);
     default:
       MOZ_ASSERT(IsIntegerKind(kind));
       return f.ctx() && f.localGet(jsValue) && f.i32Const(int32_t(kind)) &&
@@ -966,6 +1079,8 @@ template <typename F>
       return EmitToJSValueList(a, type, loc);
     case ComponentTypeKind::Tuple:
       return EmitToJSValueTuple(a, type, loc);
+    case ComponentTypeKind::Record:
+      return EmitToJSValueRecord(a, type, loc);
     default:
       MOZ_ASSERT(IsIntegerKind(kind));
       return EmitGetScalar(f, kind, loc) && f.i32Const(int32_t(kind)) &&
@@ -1031,7 +1146,8 @@ template <typename F>
   }
 
   AdapterFuncEncoder f(builder.types(), numParams);
-  AdapterContext a{f, opts.stringEncoding, realloc, /*enterGuest=*/true};
+  AdapterContext a{builder, f, opts.stringEncoding, realloc,
+                   /*enterGuest=*/true};
 
   FlatLocals flatArgs;
   for (uint32_t i = 0; i < numParams; i++) {
@@ -1237,7 +1353,8 @@ bool wasm::CreateLoweredFunction(
 
   const FuncType& coreType = coreFuncType.funcType();
   AdapterFuncEncoder f(builder.types(), coreType.args().length());
-  AdapterContext a{f, opts.stringEncoding, realloc, /*enterGuest=*/false};
+  AdapterContext a{builder, f, opts.stringEncoding, realloc,
+                   /*enterGuest=*/false};
 
   // The flattened parameters are the adapter's own parameters.
   uint32_t nextFlatParam = 0;
@@ -1635,6 +1752,58 @@ int32_t wasm::CmArraySet(Instance* instance, void* arrayRef, int32_t index,
   Rooted<ArrayObject*> array(cx, &ArrayFromRef(arrayRef));
   RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
   if (!DefineDataElement(cx, array, uint32_t(index), value)) {
+    return -1;
+  }
+  return 0;
+}
+
+int32_t wasm::CmCheckObject(Instance* instance, void* valueRef) {
+  MOZ_ASSERT(SASigCmCheckObject.failureMode == FailureMode::FailOnNegI32);
+  if (!AnyRef::fromCompiledCode(valueRef).toJSValue().isObject()) {
+    JS_ReportErrorNumberASCII(instance->cx(), GetErrorMessage, nullptr,
+                              JSMSG_OBJECT_REQUIRED, "value");
+    return -1;
+  }
+  return 0;
+}
+
+void* wasm::CmGetField(Instance* instance, void* objectRef, void* nameRef) {
+  MOZ_ASSERT(SASigCmGetField.failureMode == FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedObject obj(cx, &AnyRef::fromCompiledCode(objectRef).toJSObject());
+  RootedId name(
+      cx,
+      AtomToId(
+          &AnyRef::fromCompiledCode(nameRef).toJSValue().toString()->asAtom()));
+  RootedValue value(cx);
+  if (!GetProperty(cx, obj, obj, name, &value)) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  return ExternRefForCompiledCode(cx, value);
+}
+
+void* wasm::CmNewRecord(Instance* instance) {
+  MOZ_ASSERT(SASigCmNewRecord.failureMode == FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  JSObject* obj = NewPlainObjectWithProto(cx, nullptr);
+  if (!obj) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue value(cx, ObjectValue(*obj));
+  return ExternRefForCompiledCode(cx, value);
+}
+
+int32_t wasm::CmDefineField(Instance* instance, void* objectRef, void* nameRef,
+                            void* valueRef) {
+  MOZ_ASSERT(SASigCmDefineField.failureMode == FailureMode::FailOnNegI32);
+  JSContext* cx = instance->cx();
+  RootedObject obj(cx, &AnyRef::fromCompiledCode(objectRef).toJSObject());
+  RootedId name(
+      cx,
+      AtomToId(
+          &AnyRef::fromCompiledCode(nameRef).toJSValue().toString()->asAtom()));
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  if (!DefineDataProperty(cx, obj, name, value, JSPROP_ENUMERATE)) {
     return -1;
   }
   return 0;

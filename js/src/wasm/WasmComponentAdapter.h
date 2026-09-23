@@ -105,6 +105,16 @@ void* CmNewArray(Instance* instance, int32_t length);
 int32_t CmArraySet(Instance* instance, void* arrayRef, int32_t index,
                    void* valueRef);
 
+// ToComponentValueRecord: CmCheckObject throws unless the value is an object,
+// and CmGetField gets a field. `nameRef` is an atom.
+int32_t CmCheckObject(Instance* instance, void* valueRef);
+void* CmGetField(Instance* instance, void* objectRef, void* nameRef);
+
+// ToJSValueRecord: creates a null-prototype object, and defines its fields.
+void* CmNewRecord(Instance* instance);
+int32_t CmDefineField(Instance* instance, void* objectRef, void* nameRef,
+                      void* valueRef);
+
 // ToJSValue for a list of scalars of type `kind`, a ComponentTypeKind, as a
 // typed array.
 void* CmScalarListToJS(Instance* instance, int32_t ptr, int32_t length,
