@@ -38,7 +38,10 @@ promise_setup(async () => {
 
 for (const [encoding] of Object.entries(fixtures)) {
   for (const [input, expected] of inputs) {
-    const label = input.length > 20 ? `${input.slice(0, 8)}... (${input.length} code units)` : format_value(input);
+    // JSON.stringify escapes lone surrogates, which test names cannot contain.
+    const label = input.length > 20
+      ? `${JSON.stringify(input.slice(0, 8))}... (${input.length} code units)`
+      : JSON.stringify(input);
     promise_test(async () => {
       const result = exports[encoding].roundtrip(input);
       assert_equals(received[encoding], expected, "value seen by echo");
