@@ -5705,6 +5705,30 @@ enum class ComponentTypeBoundKindRaw : uint8_t {
 
 // Validates that a `(core:)?sortidx` from the component spec corresponds to a
 // valid item in the component's index space.
+static const char* DefinitionKindName(DefinitionKind kind) {
+  switch (kind) {
+    case DefinitionKind::Function:
+      return "function";
+    case DefinitionKind::Table:
+      return "table";
+    case DefinitionKind::Memory:
+      return "memory";
+    case DefinitionKind::Global:
+      return "global";
+    case DefinitionKind::Tag:
+      return "tag";
+    default:
+      MOZ_CRASH();
+  }
+}
+
+// The name of a core item in errors, distinguishing core functions from
+// component functions.
+static const char* CoreItemName(DefinitionKind kind) {
+  return kind == DefinitionKind::Function ? "core function"
+                                          : DefinitionKindName(kind);
+}
+
 [[nodiscard]] static bool ValidateComponentSortIdx(
     Decoder& d, const Component& c, ComponentSortIndex sortIndex) {
   switch (sortIndex.sort) {
@@ -5725,29 +5749,15 @@ enum class ComponentTypeBoundKindRaw : uint8_t {
       // TODO(wasm-cm): Support nested components
       return d.fail("nested components are not supported yet");
 
-    case ComponentSort::CoreFunction: {
-      if (c.coreFuncs().length() <= sortIndex.index) {
-        return d.failf("invalid core function index %d", sortIndex.index);
-      }
-    } break;
-    case ComponentSort::CoreTable: {
-      if (c.coreTables().length() <= sortIndex.index) {
-        return d.failf("invalid table index %d", sortIndex.index);
-      }
-    } break;
-    case ComponentSort::CoreMemory: {
-      if (c.coreMemories().length() <= sortIndex.index) {
-        return d.failf("invalid memory index %d", sortIndex.index);
-      }
-    } break;
-    case ComponentSort::CoreGlobal: {
-      if (c.coreGlobals().length() <= sortIndex.index) {
-        return d.failf("invalid global index %d", sortIndex.index);
-      }
-    } break;
+    case ComponentSort::CoreFunction:
+    case ComponentSort::CoreTable:
+    case ComponentSort::CoreMemory:
+    case ComponentSort::CoreGlobal:
     case ComponentSort::CoreTag: {
-      if (c.coreTags().length() <= sortIndex.index) {
-        return d.failf("invalid tag index %d", sortIndex.index);
+      if (c.coreIndexSpace(sortIndex.sort).length() <= sortIndex.index) {
+        return d.failf("invalid %s index %d",
+                       CoreItemName(CoreSortFromComponentSort(sortIndex.sort)),
+                       sortIndex.index);
       }
     } break;
 
@@ -5776,23 +5786,6 @@ enum class CoreInstanceExprKind : uint8_t {
   InstantiateModule = 0x00,
   InlineExports = 0x01,
 };
-
-static const char* DefinitionKindName(DefinitionKind kind) {
-  switch (kind) {
-    case DefinitionKind::Function:
-      return "function";
-    case DefinitionKind::Table:
-      return "table";
-    case DefinitionKind::Memory:
-      return "memory";
-    case DefinitionKind::Global:
-      return "global";
-    case DefinitionKind::Tag:
-      return "tag";
-    default:
-      MOZ_CRASH();
-  }
-}
 
 // Checks that there is room for one more core func, table, memory, global, or
 // tag in the component's index space for `sort`.
@@ -5900,10 +5893,7 @@ static const char* DefinitionKindName(DefinitionKind kind) {
           return d.fail("no matching export for core module import");
         }
         if (exportType->kind() != imp.type.kind()) {
-          return d.failf("expected a %s",
-                         imp.type.kind() == DefinitionKind::Function
-                             ? "core function"
-                             : DefinitionKindName(imp.type.kind()));
+          return d.failf("expected a %s", CoreItemName(imp.type.kind()));
         }
         if (!CoreExternType::matches(*exportType, imp.type)) {
           return d.failf("incompatible %s type for import",
@@ -6286,8 +6276,8 @@ enum class CanonDefKindRaw : uint8_t {
       }
     } break;
     case uint8_t(CanonDefKindRaw::Lower): {
-      if (c->coreFuncs().length() >= MaxComponentCoreFuncs) {
-        return d.failf("too many core funcs (max %d)", MaxComponentCoreFuncs);
+      if (!CheckCanAddCoreItem(d, *c, ComponentSort::CoreFunction)) {
+        return false;
       }
 
       uint8_t dummy;
@@ -6342,8 +6332,8 @@ enum class CanonDefKindRaw : uint8_t {
     case uint8_t(CanonDefKindRaw::ResourceNew):
     case uint8_t(CanonDefKindRaw::ResourceDrop):
     case uint8_t(CanonDefKindRaw::ResourceRep): {
-      if (c->coreFuncs().length() >= MaxComponentCoreFuncs) {
-        return d.failf("too many core funcs (max %d)", MaxComponentCoreFuncs);
+      if (!CheckCanAddCoreItem(d, *c, ComponentSort::CoreFunction)) {
+        return false;
       }
 
       uint32_t resourceTypeIndex;
