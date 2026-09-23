@@ -42,6 +42,9 @@ enum class AdapterTrap : int32_t {
 // Every adapter module imports its WasmComponentInstanceObject as this global.
 static constexpr uint32_t CtxGlobalIndex = 0;
 
+// The tag on the length of a latin1+utf16 string that is stored as UTF-16.
+static constexpr uint32_t UTF16Tag = 1u << 31;
+
 namespace {
 
 // Builds and instantiates a module whose only defined function is an adapter,
@@ -345,8 +348,7 @@ static bool IsIntegerKind(ComponentTypeKind kind) {
   }
 }
 
-static bool IsSupportedAdapterType(const ComponentType& type,
-                                   const CanonOptValues& opts) {
+static bool IsSupportedAdapterType(const ComponentType& type) {
   switch (type.kind()) {
     case ComponentTypeKind::Bool:
     case ComponentTypeKind::S64:
@@ -354,21 +356,19 @@ static bool IsSupportedAdapterType(const ComponentType& type,
     case ComponentTypeKind::F32:
     case ComponentTypeKind::F64:
     case ComponentTypeKind::Char:
-      return true;
     case ComponentTypeKind::String:
-      return opts.stringEncoding != ComponentStringEncoding::Latin1PlusUTF16;
+      return true;
     default:
       return IsIntegerKind(type.kind());
   }
 }
 
 [[nodiscard]] static bool CheckSupportedAdapterFuncType(
-    JSContext* cx, const ComponentFuncType& funcType,
-    const CanonOptValues& opts) {
+    JSContext* cx, const ComponentFuncType& funcType) {
   bool supported = funcType.resultType.isNothing() ||
-                   IsSupportedAdapterType(*funcType.resultType, opts);
+                   IsSupportedAdapterType(*funcType.resultType);
   for (const ComponentType& type : funcType.paramTypes) {
-    supported = supported && IsSupportedAdapterType(type, opts);
+    supported = supported && IsSupportedAdapterType(type);
   }
 
   ValTypeVector flatParams;
@@ -613,8 +613,28 @@ template <typename F>
         return false;
       }
       break;
-    case ComponentStringEncoding::Latin1PlusUTF16:
-      MOZ_CRASH("not supported yet");
+    case ComponentStringEncoding::Latin1PlusUTF16: {
+      // This is store_string_to_latin1_or_utf16. Because the source is UTF-16,
+      // storing it as UTF-16 takes exactly two bytes per code unit, and so
+      // neither of the reallocs that shrink the allocation happen.
+      uint32_t latin1Length;
+      if (!f.addLocal(ValType::I32, &latin1Length) ||
+          !EmitAllocate(a, 2, length, ptr) || !f.localGet(str) ||
+          !f.localGet(ptr) || !f.localGet(length) ||
+          !f.callBuiltin(Id::CmStoreLatin1) || !f.localSet(latin1Length) ||
+          !f.localGet(latin1Length) || !f.localGet(length) ||
+          !f.op(Op::I32Ne) || !f.block(Op::If, mozilla::Nothing()) ||
+          !f.localGet(length) || !f.i32Const(1) || !f.op(Op::I32Shl) ||
+          !f.localSet(byteLength) ||
+          !EmitReallocate(a, length, 2, byteLength, ptr) || !f.localGet(str) ||
+          !f.localGet(ptr) || !f.localGet(latin1Length) ||
+          !f.callBuiltin(Id::CmStoreLatin1ToUTF16) || !f.localGet(length) ||
+          !f.i32Const(int32_t(UTF16Tag)) || !f.op(Op::I32Or) ||
+          !f.localSet(length) || !f.op(Op::End)) {
+        return false;
+      }
+      break;
+    }
   }
 
   return EmitSetI32(f, loc, 0, ptr) && EmitSetI32(f, loc, 1, length);
@@ -882,7 +902,7 @@ bool wasm::CreateLiftedFunction(
     const ComponentFuncType& funcType, HandleFunction callee,
     const CanonOptValues& opts, Handle<JSAtom*> name,
     MutableHandleFunction result) {
-  if (!CheckSupportedAdapterFuncType(cx, funcType, opts)) {
+  if (!CheckSupportedAdapterFuncType(cx, funcType)) {
     return false;
   }
 
@@ -928,7 +948,7 @@ bool wasm::CreateLoweredFunction(
     const ComponentFuncType& funcType, const TypeDef& coreFuncType,
     HandleObject host, const CanonOptValues& opts,
     MutableHandleFunction result) {
-  if (!CheckSupportedAdapterFuncType(cx, funcType, opts)) {
+  if (!CheckSupportedAdapterFuncType(cx, funcType)) {
     return false;
   }
 
@@ -1380,6 +1400,68 @@ int32_t wasm::CmStoreUTF16(Instance* instance, void* strRef, int32_t ptr,
   return 0;
 }
 
+int32_t wasm::CmStoreLatin1(Instance* instance, void* strRef, int32_t ptr,
+                            int32_t length) {
+  MOZ_ASSERT(SASigCmStoreLatin1.failureMode == FailureMode::FailOnNegI32);
+  JSLinearString* str = LinearStringFromRef(instance->cx(), strRef);
+  if (!str || !CheckAlignment(instance, uint32_t(ptr), 2)) {
+    return -1;
+  }
+  uint8_t* dst = GetMemoryRange(instance, uint32_t(ptr), uint32_t(length));
+  if (!dst) {
+    return -1;
+  }
+
+  JS::AutoCheckCannotGC nogc;
+  size_t i = 0;
+  for (; i < str->length(); i++) {
+    char16_t c = str->latin1OrTwoByteChar(i);
+    if (c > JSString::MAX_LATIN1_CHAR) {
+      break;
+    }
+    dst[i] = uint8_t(c);
+  }
+  return int32_t(i);
+}
+
+int32_t wasm::CmStoreLatin1ToUTF16(Instance* instance, void* strRef,
+                                   int32_t ptr, int32_t latin1Length) {
+  MOZ_ASSERT(SASigCmStoreLatin1ToUTF16.failureMode ==
+             FailureMode::FailOnNegI32);
+  JSLinearString* str = LinearStringFromRef(instance->cx(), strRef);
+  if (!str || !CheckAlignment(instance, uint32_t(ptr), 2)) {
+    return -1;
+  }
+  size_t length = str->length();
+  uint8_t* dst = GetMemoryRange(instance, uint32_t(ptr), 2 * uint64_t(length));
+  if (!dst) {
+    return -1;
+  }
+
+  // Inflate the Latin-1 prefix, which realloc moved to `ptr`, in place.
+  for (int32_t i = latin1Length - 1; i >= 0; i--) {
+    dst[2 * i] = dst[i];
+    dst[2 * i + 1] = 0;
+  }
+
+  // Then store the rest as UTF-16, replacing lone surrogates with U+FFFD as
+  // for a USVString.
+  JS::AutoCheckCannotGC nogc;
+  for (size_t i = latin1Length; i < length; i++) {
+    char16_t c = str->latin1OrTwoByteChar(i);
+    if (unicode::IsLeadSurrogate(c) && i + 1 < length &&
+        unicode::IsTrailSurrogate(str->latin1OrTwoByteChar(i + 1))) {
+      mozilla::LittleEndian::writeUint16(dst + 2 * i, c);
+      i++;
+      c = str->latin1OrTwoByteChar(i);
+    } else if (unicode::IsSurrogate(c)) {
+      c = unicode::REPLACEMENT_CHARACTER;
+    }
+    mozilla::LittleEndian::writeUint16(dst + 2 * i, c);
+  }
+  return 0;
+}
+
 // The canonical ABI's load_string_from_range, converted to a JS string.
 void* wasm::CmStringToJS(Instance* instance, int32_t ptr, int32_t taggedLength,
                          int32_t encoding) {
@@ -1396,7 +1478,6 @@ void* wasm::CmStringToJS(Instance* instance, int32_t ptr, int32_t taggedLength,
     case ComponentStringEncoding::UTF16:
       break;
     case ComponentStringEncoding::Latin1PlusUTF16: {
-      constexpr uint32_t UTF16Tag = 1u << 31;
       isLatin1 = !(length & UTF16Tag);
       length &= ~UTF16Tag;
       break;

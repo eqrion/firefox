@@ -105,6 +105,14 @@ int32_t CmStoreUTF8(Instance* instance, void* ctxRef, void* strRef, int32_t ptr,
 // Stores the string's `length` code units as UTF-16 at `ptr`.
 int32_t CmStoreUTF16(Instance* instance, void* strRef, int32_t ptr,
                      int32_t length);
+// Stores the string's code units at `ptr` as Latin-1 until the first that is
+// not Latin-1, and returns how many were stored.
+int32_t CmStoreLatin1(Instance* instance, void* strRef, int32_t ptr,
+                      int32_t length);
+// Inflates the `latin1Length` bytes of Latin-1 at `ptr` to UTF-16 in place,
+// and stores the rest of the string after them as UTF-16.
+int32_t CmStoreLatin1ToUTF16(Instance* instance, void* strRef, int32_t ptr,
+                             int32_t latin1Length);
 
 // The canonical ABI's load_string, converted to a JS string. `encoding` is a
 // ComponentStringEncoding.
