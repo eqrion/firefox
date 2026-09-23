@@ -81,9 +81,28 @@ promise_test(async () => {
   assert_dense_array(exports.roundtripStrings([, "a", , ]), ["undefined", "a", "undefined"], "result");
 }, "list<string>: holes are undefined, which stringifies");
 
+// Elements are converted after the list is allocated in the guest, so a
+// failing element locks down the instance, and those tests use a fresh one.
+async function freshExports() {
+  return componentExports("values/list", imports);
+}
+
 promise_test(async () => {
-  assert_throws_js(TypeError, () => exports.roundtripU32s([1, , 3]));
+  const e = await freshExports();
+  assert_throws_js(TypeError, () => e.roundtripU32s([1, , 3]));
 }, "list<u32>: a hole is undefined, which is a TypeError for u32");
+
+promise_test(async () => {
+  const e = await freshExports();
+  assert_throws_js(TypeError, () => e.roundtripU32s([-1]));
+  assert_traps(() => e.roundtripU32s([]));
+}, "list<u32>: a failing element locks down the instance, since the list was allocated");
+
+promise_test(async () => {
+  const e = await freshExports();
+  assert_throws_js(TypeError, () => e.roundtripU32s(5));
+  assert_dense_array(e.roundtripU32s([1]), [1], "result");
+}, "list<u32>: a non-iterable value does not lock down the instance");
 
 for (const [make, description] of [
   [() => "abc", "a string (not an Object, even though iterable)"],
@@ -105,16 +124,22 @@ for (const [make, description] of [
 ]) {
   promise_test(async () => {
     received.u32s = "unchanged";
-    assert_throws_js(TypeError, () => exports.roundtripU32s(make()));
+    const e = await freshExports();
+    assert_throws_js(TypeError, () => e.roundtripU32s(make()));
     assert_equals(received.u32s, "unchanged", "echo must not be called");
   }, `list<u32>: ${description} throws TypeError`);
 }
 
-promise_test(async () => {
-  assert_throws_js(TypeError, () => exports.roundtripNested([[1], 2]));
-  assert_throws_js(TypeError, () => exports.roundtripNested([[1], [-1]]));
-  assert_throws_js(TypeError, () => exports.roundtripNested(["ab"]));
-}, "list<list<u32>>: inner elements are checked with the same rules");
+for (const [input, description] of [
+  [[[1], 2], "a non-iterable inner list"],
+  [[[1], [-1]], "an out-of-range inner element"],
+  [["ab"], "a string inner list"],
+]) {
+  promise_test(async () => {
+    const e = await freshExports();
+    assert_throws_js(TypeError, () => e.roundtripNested(input));
+  }, `list<list<u32>>: ${description} throws TypeError`);
+}
 
 promise_test(async () => {
   const visited = [];
@@ -126,9 +151,10 @@ promise_test(async () => {
       }
     },
   };
-  assert_throws_js(TypeError, () => exports.roundtripU32s(iterable));
-  assert_array_equals(visited, [1, -1], "iteration stops at the failing element");
-}, "list<u32>: a failing element stops iteration");
+  const e = await freshExports();
+  assert_throws_js(TypeError, () => e.roundtripU32s(iterable));
+  assert_array_equals(visited, [1, -1, 2], "iteration finishes before conversion");
+}, "list<u32>: the iterable is consumed before any element is converted");
 
 promise_test(async () => {
   const error = new Error("from iterator");
@@ -178,9 +204,10 @@ promise_test(async () => {
       };
     },
   };
-  assert_throws_js(TypeError, () => exports.roundtripU32s(iterable));
-  assert_equals(closed, 1, "return() is called once");
-}, "list<u32>: a failing element closes the iterator");
+  const e = await freshExports();
+  assert_throws_js(TypeError, () => e.roundtripU32s(iterable));
+  assert_equals(closed, 0, "the exhausted iterator is not closed");
+}, "list<u32>: a failing element does not call return()");
 
 promise_test(async () => {
   let closed = 0;
@@ -196,16 +223,3 @@ promise_test(async () => {
   assert_dense_array(exports.roundtripU32s(iterable), [1, 2], "result");
   assert_equals(closed, 0, "an exhausted iterator is not closed again");
 }, "list<u32>: a completed iteration does not call return()");
-
-promise_test(async () => {
-  const closeError = new Error("from return");
-  const iterable = {
-    [Symbol.iterator]() {
-      return {
-        next() { return { value: -1, done: false }; },
-        return() { throw closeError; },
-      };
-    },
-  };
-  assert_throws_js(TypeError, () => exports.roundtripU32s(iterable));
-}, "list<u32>: the conversion error wins over an error thrown by return()");

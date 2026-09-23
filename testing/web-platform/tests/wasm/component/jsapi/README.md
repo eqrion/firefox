@@ -159,8 +159,9 @@ another way.
   reject every component with a `record` in its API.
 - `compileStreaming` and `instantiateStreaming` are out of scope.
 - Objects and errors created by a conversion belong to the conversion realm.
-- `ToComponentValueList` closes the iterator when an element fails to
-  convert.
+- `ToComponentValueList` consumes the whole iterable before converting any
+  element, so that the canonical ABI can allocate the list up front. A failing
+  element therefore locks down the instance.
 - A transparent `(eq)` type import is not read from the imports object.
 - The brand check for a guest class used as a host type import looks only at
   the class, so a disposed instance still passes.

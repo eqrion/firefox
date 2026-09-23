@@ -132,9 +132,15 @@ for (const [make, description] of [
   [() => ({ [Symbol.iterator]: 1 }), "an object whose Symbol.iterator is not callable"],
   [() => ({ [Symbol.iterator]() { return 1; } }), "an object whose iterator is not an object"],
 ]) {
+  // Elements are converted after the list is allocated in the guest, so a
+  // failing element locks down the instance, and each case uses a fresh one.
   promise_test(async () => {
     received = "unchanged";
-    assert_throws_js(TypeError, () => exports.roundtripBytes(make()));
+    const { roundtripBytes } = await componentExports("values/list-u8", {
+      echoBytes: x => { received = x; return x; },
+      recv() {},
+    });
+    assert_throws_js(TypeError, () => roundtripBytes(make()));
     assert_equals(received, "unchanged", "echo must not be called");
   }, `list<u8>: ${description} throws TypeError`);
 }
@@ -149,9 +155,10 @@ promise_test(async () => {
       }
     },
   };
-  assert_throws_js(TypeError, () => exports.roundtripBytes(iterable));
-  assert_array_equals(visited, [1, 300], "iteration stops at the failing element");
-}, "list<u8>: a failing element stops iteration");
+  const { roundtripBytes } = await componentExports("values/list-u8", { echoBytes: x => x, recv() {} });
+  assert_throws_js(TypeError, () => roundtripBytes(iterable));
+  assert_array_equals(visited, [1, 300, 2], "iteration finishes before conversion");
+}, "list<u8>: the iterable is consumed before any element is converted");
 
 promise_test(async () => {
   const { roundtripBytes } = await componentExports("values/list-u8", { echoBytes: () => [1, 2], recv() {} });
