@@ -60,7 +60,7 @@ promise_test(async () => {
 promise_test(async () => {
   const log = [];
   calls = [];
-  class MyError extends Error {}
+  class MyError extends Error { name = "MyError"; }
   assert_throws_js(MyError, () => roundtrip(tracked(log, "a", 1), { valueOf() { throw new MyError(); } }, tracked(log, "c", 3)));
   assert_array_equals(log, ["a"]);
   assert_equals(calls.length, 0);

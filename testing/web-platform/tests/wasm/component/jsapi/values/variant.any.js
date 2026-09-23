@@ -80,7 +80,7 @@ promise_test(async () => {
 }, "variant: a Symbol kind throws TypeError from ToString");
 
 promise_test(async () => {
-  class MyError extends Error {}
+  class MyError extends Error { name = "MyError"; }
   assert_throws_js(MyError, () => roundtrip({ get kind() { throw new MyError(); } }));
   assert_throws_js(MyError, () => roundtrip({ kind: "Num", get value() { throw new MyError(); } }));
 }, "variant: a throwing getter propagates its exception");

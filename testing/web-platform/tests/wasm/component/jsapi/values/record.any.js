@@ -104,7 +104,7 @@ for (const value of [null, undefined, "firstName", 1, true, Symbol(), 1n]) {
 }
 
 promise_test(async () => {
-  class MyError extends Error {}
+  class MyError extends Error { name = "MyError"; }
   const input = { ...full, get age() { throw new MyError(); } };
   assert_throws_js(MyError, () => roundtrip(input));
 }, "record: a throwing getter propagates its exception");
