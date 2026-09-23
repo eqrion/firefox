@@ -724,22 +724,22 @@ assertValTypesUnequal(`
 
 // Own / borrow
 //
-// Resource types are generative: each (resource ...) introduces a fresh
-// type, so two distinct resource definitions yield distinct (own/borrow)
-// types even when their representations are identical.
+// Resource types are generative: each (sub resource) import introduces a fresh
+// type, so two distinct resource imports yield distinct (own/borrow) types.
+// The helpers import functions, which cannot refer to defined resource types.
 assertValTypesEqual(`
-  (type $R (resource (rep i32)))
+  (import "R" (type $R (sub resource)))
   (type $a (own $R))
   (type $b (own $R))
 `, ["$a", "$b"]);
 assertValTypesEqual(`
-  (type $R (resource (rep i32)))
+  (import "R" (type $R (sub resource)))
   (type $a (borrow $R))
   (type $b (borrow $R))
 `, ["$a", "$b"]);
 assertValTypesUnequal(`
-  (type $R1 (resource (rep i32)))
-  (type $R2 (resource (rep i32)))
+  (import "R1" (type $R1 (sub resource)))
+  (import "R2" (type $R2 (sub resource)))
   (type $a (own $R1))
   (type $b (own $R2))
   (type $c (borrow $R1))
