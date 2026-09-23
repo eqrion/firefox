@@ -406,6 +406,40 @@ bool ComponentType::subResource(ComponentType* type) {
   return true;
 }
 
+bool ComponentType::instance(ComponentInstanceType&& inner,
+                             ComponentType* type) {
+  ComponentTypeDef* def =
+      js_new<ComponentTypeDef>(ComponentTypeSchema(std::move(inner)));
+  if (!def) {
+    return false;
+  }
+  *type = ComponentType(ComponentTypeKind::Instance, def);
+  return true;
+}
+
+bool ComponentInstanceType::addExport(ComponentName&& name,
+                                      ComponentExternDesc desc) {
+  uint32_t numItems = desc.sort() == ComponentSort::Instance
+                          ? desc.asInstance().asInstance().numImportedItems()
+                          : 1;
+  if (!exports_.append(ComponentInstanceTypeExport{
+          std::move(name), std::move(desc), numImportedItems_})) {
+    return false;
+  }
+  numImportedItems_ += numItems;
+  return true;
+}
+
+mozilla::Maybe<uint32_t> ComponentInstanceType::findExport(
+    const CacheableName& name) const {
+  for (uint32_t i = 0; i < exports_.length(); i++) {
+    if (exports_[i].name.name == name) {
+      return mozilla::Some(i);
+    }
+  }
+  return mozilla::Nothing();
+}
+
 const ComponentRecordFieldVector& ComponentType::asRecord() const {
   MOZ_RELEASE_ASSERT(kind() == ComponentTypeKind::Record);
   return typeDef_->schema().as<ComponentRecordFieldVector>();
@@ -474,6 +508,11 @@ const ComponentFuncType& ComponentType::asFunc() const {
 const ComponentResourceType& ComponentType::asResource() const {
   MOZ_RELEASE_ASSERT(kind() == ComponentTypeKind::Resource);
   return typeDef_->schema().as<ComponentResourceType>();
+}
+
+const ComponentInstanceType& ComponentType::asInstance() const {
+  MOZ_RELEASE_ASSERT(kind() == ComponentTypeKind::Instance);
+  return typeDef_->schema().as<ComponentInstanceType>();
 }
 
 bool ComponentType::structurallyEqual(const ComponentType& a,
@@ -593,6 +632,10 @@ bool ComponentTypeDef::structurallyEqual(const ComponentTypeDef& a,
         // they point at the same ComponentTypeDef (by pointer equality), but
         // this method has no concept of that.
         return false;
+      },
+      [&](const ComponentInstanceType& a) {
+        // Instance types are never canonicalized, like resource types.
+        return false;
       });
 }
 
@@ -691,8 +734,7 @@ HashNumber ComponentTypeHasher::hash(const ComponentType& t) {
       hash = AddMaybeComponentTypeToHash(hash, ft.resultType);
     } break;
     case ComponentTypeKind::Component:
-    case ComponentTypeKind::Instance:
-      // TODO(wasm-cm): Component and instance types not yet implemented
+      // TODO(wasm-cm): Component types not yet implemented
       MOZ_CRASH();
     default:
       MOZ_CRASH("should have been excluded from hashing");
@@ -732,8 +774,10 @@ bool ComponentCanonicalTypeSet::canonicalize(const ComponentType& type,
   MOZ_RELEASE_ASSERT(type.typeDef());
 
   // Resource types retain their uniqueness by skipping canonicalization.
+  // Instance types also skip it, since they may declare resource types.
   if (type.kind() == ComponentTypeKind::Resource ||
-      type.kind() == ComponentTypeKind::SubResource) {
+      type.kind() == ComponentTypeKind::SubResource ||
+      type.kind() == ComponentTypeKind::Instance) {
     *canonicalized = type;
     return true;
   }
@@ -1266,6 +1310,15 @@ bool Component::addImport(ComponentImport&& import) {
   ComponentSort sort = import.externDesc().sort();
   MOZ_ASSERT(ComponentSortValidForExternDesc(sort));
 
+  uint32_t numItems =
+      sort == ComponentSort::Instance
+          ? import.externDesc().asInstance().asInstance().numImportedItems()
+          : 1;
+  if (!importFirstItems_.append(numImportedItems_)) {
+    return false;
+  }
+  numImportedItems_ += numItems;
+
   // Add import to imports vector
   uint32_t importIndex = imports_.length();
   if (!imports_.append(std::move(import))) {
@@ -1363,7 +1416,7 @@ ComponentType Component::getType(uint32_t typeIndex) const {
     case ComponentItem::ItemKind::Export:
       return exports_[item.itemIndex()].externDesc().asType();
     case ComponentItem::ItemKind::Alias:
-      MOZ_CRASH("should be impossible for now");
+      return aliasedExport(item).desc.asType();
     default:
       MOZ_CRASH();
   }
@@ -1397,7 +1450,58 @@ ComponentType Component::getTypeForFunc(uint32_t funcIndex) const {
     case ComponentItem::ItemKind::Export:
       return exports_[item.itemIndex()].externDesc().asFunc();
     case ComponentItem::ItemKind::Alias:
-      MOZ_CRASH("should be impossible for now");
+      return aliasedExport(item).desc.asFunc();
+    default:
+      MOZ_CRASH();
+  }
+}
+
+ComponentType Component::getTypeForInstance(uint32_t instanceIndex) const {
+  ComponentItem item = instances_[instanceIndex];
+  MOZ_ASSERT(item.sort() == ComponentSort::Instance);
+  switch (item.kind()) {
+    case ComponentItem::ItemKind::Import:
+      return imports_[item.itemIndex()].externDesc().asInstance();
+    case ComponentItem::ItemKind::Alias:
+      return aliasedExport(item).desc.asInstance();
+    default:
+      // TODO(wasm-cm): Defined and exported instances
+      MOZ_CRASH();
+  }
+}
+
+const ComponentInstanceTypeExport& Component::aliasedExport(
+    ComponentItem alias) const {
+  MOZ_RELEASE_ASSERT(alias.aliasKind() == ComponentAliasKind::Export);
+  ComponentType instanceType = getTypeForInstance(alias.aliasInstanceIndex());
+  return instanceType.asInstance().exports()[alias.itemIndex()];
+}
+
+bool Component::addExportAlias(uint32_t instanceIndex, uint32_t exportIndex) {
+  ComponentType instanceType = getTypeForInstance(instanceIndex);
+  ComponentSort sort =
+      instanceType.asInstance().exports()[exportIndex].desc.sort();
+  ComponentItem item = ComponentItem::alias(ComponentAliasKind::Export, sort,
+                                            instanceIndex, exportIndex);
+  switch (sort) {
+    case ComponentSort::Func:
+      return funcs_.append(item);
+    case ComponentSort::Type:
+      return types_.append(item);
+    case ComponentSort::Instance:
+      return instances_.append(item);
+    default:
+      MOZ_CRASH();
+  }
+}
+
+uint32_t Component::firstImportedItem(ComponentItem item) const {
+  switch (item.kind()) {
+    case ComponentItem::ItemKind::Import:
+      return importFirstItems_[item.itemIndex()];
+    case ComponentItem::ItemKind::Alias:
+      return firstImportedItem(instances_[item.aliasInstanceIndex()]) +
+             aliasedExport(item).firstImportedItem;
     default:
       MOZ_CRASH();
   }
@@ -1485,8 +1589,9 @@ ComponentItem Component::resolveSortIndex(ComponentSortIndex sortIndex) const {
       return funcs_[sortIndex.index];
     case ComponentSort::Type:
       return types_[sortIndex.index];
-    case ComponentSort::Component:
     case ComponentSort::Instance:
+      return instances_[sortIndex.index];
+    case ComponentSort::Component:
       // TODO(wasm-cm): Nested components
       MOZ_CRASH();
 
@@ -1599,87 +1704,117 @@ static bool CallWithReceiver(JSContext* cx, unsigned argc, Value* vp) {
 }
 
 bool ComponentInstance::readImports(JSContext* cx, HandleObject importObj) {
-  using Attr = ComponentNameAttribute;
-
-  if (!importValues_.resize(component_->imports().length())) {
+  if (!importValues_.resize(component_->numImportedItems())) {
     ReportOutOfMemory(cx);
     return false;
   }
 
   for (size_t i = 0; i < component_->imports().length(); i++) {
     const ComponentImport& imp = component_->imports()[i];
-    const ComponentExternDesc& desc = imp.externDesc();
-    ComponentNameAttributes attrs = imp.name().attributes;
-
-    if (desc.sort() == ComponentSort::Type) {
-      ComponentTypeKind kind = desc.asType().kind();
-      if (kind != ComponentTypeKind::Resource &&
-          kind != ComponentTypeKind::SubResource) {
-        continue;
-      }
-      JS_ReportErrorASCII(cx, "resource type imports are not supported yet");
+    uint32_t firstItem = component_->firstImportedItem(
+        ComponentItem::import(imp.externDesc().sort(), i));
+    if (!readImport(cx, importObj, imp.name(), imp.externDesc(), firstItem)) {
       return false;
     }
-    MOZ_RELEASE_ASSERT(desc.sort() == ComponentSort::Func);
-    if (attrs.contains(Attr::Constructor) || attrs.contains(Attr::Method) ||
-        attrs.contains(Attr::Static)) {
-      JS_ReportErrorASCII(cx,
-                          "resource function imports are not supported yet");
+  }
+
+  return true;
+}
+
+bool ComponentInstance::readImport(JSContext* cx, HandleObject importObj,
+                                   const ComponentName& name,
+                                   const ComponentExternDesc& desc,
+                                   uint32_t firstItem) {
+  using Attr = ComponentNameAttribute;
+  ComponentNameAttributes attrs = name.attributes;
+
+  if (desc.sort() == ComponentSort::Type) {
+    ComponentTypeKind kind = desc.asType().kind();
+    if (kind != ComponentTypeKind::Resource &&
+        kind != ComponentTypeKind::SubResource) {
+      return true;
+    }
+    JS_ReportErrorASCII(cx, "resource type imports are not supported yet");
+    return false;
+  }
+  if (attrs.contains(Attr::Constructor) || attrs.contains(Attr::Method) ||
+      attrs.contains(Attr::Static)) {
+    JS_ReportErrorASCII(cx, "resource function imports are not supported yet");
+    return false;
+  }
+
+  if (!importObj) {
+    JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
+                             JSMSG_WASM_BAD_IMPORT_ARG);
+    return false;
+  }
+
+  Rooted<JSAtom*> jsName(cx, ComponentJSName(cx, name, /*isType=*/false));
+  if (!jsName) {
+    return false;
+  }
+  RootedId nameId(cx, AtomToId(jsName));
+
+  RootedValue value(cx);
+  RootedValue receiver(cx);
+  if (attrs.contains(Attr::Get) || attrs.contains(Attr::Set)) {
+    receiver.setObject(*importObj);
+    if (!FindAccessor(cx, importObj, nameId, attrs.contains(Attr::Get),
+                      &value)) {
       return false;
     }
+  } else if (!GetProperty(cx, importObj, importObj, nameId, &value)) {
+    return false;
+  }
 
-    if (!importObj) {
-      JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
-                               JSMSG_WASM_BAD_IMPORT_ARG);
-      return false;
-    }
-
-    Rooted<JSAtom*> name(cx, ComponentJSName(cx, imp.name(), /*isType=*/false));
-    if (!name) {
-      return false;
-    }
-    RootedId nameId(cx, AtomToId(name));
-
-    RootedValue value(cx);
-    RootedValue receiver(cx);
-    if (attrs.contains(Attr::Get) || attrs.contains(Attr::Set)) {
-      receiver.setObject(*importObj);
-      if (!FindAccessor(cx, importObj, nameId, attrs.contains(Attr::Get),
-                        &value)) {
-        return false;
-      }
-    } else if (!GetProperty(cx, importObj, importObj, nameId, &value)) {
-      return false;
-    }
-
-    if (!IsCallable(value)) {
-      UniqueChars nameChars = AtomToPrintableString(cx, name);
+  if (desc.sort() == ComponentSort::Instance) {
+    if (!value.isObject()) {
+      UniqueChars nameChars = AtomToPrintableString(cx, jsName);
       if (nameChars) {
         JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
                                  JSMSG_WASM_BAD_IMPORT_TYPE, nameChars.get(),
-                                 "function");
+                                 "object");
       }
       return false;
     }
-
-    // A wrapper is needed to call with a receiver, and also to prevent a wasm
-    // function from being linked directly into an adapter, which would check
-    // its type.
-    RootedObject callable(cx, &value.toObject());
-    if (!receiver.isUndefined() ||
-        (callable->is<JSFunction>() && callable->as<JSFunction>().isWasm())) {
-      JSFunction* wrapper = NewNativeFunction(cx, CallWithReceiver, 0, nullptr,
-                                              gc::AllocKind::FUNCTION_EXTENDED);
-      if (!wrapper) {
+    RootedObject instanceObj(cx, &value.toObject());
+    for (const ComponentInstanceTypeExport& exp :
+         desc.asInstance().asInstance().exports()) {
+      if (!readImport(cx, instanceObj, exp.name, exp.desc,
+                      firstItem + exp.firstImportedItem)) {
         return false;
       }
-      wrapper->initExtendedSlot(0, value);
-      wrapper->initExtendedSlot(1, receiver);
-      callable = wrapper;
     }
-    importValues_[i] = callable;
+    return true;
   }
 
+  MOZ_RELEASE_ASSERT(desc.sort() == ComponentSort::Func);
+  if (!IsCallable(value)) {
+    UniqueChars nameChars = AtomToPrintableString(cx, jsName);
+    if (nameChars) {
+      JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
+                               JSMSG_WASM_BAD_IMPORT_TYPE, nameChars.get(),
+                               "function");
+    }
+    return false;
+  }
+
+  // A wrapper is needed to call with a receiver, and also to prevent a wasm
+  // function from being linked directly into an adapter, which would check
+  // its type.
+  RootedObject callable(cx, &value.toObject());
+  if (!receiver.isUndefined() ||
+      (callable->is<JSFunction>() && callable->as<JSFunction>().isWasm())) {
+    JSFunction* wrapper = NewNativeFunction(cx, CallWithReceiver, 0, nullptr,
+                                            gc::AllocKind::FUNCTION_EXTENDED);
+    if (!wrapper) {
+      return false;
+    }
+    wrapper->initExtendedSlot(0, value);
+    wrapper->initExtendedSlot(1, receiver);
+    callable = wrapper;
+  }
+  importValues_[firstItem] = callable;
   return true;
 }
 
@@ -1835,13 +1970,14 @@ bool ComponentInstance::getLoweredFunc(
 
   const TypeDef& coreFuncType = component_->getTypeForCoreFunc(coreFuncIndex);
   ComponentItem func = component_->funcs()[lowered.funcIndex];
-  if (func.kind() != ComponentItem::ItemKind::Import) {
+  if (func.kind() != ComponentItem::ItemKind::Import &&
+      func.kind() != ComponentItem::ItemKind::Alias) {
     // TODO(wasm-cm): Lowering a function lifted in this component needs an
     // adapter between two core functions. For now, it just traps.
     return GenerateDummyLoweredFunc(cx, &coreFuncType, val);
   }
 
-  RootedObject host(cx, importValues_[func.itemIndex()]);
+  RootedObject host(cx, importValues_[component_->firstImportedItem(func)]);
   CanonOptValues opts(cx);
   RootedFunction result(cx);
   if (!getCanonOptValues(cx, instanceObj, lowered.canonOpts, &opts) ||
