@@ -1713,7 +1713,8 @@ bool ComponentInstance::readImports(JSContext* cx, HandleObject importObj) {
     const ComponentImport& imp = component_->imports()[i];
     uint32_t firstItem = component_->firstImportedItem(
         ComponentItem::import(imp.externDesc().sort(), i));
-    if (!readImport(cx, importObj, imp.name(), imp.externDesc(), firstItem)) {
+    if (!readImport(cx, importObj, imp.name(), imp.externDesc(), firstItem,
+                    /*resolveBuiltins=*/true)) {
       return false;
     }
   }
@@ -1721,10 +1722,20 @@ bool ComponentInstance::readImports(JSContext* cx, HandleObject importObj) {
   return true;
 }
 
+JSObject* ComponentInstance::resolveBuiltin(const ComponentName& name) const {
+  static constexpr std::string_view JSGlobal = "wasm:js/global";
+  mozilla::Span<const char> bytes = name.name.utf8Bytes();
+  if (component_->jsGlobalBuiltin() &&
+      std::string_view(bytes.data(), bytes.size()) == JSGlobal) {
+    return realm_->maybeGlobal();
+  }
+  return nullptr;
+}
+
 bool ComponentInstance::readImport(JSContext* cx, HandleObject importObj,
                                    const ComponentName& name,
                                    const ComponentExternDesc& desc,
-                                   uint32_t firstItem) {
+                                   uint32_t firstItem, bool resolveBuiltins) {
   using Attr = ComponentNameAttribute;
   ComponentNameAttributes attrs = name.attributes;
 
@@ -1743,12 +1754,6 @@ bool ComponentInstance::readImport(JSContext* cx, HandleObject importObj,
     return false;
   }
 
-  if (!importObj) {
-    JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
-                             JSMSG_WASM_BAD_IMPORT_ARG);
-    return false;
-  }
-
   Rooted<JSAtom*> jsName(cx, ComponentJSName(cx, name, /*isType=*/false));
   if (!jsName) {
     return false;
@@ -1757,7 +1762,14 @@ bool ComponentInstance::readImport(JSContext* cx, HandleObject importObj,
 
   RootedValue value(cx);
   RootedValue receiver(cx);
-  if (attrs.contains(Attr::Get) || attrs.contains(Attr::Set)) {
+  JSObject* builtin = resolveBuiltins ? resolveBuiltin(name) : nullptr;
+  if (builtin) {
+    value.setObject(*builtin);
+  } else if (!importObj) {
+    JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
+                             JSMSG_WASM_BAD_IMPORT_ARG);
+    return false;
+  } else if (attrs.contains(Attr::Get) || attrs.contains(Attr::Set)) {
     receiver.setObject(*importObj);
     if (!FindAccessor(cx, importObj, nameId, attrs.contains(Attr::Get),
                       &value)) {
@@ -1781,7 +1793,8 @@ bool ComponentInstance::readImport(JSContext* cx, HandleObject importObj,
     for (const ComponentInstanceTypeExport& exp :
          desc.asInstance().asInstance().exports()) {
       if (!readImport(cx, instanceObj, exp.name, exp.desc,
-                      firstItem + exp.firstImportedItem)) {
+                      firstItem + exp.firstImportedItem,
+                      /*resolveBuiltins=*/false)) {
         return false;
       }
     }
