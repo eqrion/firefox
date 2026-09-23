@@ -254,12 +254,6 @@ excluded_tests = [
   "^forward.wast.js",
   "^post-return.wast.js",
 
-  # Failing: needs component exports
-  "^builtin-trap-poisons-instance.wast.js",
-  "^concat.wast.js",
-  "^strings.wast.js",
-  "^unit.wast.js",
-
   # Failing: needs nested components
   "^abi.wast.js",
   "^alignment.wast.js",
@@ -273,6 +267,7 @@ excluded_tests = [
   "^cancel-subtask.wast.js",
   "^cancel-yield-loop.wast.js",
   "^closed-stream.wast.js",
+  "^concat.wast.js",
   "^cross-abi-calls.wast.js",
   "^cross-task-future.wast.js",
   "^deadlock.wast.js",
@@ -298,11 +293,13 @@ excluded_tests = [
   "^trap-if-block-and-sync.wast.js",
   "^trap-if-done.wast.js",
   "^trap-if-sync-and-waitable-set.wast.js",
+  "^unit.wast.js",
   "^variants.wast.js",
   "^zero-length.wast.js",
 
   # Failing
   "^attributes.wast.js",
+  "^builtin-trap-poisons-instance.wast.js",
   "^dont-block-start.wast.js",
   "^during-sync-call-exclusive-resume.wast.js",
   "^during-sync-scheduling-candidates.wast.js",
@@ -316,11 +313,9 @@ excluded_tests = [
   "^binary.wast.js",
   "^link-time-virtualization.wast.js",
   "^shared-everything-dynamic-linking.wast.js",
-  "^tags.wast.js",
   "^handle-table.wast.js",
   "^annotated-names.wast.js",
   "^core-modules.wast.js",
-  "^extern-names.wast.js",
   "^instantiation.wast.js",
   "^kebab.wast.js",
   "^max-value-size.wast.js",
