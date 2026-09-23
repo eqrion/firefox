@@ -125,9 +125,25 @@ impl State {
     // Resolves an optional instance identifier to a JS variable name, without
     // the `$`.
     fn instance_name(&self, id: Option<wast::token::Id>) -> String {
-        id.map(|x| x.name().to_string())
+        id.map(js_var)
             .unwrap_or_else(|| self.current_instance.clone().unwrap())
     }
+}
+
+// Returns the JS variable name, without the `$`, for a text format identifier.
+// Identifiers may contain characters that JS doesn't allow, which are replaced
+// by their hex code point.
+fn js_var(id: wast::token::Id) -> String {
+    id.name()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c.to_string()
+            } else {
+                format!("_{:x}_", c as u32)
+            }
+        })
+        .collect()
 }
 
 fn convert_directive(
@@ -179,8 +195,9 @@ fn convert_directive(
 
             writejs!("let ${} = {}(`{}`);", next_instance, func, text)?;
             if let Some(id) = id {
-                writejs!("{} = ${};", state.bind(id.name()), next_instance)?;
-                state.set_is_component(id.name(), is_component);
+                let var = js_var(id);
+                writejs!("{} = ${};", state.bind(&var), next_instance)?;
+                state.set_is_component(&var, is_component);
             }
 
             state.set_current_instance(&next_instance.to_string(), is_component);
@@ -221,8 +238,9 @@ fn convert_directive(
             };
             let text = definition_to_js_string(wat.span(), wast)?;
             if let Some(id) = id {
-                writejs!("{} = {}(`{}`);", state.bind(id.name()), func, text)?;
-                state.set_is_component(id.name(), is_component);
+                let var = js_var(id);
+                writejs!("{} = {}(`{}`);", state.bind(&var), func, text)?;
+                state.set_is_component(&var, is_component);
             } else {
                 writejs!("let _anon_{} = {}(`{}`);", line, func, text)?;
             }
@@ -236,19 +254,15 @@ fn convert_directive(
             instance: Some(instance),
             module: Some(module),
         } => {
-            let is_component = state.is_component(module.name());
+            let (instance, module) = (js_var(instance), js_var(module));
+            let is_component = state.is_component(&module);
             let func = if is_component {
                 "instantiateFromComponent"
             } else {
                 "instantiateFromModule"
             };
-            writejs!(
-                "{} = {}(${});",
-                state.bind(instance.name()),
-                func,
-                module.name()
-            )?;
-            state.set_current_instance(instance.name(), is_component);
+            writejs!("{} = {}(${});", state.bind(&instance), func, module)?;
+            state.set_current_instance(&instance, is_component);
         }
         ModuleInstance { .. } => bail!("unsupported module instance definition"),
 
@@ -272,7 +286,7 @@ fn convert_directive(
         } => {
             writejs!(
                 "register(${}, `{}`);",
-                thing.name(),
+                js_var(thing),
                 escape_template_name_string(name)
             )?;
         }
@@ -460,13 +474,13 @@ fn convert_directive(
         }
         Thread(thread) => {
             let (shared_module, shared_module_name) = match thread.shared_module {
-                Some(m) => (format!("${}", m.name()), format!("${}", m.name())),
+                Some(m) => (format!("${}", js_var(m)), format!("${}", js_var(m))),
                 None => ("null".to_string(), "__nomodule".to_string()),
             };
 
             writejs!(
                 "let ${} = new Thread({}, \"{}\", `",
-                thread.name.name(),
+                js_var(thread.name),
                 shared_module,
                 shared_module_name,
             )?;
@@ -501,7 +515,7 @@ fn convert_directive(
             writejs!("`);")?;
         }
         Wait { span: _, thread } => {
-            writejs!("${}.wait();", thread.name())?;
+            writejs!("${}.wait();", js_var(thread))?;
         }
     }
 
