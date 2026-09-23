@@ -647,17 +647,6 @@ class ComponentItem {
     return whatAndWhere_ & AliasInstanceMask;
   }
 
-  // Outer aliases are a fun special case that comes up often enough to deserve
-  // a short helper.
-  bool isOuterAlias() const {
-    return kind() == ItemKind::Alias &&
-           aliasKind() == ComponentAliasKind::Outer;
-  }
-  ComponentSortIndex outerAliasSortIndex() const {
-    MOZ_RELEASE_ASSERT(isOuterAlias());
-    return ComponentSortIndex(sort(), itemIndex());
-  }
-
   bool operator==(const ComponentItem& other) const = default;
 };
 

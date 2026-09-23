@@ -1456,15 +1456,6 @@ bool ComponentInstance::getCoreItemValue(JSContext* cx,
                                          ComponentSortIndex sortIndex,
                                          MutableHandleValue val) const {
   ComponentItem item = component_->resolveSortIndex(sortIndex);
-
-  // By construction, the worst we can see is one level of outer alias pointing
-  // at some other core definition.
-  if (item.isOuterAlias()) {
-    MOZ_RELEASE_ASSERT(item.aliasInstanceIndex() == 0);
-    sortIndex = item.outerAliasSortIndex();
-    item = component_->resolveSortIndex(sortIndex);
-  }
-
   switch (item.kind()) {
     case ComponentItem::ItemKind::Defined: {
       // The only core things that can be defined directly in a component,
