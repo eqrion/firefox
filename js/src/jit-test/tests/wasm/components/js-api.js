@@ -9,6 +9,19 @@
 assertErrorMessage(() => new WebAssembly.Component(), TypeError, /1 argument required/);
 assertErrorMessage(() => new WebAssembly.Component(42), TypeError, /first argument must be an ArrayBuffer/);
 
-// TODO(wasm-cm)
-const c = new WebAssembly.Component(wasmTextToBinary(`(component)`));
-assertThrowsInstanceOfAsync(() => WebAssembly.instantiate(c), TypeError, /must be a WebAssembly.Module/);
+const bytes = wasmTextToBinary(`(component)`);
+const c = new WebAssembly.Component(bytes);
+
+let result;
+WebAssembly.instantiate(c).then(r => result = r);
+drainJobQueue();
+assertEq(result instanceof WebAssembly.ComponentInstance, true);
+
+WebAssembly.instantiate(bytes).then(r => result = r);
+drainJobQueue();
+assertEq(result.component instanceof WebAssembly.Component, true);
+assertEq(result.instance instanceof WebAssembly.ComponentInstance, true);
+
+WebAssembly.compile(bytes).then(r => result = r);
+drainJobQueue();
+assertEq(result instanceof WebAssembly.Component, true);
