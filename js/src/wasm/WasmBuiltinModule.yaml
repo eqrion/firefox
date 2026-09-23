@@ -498,3 +498,60 @@
   uses_memory: false
 
 #endif // ENABLE_WASM_JSPI
+
+#if defined(ENABLE_WASM_COMPONENTS)
+# Builtins for component adapters. See [SMDOC] Component adapters.
+- op: CmToInteger
+  symbolic_address:
+    name: CmToInteger
+    type: Args_Int32_GeneralGeneralGeneralInt32
+    needs_thunk: true
+  entry: CmToInteger
+  export: cmToInteger
+  params:
+    - 'externref'
+    - 'externref'
+    - 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmScratchI32
+  symbolic_address:
+    name: CmScratchI32
+    type: Args_Int32_GeneralGeneral
+    needs_thunk: true
+  entry: CmScratchI32
+  export: cmScratchI32
+  params:
+    - 'externref'
+  result: 'i32'
+  fail_mode: Infallible
+  uses_memory: false
+
+- op: CmIntegerToJS
+  symbolic_address:
+    name: CmIntegerToJS
+    type: Args_General_GeneralInt32Int32
+    needs_thunk: true
+  entry: CmIntegerToJS
+  export: cmIntegerToJS
+  params:
+    - 'i32'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: CmTrap
+  symbolic_address:
+    name: CmTrap
+    type: Args_Int32_GeneralInt32
+    needs_thunk: true
+  entry: CmTrap
+  export: cmTrap
+  params:
+    - 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+#endif // ENABLE_WASM_COMPONENTS

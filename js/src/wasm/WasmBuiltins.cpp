@@ -42,6 +42,7 @@
 #include "vm/BigIntType.h"
 #include "vm/ErrorObject.h"
 #include "wasm/WasmCodegenTypes.h"
+#include "wasm/WasmComponentAdapter.h"
 #include "wasm/WasmDebug.h"
 #include "wasm/WasmDebugFrame.h"
 #include "wasm/WasmGcObject.h"

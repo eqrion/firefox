@@ -20,6 +20,7 @@
 #  include "util/Text.h"
 #  include "vm/GlobalObject.h"
 #  include "vm/MutexIDs.h"
+#  include "wasm/WasmComponentAdapter.h"
 #  include "wasm/WasmJS.h"
 
 #  include "vm/JSAtomUtils-inl.h"
@@ -1134,6 +1135,23 @@ ComponentType Component::getType(uint32_t typeIndex) const {
   }
 }
 
+const ComponentLiftedFuncDesc* Component::getLiftedFunc(
+    uint32_t funcIndex) const {
+  ComponentItem item = funcs_[funcIndex];
+  MOZ_ASSERT(item.sort() == ComponentSort::Func);
+  switch (item.kind()) {
+    case ComponentItem::ItemKind::Defined:
+      return &definedFuncs_[item.itemIndex()];
+    case ComponentItem::ItemKind::Export:
+      return getLiftedFunc(exports_[item.itemIndex()].item().index);
+    case ComponentItem::ItemKind::Import:
+    case ComponentItem::ItemKind::Alias:
+      return nullptr;
+    default:
+      MOZ_CRASH();
+  }
+}
+
 ComponentType Component::getTypeForFunc(uint32_t funcIndex) const {
   ComponentItem item = funcs_[funcIndex];
   MOZ_ASSERT(item.sort() == ComponentSort::Func);
@@ -1520,8 +1538,33 @@ bool ComponentInstance::init(JSContext* cx) {
   return true;
 }
 
+bool ComponentInstance::createLiftedFunction(
+    JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+    uint32_t funcIndex, Handle<JSAtom*> name,
+    MutableHandleFunction result) const {
+  const ComponentLiftedFuncDesc* lifted = component_->getLiftedFunc(funcIndex);
+  if (!lifted) {
+    JS_ReportErrorASCII(cx,
+                        "exporting imported functions is not supported yet");
+    return false;
+  }
+
+  RootedValue callee(cx);
+  if (!getCoreItemValue(cx,
+                        ComponentSortIndex(ComponentSort::CoreFunction,
+                                           lifted->coreFuncIndex()),
+                        &callee)) {
+    return false;
+  }
+  RootedFunction calleeFunc(cx, &callee.toObject().as<JSFunction>());
+  return CreateLiftedFunction(cx, instanceObj,
+                              component_->getType(lifted->typeIndex()).asFunc(),
+                              calleeFunc, name, result);
+}
+
 bool ComponentInstance::createExportsObject(
-    JSContext* cx, MutableHandleObject exportsObj) const {
+    JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+    MutableHandleObject exportsObj) const {
   using Attr = ComponentNameAttribute;
 
   exportsObj.set(NewPlainObjectWithProto(cx, nullptr));
@@ -1541,8 +1584,15 @@ bool ComponentInstance::createExportsObject(
       return false;
     }
 
+    ComponentSort sort = exp.externDesc().sort();
+    Rooted<JSAtom*> key(
+        cx, ComponentJSName(cx, exp.name(), sort == ComponentSort::Type));
+    if (!key) {
+      return false;
+    }
+
     RootedValue value(cx);
-    switch (exp.externDesc().sort()) {
+    switch (sort) {
       case ComponentSort::CoreModule: {
         RootedObject proto(
             cx, GlobalObject::getOrCreatePrototype(cx, JSProto_WasmModule));
@@ -1566,17 +1616,18 @@ bool ComponentInstance::createExportsObject(
         JS_ReportErrorASCII(cx, "resource type exports are not supported yet");
         return false;
       }
-      case ComponentSort::Func:
-        // TODO(wasm-cm): Lift the function.
-        continue;
+      case ComponentSort::Func: {
+        RootedFunction func(cx);
+        if (!createLiftedFunction(cx, instanceObj, exp.item().index, key,
+                                  &func)) {
+          return false;
+        }
+        value.setObject(*func);
+      } break;
       default:
         MOZ_CRASH("unexpected export sort");
     }
 
-    JSAtom* key = ComponentJSName(cx, exp.name(), /*isType=*/false);
-    if (!key) {
-      return false;
-    }
     RootedId keyId(cx, AtomToId(key));
     if (!DefineDataProperty(cx, exportsObj, keyId, value, JSPROP_ENUMERATE)) {
       return false;

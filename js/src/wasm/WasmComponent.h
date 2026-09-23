@@ -998,6 +998,10 @@ class Component : public JS::WasmComponent {
   // call `.asFunc()` on the result.
   ComponentType getTypeForFunc(uint32_t funcIndex) const;
 
+  // Gets the (canon lift) definition of a component func, or null if the func
+  // is imported or aliased rather than lifted in this component.
+  const ComponentLiftedFuncDesc* getLiftedFunc(uint32_t funcIndex) const;
+
   // Gets the type of a core func (not a component func).
   const TypeDef& getTypeForCoreFunc(uint32_t coreFuncIndex) const {
     return coreFuncs_[coreFuncIndex].type.asFunc();
@@ -1056,6 +1060,13 @@ class ComponentInstance {
   // Component::coreInstances().
   CoreInstanceExportsVector coreInstanceExports_;
 
+  // Whether a call into this instance has trapped, which locks it down.
+  bool trapped_ = false;
+
+  // Holds the result of a canonical ABI builtin whose result type has no
+  // failure value, until the adapter code reads it.
+  uint64_t scratch_ = 0;
+
   // Only WasmComponentInstanceObject can call the private trace function.
   friend class js::WasmComponentInstanceObject;
   void tracePrivate(JSTracer* trc);
@@ -1068,6 +1079,10 @@ class ComponentInstance {
   [[nodiscard]] bool instantiateCoreModule(
       JSContext* cx, const CoreInstanceDescFromModule& desc,
       MutableHandleObject exportsObj) const;
+  [[nodiscard]] bool createLiftedFunction(
+      JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+      uint32_t funcIndex, Handle<JSAtom*> name,
+      MutableHandleFunction result) const;
   [[nodiscard]] bool createInlineExportsObject(
       JSContext* cx, const ComponentInlineExports& inlineExports,
       MutableHandleObject exportsObj) const;
@@ -1085,8 +1100,15 @@ class ComponentInstance {
   [[nodiscard]] bool init(JSContext* cx);
 
   // Creates the JS-API's exports object for this instance.
-  [[nodiscard]] bool createExportsObject(JSContext* cx,
-                                         MutableHandleObject exportsObj) const;
+  [[nodiscard]] bool createExportsObject(
+      JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+      MutableHandleObject exportsObj) const;
+
+  bool trapped() const { return trapped_; }
+  void setTrapped() { trapped_ = true; }
+
+  uint64_t scratch() const { return scratch_; }
+  void setScratch(uint64_t value) { scratch_ = value; }
 
   // Gets the exports object of a core instance, or null if the index is out of
   // range.
