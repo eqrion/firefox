@@ -12,6 +12,9 @@
 
 #  include <cmath>
 
+#  include "jsfriendapi.h"
+
+#  include "builtin/MapObject.h"
 #  include "builtin/String.h"
 #  include "js/CallAndConstruct.h"
 #  include "js/Conversions.h"
@@ -454,6 +457,11 @@ static bool IsSupportedAdapterType(const ComponentType& type) {
       return true;
     case ComponentTypeKind::List:
       return IsSupportedAdapterType(type.asList());
+    case ComponentTypeKind::FixedList:
+      return IsSupportedAdapterType(type.asFixedList().elemType);
+    case ComponentTypeKind::Map:
+      return IsSupportedAdapterType(type.asMap().keyType) &&
+             IsSupportedAdapterType(type.asMap().valueType);
     case ComponentTypeKind::Tuple:
       for (const ComponentType& item : type.asTuple()) {
         if (!IsSupportedAdapterType(item)) {
@@ -1490,6 +1498,217 @@ template <typename E, typename F, typename G>
          EmitSetI32(f, loc, 1, length);
 }
 
+// ToComponentValue for a list<T, N>: as for a list, which must have exactly N
+// elements, stored like a tuple.
+[[nodiscard]] static bool EmitToComponentValueFixedList(
+    AdapterContext& a, const ComponentType& type, uint32_t jsValue,
+    const ValueLoc& loc) {
+  using Id = BuiltinModuleFuncId;
+  AdapterFuncEncoder& f = a.f;
+  const ComponentFixedListType& fixedList = type.asFixedList();
+  uint32_t elemSize = CanonElemSize(fixedList.elemType);
+  uint32_t array, elem;
+  if (!f.addLocal(ValType(RefType::extern_()), &array) ||
+      !f.addLocal(ValType(RefType::extern_()), &elem) || !f.localGet(jsValue) ||
+      !f.i32Const(0) || !f.callBuiltin(Id::CmIterableToArray) ||
+      !f.localSet(array) || !f.localGet(array) ||
+      !f.i32Const(int32_t(fixedList.length)) ||
+      !f.callBuiltin(Id::CmCheckArrayLength)) {
+    return false;
+  }
+
+  if (loc.inMemory()) {
+    uint32_t ptr, count, i, elemPtr;
+    return f.addLocal(ValType::I32, &ptr) && f.addLocal(ValType::I32, &count) &&
+           f.addLocal(ValType::I32, &i) && f.addLocal(ValType::I32, &elemPtr) &&
+           f.localGet(loc.ptrLocal()) && f.i32Const(int32_t(loc.offset())) &&
+           f.op(Op::I32Add) && f.localSet(ptr) &&
+           f.i32Const(int32_t(fixedList.length)) && f.localSet(count) &&
+           EmitListLoop(f, ptr, count, elemSize, i, elemPtr, [&]() {
+             return f.localGet(array) && f.localGet(i) &&
+                    f.callBuiltin(Id::CmArrayGet) && f.localSet(elem) &&
+                    EmitToComponentValue(a, fixedList.elemType, elem,
+                                         ValueLoc::memory(elemPtr, 0));
+           });
+  }
+
+  // A flattened list has at most MaxFlatParams elements, so unroll it.
+  ValTypeVector elemTypes;
+  if (!FlatTypes(fixedList.elemType, &elemTypes)) {
+    return false;
+  }
+  for (uint32_t i = 0; i < fixedList.length; i++) {
+    auto elemLocals =
+        loc.flatLocals().Subspan(i * elemTypes.length(), elemTypes.length());
+    if (!f.localGet(array) || !f.i32Const(int32_t(i)) ||
+        !f.callBuiltin(Id::CmArrayGet) || !f.localSet(elem) ||
+        !EmitToComponentValue(a, fixedList.elemType, elem,
+                              ValueLoc::flat(elemLocals))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+[[nodiscard]] static bool EmitToJSValueFixedList(AdapterContext& a,
+                                                 const ComponentType& type,
+                                                 const ValueLoc& loc) {
+  using Id = BuiltinModuleFuncId;
+  AdapterFuncEncoder& f = a.f;
+  const ComponentFixedListType& fixedList = type.asFixedList();
+  uint32_t elemSize = CanonElemSize(fixedList.elemType);
+  uint32_t array;
+  if (!f.addLocal(ValType(RefType::extern_()), &array) ||
+      !f.i32Const(int32_t(fixedList.length)) ||
+      !f.callBuiltin(Id::CmNewArray) || !f.localSet(array)) {
+    return false;
+  }
+
+  if (loc.inMemory()) {
+    uint32_t ptr, count, i, elemPtr;
+    return f.addLocal(ValType::I32, &ptr) && f.addLocal(ValType::I32, &count) &&
+           f.addLocal(ValType::I32, &i) && f.addLocal(ValType::I32, &elemPtr) &&
+           f.localGet(loc.ptrLocal()) && f.i32Const(int32_t(loc.offset())) &&
+           f.op(Op::I32Add) && f.localSet(ptr) &&
+           f.i32Const(int32_t(fixedList.length)) && f.localSet(count) &&
+           EmitListLoop(f, ptr, count, elemSize, i, elemPtr,
+                        [&]() {
+                          return f.localGet(array) && f.localGet(i) &&
+                                 EmitToJSValue(a, fixedList.elemType,
+                                               ValueLoc::memory(elemPtr, 0)) &&
+                                 f.callBuiltin(Id::CmArraySet);
+                        }) &&
+           f.localGet(array);
+  }
+
+  ValTypeVector elemTypes;
+  if (!FlatTypes(fixedList.elemType, &elemTypes)) {
+    return false;
+  }
+  for (uint32_t i = 0; i < fixedList.length; i++) {
+    auto elemLocals =
+        loc.flatLocals().Subspan(i * elemTypes.length(), elemTypes.length());
+    if (!f.localGet(array) || !f.i32Const(int32_t(i)) ||
+        !EmitToJSValue(a, fixedList.elemType, ValueLoc::flat(elemLocals)) ||
+        !f.callBuiltin(Id::CmArraySet)) {
+      return false;
+    }
+  }
+  return f.localGet(array);
+}
+
+// A map is stored as a list of tuples of its key and value, and this is the
+// layout of those tuples.
+struct MapEntryLayout {
+  uint32_t valueOffset;
+  uint32_t size;
+  uint32_t alignment;
+};
+
+static MapEntryLayout GetMapEntryLayout(const ComponentMapType& map) {
+  uint32_t alignment =
+      std::max(CanonAlignment(map.keyType), CanonAlignment(map.valueType));
+  uint32_t valueOffset =
+      CanonAlignTo(CanonElemSize(map.keyType), CanonAlignment(map.valueType));
+  uint32_t size =
+      CanonAlignTo(valueOffset + CanonElemSize(map.valueType), alignment);
+  return {valueOffset, size, alignment};
+}
+
+// The JS-API's ToComponentValueMap, stored with the canonical ABI's
+// store_list.
+[[nodiscard]] static bool EmitToComponentValueMap(AdapterContext& a,
+                                                  const ComponentType& type,
+                                                  uint32_t jsValue,
+                                                  const ValueLoc& loc) {
+  using Id = BuiltinModuleFuncId;
+  AdapterFuncEncoder& f = a.f;
+  const ComponentMapType& map = type.asMap();
+  MapEntryLayout layout = GetMapEntryLayout(map);
+  bool keyIsString = map.keyType.kind() == ComponentTypeKind::String;
+  uint32_t entries, fromObject, ptr, length, byteLength, i, elemPtr, entry, key,
+      value;
+  if (!f.addLocal(ValType(RefType::extern_()), &entries) ||
+      !f.addLocal(ValType::I32, &fromObject) ||
+      !f.addLocal(ValType::I32, &ptr) || !f.addLocal(ValType::I32, &length) ||
+      !f.addLocal(ValType::I32, &byteLength) || !f.addLocal(ValType::I32, &i) ||
+      !f.addLocal(ValType::I32, &elemPtr) ||
+      !f.addLocal(ValType(RefType::extern_()), &entry) ||
+      !f.addLocal(ValType(RefType::extern_()), &key) ||
+      !f.addLocal(ValType(RefType::extern_()), &value) || !f.ctx() ||
+      !f.localGet(jsValue) || !f.i32Const(int32_t(layout.size)) ||
+      !f.i32Const(keyIsString) || !f.callBuiltin(Id::CmMapEntries) ||
+      !f.localSet(entries) || !f.ctx() || !f.callBuiltin(Id::CmScratchI32) ||
+      !f.localSet(fromObject) || !f.localGet(entries) ||
+      !f.callBuiltin(Id::CmArrayLength) || !f.localSet(length) ||
+      !f.localGet(length) || !f.i32Const(int32_t(layout.size)) ||
+      !f.op(Op::I32Mul) || !f.localSet(byteLength) ||
+      !EmitAllocate(a, int32_t(layout.alignment), byteLength, ptr) ||
+      !f.localGet(ptr) || !f.localGet(length) ||
+      !f.i32Const(int32_t(layout.size)) ||
+      !f.i32Const(int32_t(layout.alignment)) ||
+      !f.callBuiltin(Id::CmCheckRange)) {
+    return false;
+  }
+
+  // An entry from an iterable is converted as a tuple of the key and value,
+  // and an entry from an object's properties is its key, whose value is read
+  // just before it's converted.
+  auto emitEntry = [&]() {
+    return f.localGet(entries) && f.localGet(i) &&
+           f.callBuiltin(Id::CmArrayGet) && f.localSet(entry) &&
+           f.localGet(fromObject) && f.block(Op::If, mozilla::Nothing()) &&
+           f.localGet(entry) && f.localSet(key) && f.localGet(jsValue) &&
+           f.localGet(key) && f.i32Const(1) && f.callBuiltin(Id::CmGetField) &&
+           f.localSet(value) && f.op(Op::Else) && f.localGet(entry) &&
+           f.i32Const(0) && f.callBuiltin(Id::CmIterableToArray) &&
+           f.localSet(entry) && f.localGet(entry) && f.i32Const(2) &&
+           f.callBuiltin(Id::CmCheckArrayLength) && f.localGet(entry) &&
+           f.i32Const(0) && f.callBuiltin(Id::CmArrayGet) && f.localSet(key) &&
+           f.localGet(entry) && f.i32Const(1) &&
+           f.callBuiltin(Id::CmArrayGet) && f.localSet(value) &&
+           f.op(Op::End) &&
+           EmitToComponentValue(a, map.keyType, key,
+                                ValueLoc::memory(elemPtr, 0)) &&
+           EmitToComponentValue(a, map.valueType, value,
+                                ValueLoc::memory(elemPtr, layout.valueOffset));
+  };
+  return EmitListLoop(f, ptr, length, layout.size, i, elemPtr, emitEntry) &&
+         EmitSetI32(f, loc, 0, ptr) && EmitSetI32(f, loc, 1, length);
+}
+
+// The JS-API's ToJSValueMap, loaded with the canonical ABI's load_list.
+[[nodiscard]] static bool EmitToJSValueMap(AdapterContext& a,
+                                           const ComponentType& type,
+                                           const ValueLoc& loc) {
+  using Id = BuiltinModuleFuncId;
+  AdapterFuncEncoder& f = a.f;
+  const ComponentMapType& map = type.asMap();
+  MapEntryLayout layout = GetMapEntryLayout(map);
+  uint32_t ptr, length, result, i, elemPtr;
+  return f.addLocal(ValType::I32, &ptr) && f.addLocal(ValType::I32, &length) &&
+         f.addLocal(ValType(RefType::extern_()), &result) &&
+         f.addLocal(ValType::I32, &i) && f.addLocal(ValType::I32, &elemPtr) &&
+         EmitGetI32(f, loc, 0) && f.localSet(ptr) && EmitGetI32(f, loc, 1) &&
+         f.localSet(length) && f.localGet(ptr) && f.localGet(length) &&
+         f.i32Const(int32_t(layout.size)) &&
+         f.i32Const(int32_t(layout.alignment)) &&
+         f.callBuiltin(Id::CmCheckRange) && f.callBuiltin(Id::CmNewMap) &&
+         f.localSet(result) &&
+         EmitListLoop(
+             f, ptr, length, layout.size, i, elemPtr,
+             [&]() {
+               return f.localGet(result) &&
+                      EmitToJSValue(a, map.keyType,
+                                    ValueLoc::memory(elemPtr, 0)) &&
+                      EmitToJSValue(
+                          a, map.valueType,
+                          ValueLoc::memory(elemPtr, layout.valueOffset)) &&
+                      f.callBuiltin(Id::CmMapSet);
+             }) &&
+         f.localGet(result);
+}
+
 // ToJSValue for a list, with the canonical ABI's load_list.
 [[nodiscard]] static bool EmitToJSValueList(AdapterContext& a,
                                             const ComponentType& type,
@@ -1556,6 +1775,10 @@ template <typename E, typename F, typename G>
       return EmitStoreString(a, jsValue, loc);
     case ComponentTypeKind::List:
       return EmitToComponentValueList(a, type, jsValue, loc);
+    case ComponentTypeKind::FixedList:
+      return EmitToComponentValueFixedList(a, type, jsValue, loc);
+    case ComponentTypeKind::Map:
+      return EmitToComponentValueMap(a, type, jsValue, loc);
     case ComponentTypeKind::Tuple:
       return EmitToComponentValueTuple(a, type, jsValue, loc);
     case ComponentTypeKind::Record:
@@ -1603,6 +1826,10 @@ template <typename E, typename F, typename G>
              f.callBuiltin(Id::CmStringToJS);
     case ComponentTypeKind::List:
       return EmitToJSValueList(a, type, loc);
+    case ComponentTypeKind::FixedList:
+      return EmitToJSValueFixedList(a, type, loc);
+    case ComponentTypeKind::Map:
+      return EmitToJSValueMap(a, type, loc);
     case ComponentTypeKind::Tuple:
       return EmitToJSValueTuple(a, type, loc);
     case ComponentTypeKind::Record:
@@ -2569,12 +2796,11 @@ void* wasm::CmGetField(Instance* instance, void* objectRef, void* nameRef,
   MOZ_ASSERT(SASigCmGetField.failureMode == FailureMode::FailOnInvalidRef);
   JSContext* cx = instance->cx();
   RootedObject obj(cx, &AnyRef::fromCompiledCode(objectRef).toJSObject());
-  RootedId name(
-      cx,
-      AtomToId(
-          &AnyRef::fromCompiledCode(nameRef).toJSValue().toString()->asAtom()));
+  RootedValue nameValue(cx, AnyRef::fromCompiledCode(nameRef).toJSValue());
+  RootedId name(cx);
   RootedValue value(cx);
-  if (!GetProperty(cx, obj, obj, name, &value)) {
+  if (!ToPropertyKey(cx, nameValue, &name) ||
+      !GetProperty(cx, obj, obj, name, &value)) {
     return AnyRef::invalid().forCompiledCode();
   }
   if (value.isUndefined() && !allowUndefined) {
@@ -2606,15 +2832,151 @@ int32_t wasm::CmDefineField(Instance* instance, void* objectRef, void* nameRef,
   MOZ_ASSERT(SASigCmDefineField.failureMode == FailureMode::FailOnNegI32);
   JSContext* cx = instance->cx();
   RootedObject obj(cx, &AnyRef::fromCompiledCode(objectRef).toJSObject());
-  RootedId name(
-      cx,
-      AtomToId(
-          &AnyRef::fromCompiledCode(nameRef).toJSValue().toString()->asAtom()));
+  RootedValue nameValue(cx, AnyRef::fromCompiledCode(nameRef).toJSValue());
   RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
-  if (!DefineDataProperty(cx, obj, name, value, JSPROP_ENUMERATE)) {
+  RootedId name(cx);
+  if (!ToPropertyKey(cx, nameValue, &name) ||
+      !DefineDataProperty(cx, obj, name, value, JSPROP_ENUMERATE)) {
     return -1;
   }
   return 0;
+}
+
+void* wasm::CmNewMap(Instance* instance) {
+  MOZ_ASSERT(SASigCmNewMap.failureMode == FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  JSObject* map = MapObject::create(cx);
+  if (!map) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue value(cx, ObjectValue(*map));
+  return ExternRefForCompiledCode(cx, value);
+}
+
+int32_t wasm::CmMapSet(Instance* instance, void* mapRef, void* keyRef,
+                       void* valueRef) {
+  MOZ_ASSERT(SASigCmMapSet.failureMode == FailureMode::FailOnNegI32);
+  JSContext* cx = instance->cx();
+  Rooted<MapObject*> map(
+      cx, &AnyRef::fromCompiledCode(mapRef).toJSObject().as<MapObject>());
+  RootedValue key(cx, AnyRef::fromCompiledCode(keyRef).toJSValue());
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  if (!map->set(cx, key, value)) {
+    return -1;
+  }
+  return 0;
+}
+
+// The spec's GetIteratorFromMethod and IteratorToList.
+static ArrayObject* IterateToArray(JSContext* cx, HandleObject obj,
+                                   HandleValue method) {
+  RootedValue iterator(cx);
+  if (!Call(cx, method, obj, &iterator)) {
+    return nullptr;
+  }
+  if (!iterator.isObject()) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_OBJECT_REQUIRED, "iterator");
+    return nullptr;
+  }
+  RootedObject iteratorObj(cx, &iterator.toObject());
+  RootedValue next(cx);
+  if (!GetProperty(cx, iteratorObj, iteratorObj, cx->names().next, &next)) {
+    return nullptr;
+  }
+
+  Rooted<ArrayObject*> array(cx, NewDenseEmptyArray(cx));
+  if (!array) {
+    return nullptr;
+  }
+  RootedValue result(cx);
+  RootedValue value(cx);
+  while (true) {
+    if (!Call(cx, next, iterator, &result)) {
+      return nullptr;
+    }
+    if (!result.isObject()) {
+      JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                                JSMSG_OBJECT_REQUIRED, "iterator result");
+      return nullptr;
+    }
+    RootedObject resultObj(cx, &result.toObject());
+    if (!GetProperty(cx, resultObj, resultObj, cx->names().done, &value)) {
+      return nullptr;
+    }
+    if (ToBoolean(value)) {
+      return array;
+    }
+    if (!GetProperty(cx, resultObj, resultObj, cx->names().value, &value) ||
+        !NewbornArrayPush(cx, array, value)) {
+      return nullptr;
+    }
+  }
+}
+
+void* wasm::CmMapEntries(Instance* instance, void* ctxRef, void* valueRef,
+                         int32_t entrySize, int32_t keyIsString) {
+  MOZ_ASSERT(SASigCmMapEntries.failureMode == FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedObject ctx(cx, &AnyRef::fromCompiledCode(ctxRef).toJSObject());
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  if (!value.isObject()) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_OBJECT_REQUIRED, "value");
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedObject obj(cx, &value.toObject());
+
+  RootedValue method(cx);
+  RootedId iteratorId(cx, PropertyKey::Symbol(cx->wellKnownSymbols().iterator));
+  if (!GetProperty(cx, obj, obj, iteratorId, &method)) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+
+  Rooted<ArrayObject*> entries(cx);
+  bool fromObject = method.isNullOrUndefined();
+  if (!fromObject) {
+    if (!IsCallable(method)) {
+      JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                                JSMSG_NOT_ITERABLE, "value");
+      return AnyRef::invalid().forCompiledCode();
+    }
+    entries = IterateToArray(cx, obj, method);
+  } else {
+    // A non-iterable object is only allowed with string keys, whose entries
+    // are its own enumerable string-keyed properties.
+    if (!keyIsString) {
+      JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                                JSMSG_NOT_ITERABLE, "value");
+      return AnyRef::invalid().forCompiledCode();
+    }
+    RootedIdVector ids(cx);
+    if (!GetPropertyKeys(cx, obj, JSITER_OWNONLY, &ids)) {
+      return AnyRef::invalid().forCompiledCode();
+    }
+    entries = NewDenseEmptyArray(cx);
+    if (!entries) {
+      return AnyRef::invalid().forCompiledCode();
+    }
+    for (size_t i = 0; i < ids.length(); i++) {
+      JSString* str = IdToString(cx, ids[i]);
+      if (!str || !NewbornArrayPush(cx, entries, StringValue(str))) {
+        return AnyRef::invalid().forCompiledCode();
+      }
+    }
+  }
+  if (!entries) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  if (uint64_t(entries->length()) * uint32_t(entrySize) > UINT32_MAX) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_WASM_COMPONENT_LIST_TOO_LONG);
+    return AnyRef::invalid().forCompiledCode();
+  }
+
+  InstanceFromCtx(ctx).setScratch(fromObject);
+  RootedValue entriesValue(cx, ObjectValue(*entries));
+  return ExternRefForCompiledCode(cx, entriesValue);
 }
 
 void* wasm::CmNewVariant(Instance* instance, void* kindRef, void* valueRef,

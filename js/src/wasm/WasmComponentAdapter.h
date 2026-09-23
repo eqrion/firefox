@@ -125,6 +125,20 @@ void* CmNewRecord(Instance* instance);
 int32_t CmDefineField(Instance* instance, void* objectRef, void* nameRef,
                       void* valueRef);
 
+// ToJSValueMap: creates a Map and sets its entries.
+void* CmNewMap(Instance* instance);
+int32_t CmMapSet(Instance* instance, void* mapRef, void* keyRef,
+                 void* valueRef);
+
+// The first part of ToComponentValueMap: gets the entries of a map as an
+// array. An iterable's entries are iterated, and are then converted like a
+// tuple of the key and value. Otherwise, if the keys are strings, the entries
+// are the object's own enumerable string-keyed properties, and the instance's
+// scratch is set to 1. Throws if the entries would be larger than 32-bit
+// memory, given the size of an entry.
+void* CmMapEntries(Instance* instance, void* ctxRef, void* valueRef,
+                   int32_t entrySize, int32_t keyIsString);
+
 // ToJSValueVariant: creates a null-prototype object with the `kind` and, if
 // `hasValue`, the `value`.
 void* CmNewVariant(Instance* instance, void* kindRef, void* valueRef,
