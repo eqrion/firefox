@@ -245,7 +245,7 @@ FeatureArgs FeatureArgs::build(JSContext* cx, const FeatureOptions& options) {
     MOZ_ASSERT(!options.jsStringBuiltins);
     MOZ_ASSERT(!options.jsStringConstants);
     MOZ_ASSERT(!options.mozIntGemm);
-  } else {
+  } else if (!options.isComponent) {
     // Enable builtin modules that have been selected by the user.
     features.builtinModules.jsString = options.jsStringBuiltins;
     features.builtinModules.jsStringConstants = options.jsStringConstants;

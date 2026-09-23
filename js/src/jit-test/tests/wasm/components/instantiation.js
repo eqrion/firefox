@@ -431,3 +431,24 @@ assertErrorMessage(() => {
   assertEq(wasmComponentCoreInstanceExports(i, 4).runC(), 123);
   assertEq(wasmComponentCoreInstanceExports(i, 4).runD(), 123);
 }
+
+// Core modules in components never get JS builtins, even if requested. Imports
+// that look like builtins are satisfied by the component like any other.
+{
+  const i = new WebAssembly.ComponentInstance(
+    new WebAssembly.Component(wasmTextToBinary(`
+      (component
+        (core module $M
+          (func (export "length") (param externref) (result i32) i32.const 42)
+        )
+        (core instance $A (instantiate $M))
+        (core module $Test
+          (import "wasm:js-string" "length" (func (param externref) (result i32)))
+          (func (export "test") (result i32) ref.null extern call 0)
+        )
+        (core instance (instantiate $Test (with "wasm:js-string" (instance $A))))
+      )
+    `), { builtins: ["js-string"] }),
+  );
+  assertEq(wasmComponentCoreInstanceExports(i, 1).test(), 42);
+}

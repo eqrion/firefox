@@ -106,6 +106,7 @@ struct FeatureOptions {
       : disableOptimizingCompiler(false),
         mozIntGemm(false),
         isBuiltinModule(false),
+        isComponent(false),
         jsStringBuiltins(false),
         jsStringConstants(false) {}
 
@@ -118,6 +119,10 @@ struct FeatureOptions {
 
   // Enables builtin module opcodes, only set in WasmBuiltinModule.cpp.
   bool isBuiltinModule;
+
+  // Whether we are compiling a component. Core modules within components
+  // cannot use builtin modules; the component model has its own builtins.
+  bool isComponent;
 
   // Enable JS String builtins for this module.
   bool jsStringBuiltins;

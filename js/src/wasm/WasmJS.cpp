@@ -2183,6 +2183,7 @@ bool WasmComponentObject::construct(JSContext* cx, unsigned argc, Value* vp) {
   if (!options.init(cx, callArgs.get(1))) {
     return false;
   }
+  options.isComponent = true;
 
   SharedCompileArgs compileArgs =
       InitCompileArgs(cx, options, "WebAssembly.Component");

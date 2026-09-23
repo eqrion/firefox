@@ -7080,6 +7080,8 @@ enum class ComponentExportFlagsRaw : uint8_t {
 bool wasm::DecodeComponent(Decoder& d, MutableComponent c,
                            const CompileArgs& args,
                            JS::OptimizedEncodingListener* listener) {
+  MOZ_RELEASE_ASSERT(args.features.builtinModules.hasNone());
+
   if (!DecodePreamble(d, EncodingVersionComponent)) {
     return false;
   }
@@ -7249,9 +7251,11 @@ bool wasm::DecodeComponent(Decoder& d, MutableComponent c,
     return false;
   }
 
+  FeatureOptions componentOptions = options;
+  componentOptions.isComponent = true;
   CompileArgsError compileArgsError;
-  SharedCompileArgs compileArgs =
-      CompileArgs::build(cx, ScriptedCaller(), options, &compileArgsError);
+  SharedCompileArgs compileArgs = CompileArgs::build(
+      cx, ScriptedCaller(), componentOptions, &compileArgsError);
   if (!compileArgs) {
     return false;
   }
