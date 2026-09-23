@@ -103,6 +103,8 @@ enum class ComponentTypeKind : uint8_t {
   Result = 0x6a,
   Own = 0x69,
   Borrow = 0x68,
+  FixedList = 0x67,
+  Map = 0x63,
 
   Func = 0x40,  // async func types are not a separate kind
   Component = 0x41,
@@ -133,7 +135,8 @@ inline bool ComponentTypeKindIsValueType(ComponentTypeKind kind) {
          (ComponentTypeKind::Borrow <= kind &&
           kind <= ComponentTypeKind::Record &&
           int(kind) != 0x6c  // the one weird gap in the binary
-         );
+          ) ||
+         kind == ComponentTypeKind::FixedList || kind == ComponentTypeKind::Map;
 }
 
 // Forward declarations to satisfy the methods in ComponentType
@@ -142,6 +145,8 @@ class ComponentType;
 struct ComponentRecordField;
 struct ComponentVariantCase;
 struct ComponentResultType;
+struct ComponentFixedListType;
+struct ComponentMapType;
 struct ComponentFuncType;
 class ComponentResourceType;
 using ComponentTypeVector =
@@ -182,6 +187,8 @@ class ComponentType {
   static bool record(ComponentRecordFieldVector&& fields, ComponentType* type);
   static bool variant(ComponentVariantCaseVector&& cases, ComponentType* type);
   static bool list(ComponentType&& elemType, ComponentType* type);
+  static bool fixedList(ComponentFixedListType&& inner, ComponentType* type);
+  static bool map(ComponentMapType&& inner, ComponentType* type);
   static bool tuple(ComponentTypeVector&& items, ComponentType* type);
   static bool flags(CacheableNameVector&& labels, ComponentType* type);
   static bool enum_(CacheableNameVector&& cases, ComponentType* type);
@@ -199,6 +206,8 @@ class ComponentType {
   const ComponentRecordFieldVector& asRecord() const;
   const ComponentVariantCaseVector& asVariant() const;
   ComponentType asList() const;
+  const ComponentFixedListType& asFixedList() const;
+  const ComponentMapType& asMap() const;
   const ComponentTypeVector& asTuple() const;
   const CacheableNameVector& asFlags() const;
   const CacheableNameVector& asEnum() const;
@@ -282,6 +291,25 @@ struct ComponentVariantCase {
   }
 };
 
+// A list with a fixed number of elements, `list<T, N>`.
+struct ComponentFixedListType {
+  ComponentType elemType;
+  uint32_t length;
+
+  bool operator==(const ComponentFixedListType& other) const {
+    return elemType == other.elemType && length == other.length;
+  }
+};
+
+struct ComponentMapType {
+  ComponentType keyType;
+  ComponentType valueType;
+
+  bool operator==(const ComponentMapType& other) const {
+    return keyType == other.keyType && valueType == other.valueType;
+  }
+};
+
 struct ComponentResultType {
   mozilla::Maybe<ComponentType> type;
   mozilla::Maybe<ComponentType> errorType;
@@ -336,7 +364,8 @@ class ComponentResourceType {
 using ComponentTypeSchema = mozilla::Variant<
     mozilla::Nothing, ComponentType, ComponentRecordFieldVector,
     ComponentVariantCaseVector, ComponentTypeVector, CacheableNameVector,
-    ComponentResultType, ComponentFuncType, ComponentResourceType>;
+    ComponentResultType, ComponentFixedListType, ComponentMapType,
+    ComponentFuncType, ComponentResourceType>;
 
 class ComponentTypeDef : public AtomicRefCounted<ComponentTypeDef> {
   ComponentTypeSchema schema_;
