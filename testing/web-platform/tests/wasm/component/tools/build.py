@@ -12,10 +12,10 @@ import os
 import subprocess
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROOTS = [
-    os.path.join(HERE, "components"),
-    os.path.join(HERE, "..", "esm-integration"),
+    os.path.join(HERE, "jsapi", "components"),
+    os.path.join(HERE, "esm-integration", "resources"),
 ]
 
 

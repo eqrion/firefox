@@ -1,22 +1,21 @@
 # Component JS-API tests
 
-Web-platform-tests for the [component JS-API](../../design/mvp/JS-Reference.md).
-They are written ahead of any implementation, so every subtest is expected to
-fail until an engine or polyfill catches up. The directory mirrors WPT's
-`wasm/component/jsapi/`; `../esm-integration` mirrors
-`wasm/component/esm-integration/`.
+Web-platform-tests for the
+[component JS-API](https://github.com/WebAssembly/component-model/blob/main/design/mvp/JS-Reference.md).
+`../esm-integration` holds the ESM-integration tests.
 
 ## Building
 
 Fixtures are hand-written `.wat` files under `components/`, one per test
-concern, compiled to a sibling `.wasm` that is not checked in:
+concern, compiled to a sibling `.wasm`. Both are checked in, so the tests run
+without any tooling. After editing a `.wat`, rebuild with:
 
 ```
-python3 build.py
+python3 ../tools/build.py
 ```
 
 `build.py` runs `wasm-tools parse` then `wasm-tools validate --features all`
-on every fixture. Point it at a specific binary with `--wasm-tools PATH` or
+on every fixture here and in `../esm-integration/resources`. Point it at a specific binary with `--wasm-tools PATH` or
 `WASM_TOOLS=PATH`.
 
 The fixtures use the strict alias syntax (`(memory (core memory $m "mem"))`)
@@ -26,29 +25,35 @@ that wasm-tools 1.255 introduced. Released wasm-tools also still rejects
 ships, build that branch and use it:
 
 ```
-git clone https://github.com/bytecodealliance/wasm-tools ../wasm-tools
-cd ../wasm-tools && gh pr checkout 2660 && cargo build
-WASM_TOOLS=../wasm-tools/target/debug/wasm-tools python3 build.py
+git clone https://github.com/bytecodealliance/wasm-tools ~/src/wasm-tools
+cd ~/src/wasm-tools && gh pr checkout 2660 && cargo build
+WASM_TOOLS=~/src/wasm-tools/target/debug/wasm-tools python3 ../tools/build.py
 ```
 
 ## Running
 
-Copy the tests and built binaries into a WPT checkout and run them from
-there:
+The `.any.js` tests run in `window`, `dedicatedworker` and `jsshell`. In
+mozilla-central, run them in the browser with:
 
 ```
-python3 build.py
-python3 sync-wpt.py ~/src/wpt
-cd ~/src/wpt && ./wpt run firefox wasm/component/
+./mach wpt testing/web-platform/tests/wasm/component/
 ```
 
-In mozilla-central: `./mach wpt testing/web-platform/tests/wasm/component/`.
+or in a SpiderMonkey shell build with:
 
-Tests fetch their fixtures, so they run in `window` and `dedicatedworker`
-only, never in a bare JS shell.
+```
+./mach jstests --wpt=enabled testing/web-platform/tests/wasm/component/
+```
+
+Tests fetch their fixtures. In the shell, `fetch` is a shim from
+`js/src/tests/web-platform-test-shims.js` that reads files from the WPT tree.
+The `.html` tests, including everything in `../esm-integration`, only run in
+the browser.
 
 ## Conventions
 
+- Every `.any.js` test starts with
+  `// META: global=window,dedicatedworker,jsshell`.
 - Every test is a `promise_test` and includes the harness with
   `// META: script=/wasm/component/jsapi/harness/component-helpers.js` and
   `// META: script=/wasm/component/jsapi/harness/assertions.js`.
