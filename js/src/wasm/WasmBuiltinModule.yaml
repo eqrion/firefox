@@ -672,6 +672,33 @@
   fail_mode: Infallible
   uses_memory: false
 
+- op: CmSetComponentError
+  symbolic_address:
+    name: CmSetComponentError
+    type: Args_Void_GeneralGeneralGeneralInt32
+    needs_thunk: true
+  entry: CmSetComponentError
+  export: cmSetComponentError
+  params:
+    - 'externref'
+    - 'externref'
+    - 'i32'
+  fail_mode: Infallible
+  uses_memory: false
+
+- op: CmExceptionValue
+  symbolic_address:
+    name: CmExceptionValue
+    type: Args_General2
+    needs_thunk: true
+  entry: CmExceptionValue
+  export: cmExceptionValue
+  params:
+    - 'exnref'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
 - op: CmCheckRange
   symbolic_address:
     name: CmCheckRange
@@ -817,6 +844,62 @@
     - 'externref'
     - 'externref'
   fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmNewVariant
+  symbolic_address:
+    name: CmNewVariant
+    type: Args_General_GeneralGeneralGeneralInt32
+    needs_thunk: true
+  entry: CmNewVariant
+  export: cmNewVariant
+  params:
+    - 'externref'
+    - 'externref'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: CmVariantCase
+  symbolic_address:
+    name: CmVariantCase
+    type: Args_Int32_GeneralGeneralGeneral
+    needs_thunk: true
+  entry: CmVariantCase
+  export: cmVariantCase
+  params:
+    - 'externref'
+    - 'externref'
+  result: 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmEnumCase
+  symbolic_address:
+    name: CmEnumCase
+    type: Args_Int32_GeneralGeneralGeneral
+    needs_thunk: true
+  entry: CmEnumCase
+  export: cmEnumCase
+  params:
+    - 'externref'
+    - 'externref'
+  result: 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmIsNullish
+  symbolic_address:
+    name: CmIsNullish
+    type: Args_Int32_GeneralGeneral
+    needs_thunk: true
+  entry: CmIsNullish
+  export: cmIsNullish
+  params:
+    - 'externref'
+  result: 'i32'
+  fail_mode: Infallible
   uses_memory: false
 
 - op: CmScalarListToJS

@@ -41,6 +41,7 @@ using namespace js::wasm;
 enum class AdapterTrap : int32_t {
   UncaughtException,
   ImportException,
+  BadDiscriminant,
 };
 
 // Every adapter module imports its WasmComponentInstanceObject as this global.
@@ -81,9 +82,9 @@ class MOZ_STACK_CLASS AdapterModuleBuilder {
   // Imports the memory for the canonical ABI as memory 0.
   [[nodiscard]] bool importMemory(Handle<WasmMemoryObject*> memory);
 
-  // Imports a string as an immutable externref global, for the adapter to
-  // pass to builtins. A string is only imported once.
-  [[nodiscard]] bool importString(JSString* str, uint32_t* globalIndex);
+  // Imports a JS value as an immutable externref global, for the adapter to
+  // pass to builtins. A value is only imported once.
+  [[nodiscard]] bool importValue(HandleValue value, uint32_t* globalIndex);
 
   [[nodiscard]] bool defineAdapterFunc(ValTypeVector&& params,
                                        ValTypeVector&& results);
@@ -177,23 +178,26 @@ bool AdapterModuleBuilder::importMemory(Handle<WasmMemoryObject*> memory) {
   return true;
 }
 
-bool AdapterModuleBuilder::importString(JSString* str, uint32_t* globalIndex) {
+bool AdapterModuleBuilder::importValue(HandleValue value,
+                                       uint32_t* globalIndex) {
   ValVector& values = imports_.get().globalValues;
   for (size_t i = 0; i < values.length(); i++) {
-    JS::Value value = values[i].ref().toJSValue();
-    if (value.isString() && value.toString() == str) {
+    if (values[i].ref().toJSValue() == value) {
       *globalIndex = i;
       return true;
     }
   }
 
+  Rooted<AnyRef> ref(cx_);
+  if (!AnyRef::fromJSValue(cx_, value, &ref)) {
+    return false;
+  }
   *globalIndex = codeMeta_->globals.length();
   GlobalType type(ValType(RefType::extern_()), /*isMutable=*/false);
   if (!codeMeta_->globals.append(GlobalDesc(type, *globalIndex)) ||
       !moduleMeta_->imports.emplaceBack(CacheableName(), CacheableName(),
                                         DefinitionKind::Global) ||
-      !values.append(
-          Val(ValType(RefType::extern_()), AnyRef::fromJSString(str)))) {
+      !values.append(Val(ValType(RefType::extern_()), ref.get()))) {
     ReportOutOfMemory(cx_);
     return false;
   }
@@ -332,11 +336,59 @@ class AdapterFuncEncoder {
            encoder_.writeFixedU8(0x2) && encoder_.writeVarU32(depth);
   }
 
+  // Begins a try_table with no result that branches to `depth` with the
+  // exnref on any exception.
+  [[nodiscard]] bool tryTableCatchAllRef(uint32_t depth) {
+    return block(Op::TryTable, mozilla::Nothing()) && encoder_.writeVarU32(1) &&
+           encoder_.writeFixedU8(0x3) && encoder_.writeVarU32(depth);
+  }
+
+  // Emits `emitBody`, trapping for `reason` if it throws.
+  template <typename F>
+  [[nodiscard]] bool trapping(AdapterTrap reason, F emitBody) {
+    return block(Op::Block, mozilla::Nothing()) &&
+           block(Op::Block, mozilla::Nothing()) &&
+           tryTableCatchAll(mozilla::Nothing(), 0) && emitBody() &&
+           op(Op::End) && br(1) && op(Op::End) && trap(reason) && op(Op::End);
+  }
+
   [[nodiscard]] bool br(uint32_t depth) {
     return encoder_.writeOp(Op::Br) && encoder_.writeVarU32(depth);
   }
   [[nodiscard]] bool brIf(uint32_t depth) {
     return encoder_.writeOp(Op::BrIf) && encoder_.writeVarU32(depth);
+  }
+  // Branches to depth `i` for `i` in [0, count), and to depth `count`
+  // otherwise.
+  [[nodiscard]] bool brTableCases(uint32_t count) {
+    if (!encoder_.writeOp(Op::BrTable) || !encoder_.writeVarU32(count)) {
+      return false;
+    }
+    for (uint32_t i = 0; i < count; i++) {
+      if (!encoder_.writeVarU32(i)) {
+        return false;
+      }
+    }
+    return encoder_.writeVarU32(count);
+  }
+
+  [[nodiscard]] bool refNullExtern() {
+    return encoder_.writeOp(Op::RefNull) &&
+           encoder_.writeFixedU8(uint8_t(TypeCode::ExternRef));
+  }
+  [[nodiscard]] bool zero(ValType type) {
+    switch (type.kind()) {
+      case ValType::I32:
+        return i32Const(0);
+      case ValType::I64:
+        return encoder_.writeOp(Op::I64Const) && encoder_.writeVarS64(0);
+      case ValType::F32:
+        return encoder_.writeOp(Op::F32Const) && encoder_.writeFixedF32(0);
+      case ValType::F64:
+        return encoder_.writeOp(Op::F64Const) && encoder_.writeFixedF64(0);
+      default:
+        MOZ_CRASH("not a flat type");
+    }
   }
 
   // Loads and stores from memory 0.
@@ -384,8 +436,15 @@ static bool IsIntegerKind(ComponentTypeKind kind) {
   }
 }
 
+[[nodiscard]] static bool IsSupportedVariant(const ComponentType& type);
+
 static bool IsSupportedAdapterType(const ComponentType& type) {
   switch (type.kind()) {
+    case ComponentTypeKind::Variant:
+    case ComponentTypeKind::Enum:
+    case ComponentTypeKind::Option:
+    case ComponentTypeKind::Result:
+      return IsSupportedVariant(type);
     case ComponentTypeKind::Bool:
     case ComponentTypeKind::S64:
     case ComponentTypeKind::U64:
@@ -835,13 +894,25 @@ template <typename F>
   return f.localGet(array);
 }
 
+// Pushes undefined.
+[[nodiscard]] static bool EmitUndefined(AdapterContext& a) {
+  uint32_t global;
+  return a.builder.importValue(UndefinedHandleValue, &global) &&
+         a.f.globalGet(global);
+}
+
 // Pushes the JS name of a label.
 [[nodiscard]] static bool EmitName(AdapterContext& a,
-                                   const CacheableName& label,
+                                   mozilla::Span<const char> label,
                                    ComponentJSCase jsCase) {
-  JSAtom* atom = ComponentLabelToJS(a.builder.cx(), label.utf8Bytes(), jsCase);
+  JSContext* cx = a.builder.cx();
+  JSAtom* atom = ComponentLabelToJS(cx, label, jsCase);
+  if (!atom) {
+    return false;
+  }
+  RootedValue name(cx, StringValue(atom));
   uint32_t global;
-  return atom && a.builder.importString(atom, &global) && a.f.globalGet(global);
+  return a.builder.importValue(name, &global) && a.f.globalGet(global);
 }
 
 [[nodiscard]] static bool GetRecordFieldTypes(const ComponentType& type,
@@ -873,7 +944,7 @@ template <typename F>
     uint32_t field;
     if (!f.addLocal(ValType(RefType::extern_()), &field) ||
         !f.localGet(jsValue) ||
-        !EmitName(a, fields[i].name, ComponentJSCase::Camel) ||
+        !EmitName(a, fields[i].name.utf8Bytes(), ComponentJSCase::Camel) ||
         !f.callBuiltin(Id::CmGetField) || !f.localSet(field) ||
         !EmitToComponentValue(a, fields[i].type, field, fieldLocs[i])) {
       return false;
@@ -900,13 +971,469 @@ template <typename F>
   }
   for (size_t i = 0; i < fields.length(); i++) {
     if (!f.localGet(record) ||
-        !EmitName(a, fields[i].name, ComponentJSCase::Camel) ||
+        !EmitName(a, fields[i].name.utf8Bytes(), ComponentJSCase::Camel) ||
         !EmitToJSValue(a, fields[i].type, fieldLocs[i]) ||
         !f.callBuiltin(Id::CmDefineField)) {
       return false;
     }
   }
   return f.localGet(record);
+}
+
+// How a variant-like type (variant, enum, option, or result) is represented in
+// JS.
+enum class VariantRepr {
+  // An object with a `kind`, and a `value` if the case has a payload. This is
+  // for variants, results outside of return position, and options that are the
+  // payload of an option.
+  Object,
+  // undefined, or the payload. This is for other options.
+  Optional,
+  // The case's label. This is for enums.
+  Label,
+};
+
+// The representation of a variant-like type, which is `inOption` if it is the
+// payload of an option.
+static VariantRepr GetVariantRepr(const ComponentType& type, bool inOption) {
+  switch (type.kind()) {
+    case ComponentTypeKind::Enum:
+      return VariantRepr::Label;
+    case ComponentTypeKind::Option:
+      return inOption ? VariantRepr::Object : VariantRepr::Optional;
+    default:
+      return VariantRepr::Object;
+  }
+}
+
+struct VariantCase {
+  mozilla::Span<const char> label;
+  mozilla::Maybe<ComponentType> type;
+};
+using VariantCaseVector = Vector<VariantCase, 4, SystemAllocPolicy>;
+
+[[nodiscard]] static bool GetVariantCases(const ComponentType& type,
+                                          VariantCaseVector* cases) {
+  switch (type.kind()) {
+    case ComponentTypeKind::Variant:
+      for (const ComponentVariantCase& c : type.asVariant()) {
+        if (!cases->append(VariantCase{c.name.utf8Bytes(), c.type})) {
+          return false;
+        }
+      }
+      return true;
+    case ComponentTypeKind::Enum:
+      for (const CacheableName& label : type.asEnum()) {
+        if (!cases->append(
+                VariantCase{label.utf8Bytes(), mozilla::Nothing()})) {
+          return false;
+        }
+      }
+      return true;
+    case ComponentTypeKind::Option:
+      return cases->append(VariantCase{mozilla::MakeStringSpan("none"),
+                                       mozilla::Nothing()}) &&
+             cases->append(VariantCase{mozilla::MakeStringSpan("some"),
+                                       mozilla::Some(type.asOption())});
+    case ComponentTypeKind::Result: {
+      ComponentResultType result = type.asResult();
+      return cases->append(
+                 VariantCase{mozilla::MakeStringSpan("ok"), result.type}) &&
+             cases->append(VariantCase{mozilla::MakeStringSpan("error"),
+                                       result.errorType});
+    }
+    default:
+      MOZ_CRASH("not a variant-like type");
+  }
+}
+
+[[nodiscard]] static bool IsSupportedVariant(const ComponentType& type) {
+  VariantCaseVector cases;
+  if (!GetVariantCases(type, &cases)) {
+    return false;
+  }
+  for (const VariantCase& c : cases) {
+    if (c.type && !IsSupportedAdapterType(*c.type)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Pushes the discriminant of the variant at `loc`.
+[[nodiscard]] static bool EmitGetDiscriminant(AdapterFuncEncoder& f,
+                                              size_t numCases,
+                                              const ValueLoc& loc) {
+  if (!loc.inMemory()) {
+    return f.localGet(loc.flatLocals()[0]);
+  }
+  switch (CanonDiscriminantSize(numCases)) {
+    case 1:
+      return f.localGet(loc.ptrLocal()) &&
+             f.memoryAccess(Op::I32Load8U, 0, loc.offset());
+    case 2:
+      return f.localGet(loc.ptrLocal()) &&
+             f.memoryAccess(Op::I32Load16U, 1, loc.offset());
+    default:
+      return f.localGet(loc.ptrLocal()) &&
+             f.memoryAccess(Op::I32Load, 2, loc.offset());
+  }
+}
+
+// Stores the discriminant in local `disc` to the variant at `loc`.
+[[nodiscard]] static bool EmitSetDiscriminant(AdapterFuncEncoder& f,
+                                              size_t numCases,
+                                              const ValueLoc& loc,
+                                              uint32_t disc) {
+  if (!loc.inMemory()) {
+    return f.localGet(disc) && f.localSet(loc.flatLocals()[0]);
+  }
+  if (!f.localGet(loc.ptrLocal()) || !f.localGet(disc)) {
+    return false;
+  }
+  switch (CanonDiscriminantSize(numCases)) {
+    case 1:
+      return f.memoryAccess(Op::I32Store8, 0, loc.offset());
+    case 2:
+      return f.memoryAccess(Op::I32Store16, 1, loc.offset());
+    default:
+      return f.memoryAccess(Op::I32Store, 2, loc.offset());
+  }
+}
+
+// The location of the payload of the variant at `loc`.
+static ValueLoc GetPayloadLoc(const ComponentType& type, const ValueLoc& loc) {
+  if (loc.inMemory()) {
+    return ValueLoc::memory(loc.ptrLocal(),
+                            loc.offset() + CanonVariantPayloadOffset(type));
+  }
+  return ValueLoc::flat(loc.flatLocals().From(1));
+}
+
+// The canonical ABI's coercions between a case's flat type and the joined flat
+// type of all the cases, when lifting and lowering a flattened variant.
+[[nodiscard]] static bool EmitCoerceFromJoined(AdapterFuncEncoder& f,
+                                               ValType joined, ValType want) {
+  if (joined == want) {
+    return true;
+  }
+  if (joined == ValType::I32) {
+    MOZ_ASSERT(want == ValType::F32);
+    return f.op(Op::F32ReinterpretI32);
+  }
+  MOZ_ASSERT(joined == ValType::I64);
+  switch (want.kind()) {
+    case ValType::I32:
+      return f.op(Op::I32WrapI64);
+    case ValType::F32:
+      return f.op(Op::I32WrapI64) && f.op(Op::F32ReinterpretI32);
+    case ValType::F64:
+      return f.op(Op::F64ReinterpretI64);
+    default:
+      MOZ_CRASH("unexpected flat type");
+  }
+}
+
+[[nodiscard]] static bool EmitCoerceToJoined(AdapterFuncEncoder& f,
+                                             ValType have, ValType joined) {
+  if (have == joined) {
+    return true;
+  }
+  if (joined == ValType::I32) {
+    MOZ_ASSERT(have == ValType::F32);
+    return f.op(Op::I32ReinterpretF32);
+  }
+  MOZ_ASSERT(joined == ValType::I64);
+  switch (have.kind()) {
+    case ValType::I32:
+      return f.op(Op::I64ExtendI32U);
+    case ValType::F32:
+      return f.op(Op::I32ReinterpretF32) && f.op(Op::I64ExtendI32U);
+    case ValType::F64:
+      return f.op(Op::I64ReinterpretF64);
+    default:
+      MOZ_CRASH("unexpected flat type");
+  }
+}
+
+[[nodiscard]] static bool EmitToJSValueVariant(AdapterContext& a,
+                                               const ComponentType& type,
+                                               const ValueLoc& loc,
+                                               bool inOption);
+[[nodiscard]] static bool EmitToComponentValueVariant(AdapterContext& a,
+                                                      const ComponentType& type,
+                                                      uint32_t jsValue,
+                                                      const ValueLoc& loc,
+                                                      bool inOption);
+
+// ToJSValue for the payload of a case, which is `inOption` if the variant is an
+// option.
+[[nodiscard]] static bool EmitCaseToJSValue(AdapterContext& a,
+                                            const ComponentType& caseType,
+                                            const ValueLoc& loc,
+                                            bool inOption) {
+  if (inOption && caseType.kind() == ComponentTypeKind::Option) {
+    return EmitToJSValueVariant(a, caseType, loc, /*inOption=*/true);
+  }
+  return EmitToJSValue(a, caseType, loc);
+}
+
+[[nodiscard]] static bool EmitCaseToComponentValue(
+    AdapterContext& a, const ComponentType& caseType, uint32_t jsValue,
+    const ValueLoc& loc, bool inOption) {
+  if (inOption && caseType.kind() == ComponentTypeKind::Option) {
+    return EmitToComponentValueVariant(a, caseType, jsValue, loc,
+                                       /*inOption=*/true);
+  }
+  return EmitToComponentValue(a, caseType, jsValue, loc);
+}
+
+// ToJSValue for the payload of a case at `payloadLoc`, where `joinedTypes` are
+// the flat types of the payloads of all the cases, and `inOption` is whether
+// the variant is an option.
+[[nodiscard]] static bool EmitPayloadToJSValue(AdapterContext& a,
+                                               const ComponentType& caseType,
+                                               const ValueLoc& payloadLoc,
+                                               const ValTypeVector& joinedTypes,
+                                               bool inOption) {
+  if (payloadLoc.inMemory()) {
+    return EmitCaseToJSValue(a, caseType, payloadLoc, inOption);
+  }
+
+  AdapterFuncEncoder& f = a.f;
+  ValTypeVector caseTypes;
+  FlatLocals caseLocals;
+  if (!FlatTypes(caseType, &caseTypes) ||
+      !AddFlatLocals(f, caseTypes, &caseLocals)) {
+    return false;
+  }
+  for (size_t i = 0; i < caseTypes.length(); i++) {
+    if (!f.localGet(payloadLoc.flatLocals()[i]) ||
+        !EmitCoerceFromJoined(f, joinedTypes[i], caseTypes[i]) ||
+        !f.localSet(caseLocals[i])) {
+      return false;
+    }
+  }
+  return EmitCaseToJSValue(a, caseType, ValueLoc::flat(caseLocals), inOption);
+}
+
+// ToComponentValue for the payload of a case, if any, to `payloadLoc`. The
+// flat values of the payloads that the case doesn't use are zeroed.
+[[nodiscard]] static bool EmitPayloadToComponentValue(
+    AdapterContext& a, const mozilla::Maybe<ComponentType>& caseType,
+    uint32_t jsValue, const ValueLoc& payloadLoc,
+    const ValTypeVector& joinedTypes, bool inOption) {
+  if (payloadLoc.inMemory()) {
+    return !caseType || EmitCaseToComponentValue(a, *caseType, jsValue,
+                                                 payloadLoc, inOption);
+  }
+
+  AdapterFuncEncoder& f = a.f;
+  ValTypeVector caseTypes;
+  if (caseType) {
+    FlatLocals caseLocals;
+    if (!FlatTypes(*caseType, &caseTypes) ||
+        !AddFlatLocals(f, caseTypes, &caseLocals) ||
+        !EmitCaseToComponentValue(a, *caseType, jsValue,
+                                  ValueLoc::flat(caseLocals), inOption)) {
+      return false;
+    }
+    for (size_t i = 0; i < caseTypes.length(); i++) {
+      if (!f.localGet(caseLocals[i]) ||
+          !EmitCoerceToJoined(f, caseTypes[i], joinedTypes[i]) ||
+          !f.localSet(payloadLoc.flatLocals()[i])) {
+        return false;
+      }
+    }
+  }
+  for (size_t i = caseTypes.length(); i < joinedTypes.length(); i++) {
+    if (!f.zero(joinedTypes[i]) || !f.localSet(payloadLoc.flatLocals()[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Gets the flat types of the payloads of all the cases of a variant.
+[[nodiscard]] static bool GetJoinedTypes(const ComponentType& type,
+                                         ValTypeVector* joinedTypes) {
+  ValTypeVector flatTypes;
+  return FlatTypes(type, &flatTypes) &&
+         joinedTypes->append(flatTypes.begin() + 1, flatTypes.end());
+}
+
+// Pushes an array of the JS names of the cases, for builtins to match.
+[[nodiscard]] static bool EmitCaseNames(AdapterContext& a,
+                                        const VariantCaseVector& cases,
+                                        ComponentJSCase jsCase) {
+  JSContext* cx = a.builder.cx();
+  Rooted<ArrayObject*> names(cx, NewDenseEmptyArray(cx));
+  if (!names) {
+    return false;
+  }
+  for (const VariantCase& c : cases) {
+    JSAtom* name = ComponentLabelToJS(cx, c.label, jsCase);
+    if (!name || !NewbornArrayPush(cx, names, StringValue(name))) {
+      return false;
+    }
+  }
+  RootedValue namesValue(cx, ObjectValue(*names));
+  uint32_t global;
+  return a.builder.importValue(namesValue, &global) && a.f.globalGet(global);
+}
+
+// Emits a branch on the case index pushed by `emitIndex` to the code of each
+// case of a variant, with `emitCase(i, depth)` emitting the code for case `i`,
+// which branches to `depth` to finish. `emitDefault` emits the code for an
+// index that is not a case.
+template <typename E, typename F, typename G>
+[[nodiscard]] static bool EmitCaseSwitch(AdapterFuncEncoder& f, size_t numCases,
+                                         E emitIndex, F emitCase,
+                                         G emitDefault) {
+  //   block $done
+  //     block $default
+  //       (block $case)*
+  //         br_table $case* $default
+  //       end
+  //       ;; case i
+  //       br $done
+  //       ...
+  //     end
+  //     ;; default
+  //   end
+  if (!f.block(Op::Block, mozilla::Nothing()) ||
+      !f.block(Op::Block, mozilla::Nothing())) {
+    return false;
+  }
+  for (size_t i = 0; i < numCases; i++) {
+    if (!f.block(Op::Block, mozilla::Nothing())) {
+      return false;
+    }
+  }
+  if (!emitIndex() || !f.brTableCases(numCases)) {
+    return false;
+  }
+  for (size_t i = 0; i < numCases; i++) {
+    if (!f.op(Op::End) || !emitCase(i, uint32_t(numCases - i))) {
+      return false;
+    }
+  }
+  return f.op(Op::End) && emitDefault() && f.op(Op::End);
+}
+
+// ToJSValue for a variant-like type, which is `inOption` if it is the payload
+// of an option.
+[[nodiscard]] static bool EmitToJSValueVariant(AdapterContext& a,
+                                               const ComponentType& type,
+                                               const ValueLoc& loc,
+                                               bool inOption) {
+  using Id = BuiltinModuleFuncId;
+  AdapterFuncEncoder& f = a.f;
+  VariantCaseVector cases;
+  ValTypeVector joinedTypes;
+  uint32_t result;
+  if (!GetVariantCases(type, &cases) ||
+      (!loc.inMemory() && !GetJoinedTypes(type, &joinedTypes)) ||
+      !f.addLocal(ValType(RefType::extern_()), &result)) {
+    return false;
+  }
+  VariantRepr repr = GetVariantRepr(type, inOption);
+  bool isOption = type.kind() == ComponentTypeKind::Option;
+  ValueLoc payloadLoc = GetPayloadLoc(type, loc);
+  auto emitCase = [&](size_t i, uint32_t depth) {
+    const VariantCase& c = cases[i];
+    bool ok;
+    switch (repr) {
+      case VariantRepr::Object:
+        ok = EmitName(a, c.label, ComponentJSCase::Verbatim) &&
+             (c.type ? EmitPayloadToJSValue(a, *c.type, payloadLoc, joinedTypes,
+                                            isOption) &&
+                           f.i32Const(1)
+                     : f.refNullExtern() && f.i32Const(0)) &&
+             f.callBuiltin(Id::CmNewVariant);
+        break;
+      case VariantRepr::Optional:
+        ok = c.type ? EmitPayloadToJSValue(a, *c.type, payloadLoc, joinedTypes,
+                                           isOption)
+                    : EmitUndefined(a);
+        break;
+      case VariantRepr::Label:
+        ok = EmitName(a, c.label, ComponentJSCase::Verbatim);
+        break;
+    }
+    return ok && f.localSet(result) && f.br(depth);
+  };
+  auto emitIndex = [&]() {
+    return EmitGetDiscriminant(f, cases.length(), loc);
+  };
+  auto emitDefault = [&]() { return f.trap(AdapterTrap::BadDiscriminant); };
+  return EmitCaseSwitch(f, cases.length(), emitIndex, emitCase, emitDefault) &&
+         f.localGet(result);
+}
+
+// ToComponentValue for a variant-like type, which is `inOption` if it is the
+// payload of an option.
+[[nodiscard]] static bool EmitToComponentValueVariant(AdapterContext& a,
+                                                      const ComponentType& type,
+                                                      uint32_t jsValue,
+                                                      const ValueLoc& loc,
+                                                      bool inOption) {
+  using Id = BuiltinModuleFuncId;
+  AdapterFuncEncoder& f = a.f;
+  VariantCaseVector cases;
+  ValTypeVector joinedTypes;
+  uint32_t disc;
+  if (!GetVariantCases(type, &cases) ||
+      (!loc.inMemory() && !GetJoinedTypes(type, &joinedTypes)) ||
+      !f.addLocal(ValType::I32, &disc)) {
+    return false;
+  }
+
+  VariantRepr repr = GetVariantRepr(type, inOption);
+  bool ok;
+  switch (repr) {
+    case VariantRepr::Object:
+      ok = f.localGet(jsValue) &&
+           EmitCaseNames(a, cases, ComponentJSCase::Verbatim) &&
+           f.callBuiltin(Id::CmVariantCase);
+      break;
+    case VariantRepr::Optional:
+      ok = f.localGet(jsValue) && f.callBuiltin(Id::CmIsNullish) &&
+           f.op(Op::I32Eqz);
+      break;
+    case VariantRepr::Label:
+      ok = f.localGet(jsValue) &&
+           EmitCaseNames(a, cases, ComponentJSCase::Verbatim) &&
+           f.callBuiltin(Id::CmEnumCase);
+      break;
+  }
+  if (!ok || !f.localSet(disc) ||
+      !EmitSetDiscriminant(f, cases.length(), loc, disc)) {
+    return false;
+  }
+
+  ValueLoc payloadLoc = GetPayloadLoc(type, loc);
+  auto emitCase = [&](size_t i, uint32_t depth) {
+    const VariantCase& c = cases[i];
+    uint32_t payload = jsValue;
+    if (c.type && repr == VariantRepr::Object) {
+      if (!f.addLocal(ValType(RefType::extern_()), &payload) ||
+          !f.localGet(jsValue) ||
+          !EmitName(a, mozilla::MakeStringSpan("value"),
+                    ComponentJSCase::Verbatim) ||
+          !f.callBuiltin(Id::CmGetField) || !f.localSet(payload)) {
+        return false;
+      }
+    }
+    return EmitPayloadToComponentValue(
+               a, c.type, payload, payloadLoc, joinedTypes,
+               type.kind() == ComponentTypeKind::Option) &&
+           f.br(depth);
+  };
+  auto emitIndex = [&]() { return f.localGet(disc); };
+  // The discriminant is always the index of a case.
+  auto emitDefault = [&]() { return f.op(Op::Unreachable); };
+  return EmitCaseSwitch(f, cases.length(), emitIndex, emitCase, emitDefault);
 }
 
 // ToComponentValue for a list, with the canonical ABI's store_list.
@@ -1041,6 +1568,12 @@ template <typename F>
       return EmitToComponentValueTuple(a, type, jsValue, loc);
     case ComponentTypeKind::Record:
       return EmitToComponentValueRecord(a, type, jsValue, loc);
+    case ComponentTypeKind::Variant:
+    case ComponentTypeKind::Enum:
+    case ComponentTypeKind::Option:
+    case ComponentTypeKind::Result:
+      return EmitToComponentValueVariant(a, type, jsValue, loc,
+                                         /*inOption=*/false);
     default:
       MOZ_ASSERT(IsIntegerKind(kind));
       return f.ctx() && f.localGet(jsValue) && f.i32Const(int32_t(kind)) &&
@@ -1081,6 +1614,11 @@ template <typename F>
       return EmitToJSValueTuple(a, type, loc);
     case ComponentTypeKind::Record:
       return EmitToJSValueRecord(a, type, loc);
+    case ComponentTypeKind::Variant:
+    case ComponentTypeKind::Enum:
+    case ComponentTypeKind::Option:
+    case ComponentTypeKind::Result:
+      return EmitToJSValueVariant(a, type, loc, /*inOption=*/false);
     default:
       MOZ_ASSERT(IsIntegerKind(kind));
       return EmitGetScalar(f, kind, loc) && f.i32Const(int32_t(kind)) &&
@@ -1096,6 +1634,115 @@ template <typename F>
          f.i32Const(int32_t(CanonElemSize(type))) &&
          f.i32Const(int32_t(CanonAlignment(type))) &&
          f.callBuiltin(BuiltinModuleFuncId::CmCheckRange);
+}
+
+// ToJSValue for a lifted function's result, into local `jsResult`. A `result`
+// is unwrapped: the payload of `ok` is the JS result, and the payload of
+// `error` becomes the data of a ComponentError that is thrown once the
+// function returns.
+[[nodiscard]] static bool EmitLiftedResultToJSValue(AdapterContext& a,
+                                                    const ComponentType& type,
+                                                    const ValueLoc& loc,
+                                                    uint32_t jsResult) {
+  using Id = BuiltinModuleFuncId;
+  AdapterFuncEncoder& f = a.f;
+  if (type.kind() != ComponentTypeKind::Result) {
+    return EmitToJSValue(a, type, loc) && f.localSet(jsResult);
+  }
+
+  ComponentResultType resultType = type.asResult();
+  ValTypeVector joinedTypes;
+  if (!loc.inMemory() && !GetJoinedTypes(type, &joinedTypes)) {
+    return false;
+  }
+  ValueLoc payloadLoc = GetPayloadLoc(type, loc);
+  auto emitIndex = [&]() { return EmitGetDiscriminant(f, 2, loc); };
+  auto emitCase = [&](size_t i, uint32_t depth) {
+    if (i == 0) {
+      return (resultType.type
+                  ? EmitPayloadToJSValue(a, *resultType.type, payloadLoc,
+                                         joinedTypes, /*inOption=*/false)
+                  : EmitUndefined(a)) &&
+             f.localSet(jsResult) && f.br(depth);
+    }
+    return f.ctx() &&
+           (resultType.errorType
+                ? EmitPayloadToJSValue(a, *resultType.errorType, payloadLoc,
+                                       joinedTypes, /*inOption=*/false) &&
+                      f.i32Const(1)
+                : f.refNullExtern() && f.i32Const(0)) &&
+           f.callBuiltin(Id::CmSetComponentError) && EmitUndefined(a) &&
+           f.localSet(jsResult) && f.br(depth);
+  };
+  auto emitDefault = [&]() { return f.trap(AdapterTrap::BadDiscriminant); };
+  return EmitCaseSwitch(f, 2, emitIndex, emitCase, emitDefault);
+}
+
+// Calls the host function of a lowered function that returns a `result`: a
+// normal return is the `ok` case, with the returned value as its payload, and a
+// thrown exception is the `error` case, with the exception as its payload. A
+// payload that fails to convert traps. `emitArgs` emits the host function's
+// arguments, and `emitReturn` returns from the adapter.
+template <typename F, typename G>
+[[nodiscard]] static bool EmitLoweredResultCall(AdapterContext& a,
+                                                const ComponentType& type,
+                                                uint32_t hostIndex,
+                                                const ValueLoc& loc,
+                                                mozilla::Maybe<uint32_t> retPtr,
+                                                F emitArgs, G emitReturn) {
+  using Id = BuiltinModuleFuncId;
+  AdapterFuncEncoder& f = a.f;
+  ComponentResultType resultType = type.asResult();
+  ValTypeVector joinedTypes;
+  uint32_t jsResult, exn, disc;
+  if ((!loc.inMemory() && !GetJoinedTypes(type, &joinedTypes)) ||
+      !f.addLocal(ValType(RefType::extern_()), &jsResult) ||
+      !f.addLocal(ValType(RefType::exn()), &exn) ||
+      !f.addLocal(ValType::I32, &disc)) {
+    return false;
+  }
+  ValueLoc payloadLoc = GetPayloadLoc(type, loc);
+
+  auto emitStoreCase = [&](int32_t index) {
+    const mozilla::Maybe<ComponentType>& caseType =
+        index == 0 ? resultType.type : resultType.errorType;
+    uint32_t payload = jsResult;
+    if (index == 1 && caseType) {
+      if (!f.addLocal(ValType(RefType::extern_()), &payload) ||
+          !f.localGet(exn) || !f.callBuiltin(Id::CmExceptionValue) ||
+          !f.localSet(payload)) {
+        return false;
+      }
+    }
+    return (!retPtr || EmitCheckPointer(f, type, *retPtr)) &&
+           f.i32Const(index) && f.localSet(disc) &&
+           EmitSetDiscriminant(f, 2, loc, disc) &&
+           EmitPayloadToComponentValue(a, caseType, payload, payloadLoc,
+                                       joinedTypes, /*inOption=*/false);
+  };
+
+  //   block $ok
+  //     block $caught (result exnref)
+  //       try_table (catch_all_ref $caught)
+  //         call $host
+  //         br $ok
+  //       end
+  //       unreachable
+  //     end
+  //     ;; store the error case, trapping if it throws
+  //     return
+  //   end
+  //   ;; store the ok case, trapping if it throws
+  return f.block(Op::Block, mozilla::Nothing()) &&
+         f.block(Op::Block, mozilla::Some(ValType(RefType::exn()))) &&
+         f.tryTableCatchAllRef(0) && emitArgs() && f.call(hostIndex) &&
+         f.localSet(jsResult) && f.br(2) && f.op(Op::End) &&
+         f.op(Op::Unreachable) && f.op(Op::End) && f.localSet(exn) &&
+         f.trapping(AdapterTrap::ImportException,
+                    [&]() { return emitStoreCase(1); }) &&
+         emitReturn() && f.op(Op::End) &&
+         f.trapping(AdapterTrap::ImportException,
+                    [&]() { return emitStoreCase(0); });
 }
 
 // Imports the memory and functions of the canonical options into `builder`,
@@ -1202,7 +1849,7 @@ template <typename F>
     ok = ok && f.addLocal(ValType(RefType::extern_()), &jsResult) &&
          (!useRetPtr ||
           EmitCheckPointer(f, *funcType.resultType, calleeResult)) &&
-         EmitToJSValue(a, *funcType.resultType, loc) && f.localSet(jsResult);
+         EmitLiftedResultToJSValue(a, *funcType.resultType, loc, jsResult);
   }
 
   if (postReturn != UINT32_MAX) {
@@ -1237,6 +1884,29 @@ static bool IsPendingTrap(JSContext* cx) {
          exn.toObject().as<ErrorObject>().fromWasmTrap();
 }
 
+// The JS-API's "create a component error". Always returns false.
+static bool ThrowComponentError(JSContext* cx, HandleValue data) {
+  JSObject* ctor =
+      GlobalObject::getOrCreateConstructor(cx, JSProto_ComponentError);
+  if (!ctor) {
+    return false;
+  }
+  RootedValue ctorValue(cx, ObjectValue(*ctor));
+  ConstructArgs ctorArgs(cx);
+  if (!ctorArgs.init(cx, 2)) {
+    return false;
+  }
+  ctorArgs[0].setString(cx->names().empty_);
+  ctorArgs[1].set(data);
+  RootedObject error(cx);
+  if (!Construct(cx, ctorValue, ctorArgs, ctorValue, &error)) {
+    return false;
+  }
+  RootedValue errorValue(cx, ObjectValue(*error));
+  JS_SetPendingException(cx, errorValue);
+  return false;
+}
+
 // The JS-API's "invoke a component function".
 static bool CallLiftedFunction(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
@@ -1268,12 +1938,23 @@ static bool CallLiftedFunction(JSContext* cx, unsigned argc, Value* vp) {
   // if the failure is not a trap. Calls into the instance from an import can
   // nest, so the outer call's state is restored afterwards.
   bool outerEnteredGuest = instance.enteredGuest();
+  RootedValue outerErrorData(cx);
+  bool outerHasError = instance.takePendingError(&outerErrorData);
   instance.setEnteredGuest(false);
+
   bool ok = Call(cx, adapter, UndefinedHandleValue, adapterArgs, args.rval());
   if (!ok && (instance.enteredGuest() || IsPendingTrap(cx))) {
     instance.setTrapped();
   }
+  RootedValue errorData(cx);
+  if (instance.takePendingError(&errorData) && ok) {
+    ok = ThrowComponentError(cx, errorData);
+  }
+
   instance.setEnteredGuest(outerEnteredGuest);
+  if (outerHasError) {
+    instance.setPendingError(outerErrorData);
+  }
   return ok;
 }
 
@@ -1399,24 +2080,43 @@ bool wasm::CreateLoweredFunction(
     return false;
   }
 
-  bool ok = f.block(Op::Block, mozilla::Nothing()) &&
-            f.tryTableCatchAll(flatResultType, 0);
-  for (uint32_t jsParam : jsParams) {
-    ok = ok && f.localGet(jsParam);
+  auto emitArgs = [&]() {
+    for (uint32_t jsParam : jsParams) {
+      if (!f.localGet(jsParam)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  auto emitReturn = [&]() {
+    return (!flatResultType || f.localGet(flatResult)) && f.op(Op::Return);
+  };
+  ValueLoc loc = useRetPtr ? ValueLoc::memory(retPtr, 0)
+                           : ValueLoc::flat(mozilla::Span(&flatResult, 1));
+
+  bool ok;
+  if (funcType.resultType &&
+      funcType.resultType->kind() == ComponentTypeKind::Result) {
+    ok = EmitLoweredResultCall(
+             a, *funcType.resultType, hostIndex, loc,
+             useRetPtr ? mozilla::Some(retPtr) : mozilla::Nothing(), emitArgs,
+             emitReturn) &&
+         emitReturn();
+  } else {
+    ok = f.block(Op::Block, mozilla::Nothing()) &&
+         f.tryTableCatchAll(flatResultType, 0) && emitArgs() &&
+         f.call(hostIndex);
+    if (funcType.resultType) {
+      ok = ok && f.localSet(jsResult) &&
+           (!useRetPtr || EmitCheckPointer(f, *funcType.resultType, retPtr)) &&
+           EmitToComponentValue(a, *funcType.resultType, jsResult, loc);
+    }
+    if (flatResultType) {
+      ok = ok && f.localGet(flatResult);
+    }
+    ok = ok && f.op(Op::End) && f.op(Op::Return) && f.op(Op::End) &&
+         f.trap(AdapterTrap::ImportException);
   }
-  ok = ok && f.call(hostIndex);
-  if (funcType.resultType) {
-    ValueLoc loc = useRetPtr ? ValueLoc::memory(retPtr, 0)
-                             : ValueLoc::flat(mozilla::Span(&flatResult, 1));
-    ok = ok && f.localSet(jsResult) &&
-         (!useRetPtr || EmitCheckPointer(f, *funcType.resultType, retPtr)) &&
-         EmitToComponentValue(a, *funcType.resultType, jsResult, loc);
-  }
-  if (flatResultType) {
-    ok = ok && f.localGet(flatResult);
-  }
-  ok = ok && f.op(Op::End) && f.op(Op::Return) && f.op(Op::End) &&
-       f.trap(AdapterTrap::ImportException);
 
   Bytes body;
   if (!ok || !f.finish(&body)) {
@@ -1642,6 +2342,27 @@ void* wasm::CmCharToJS(Instance* instance, int32_t value) {
   return ExternRefForCompiledCode(cx, jsValue);
 }
 
+void wasm::CmSetComponentError(Instance* instance, void* ctxRef, void* dataRef,
+                               int32_t hasData) {
+  MOZ_ASSERT(SASigCmSetComponentError.failureMode == FailureMode::Infallible);
+  JSContext* cx = instance->cx();
+  RootedObject ctx(cx, &AnyRef::fromCompiledCode(ctxRef).toJSObject());
+  InstanceFromCtx(ctx).setPendingError(
+      hasData ? AnyRef::fromCompiledCode(dataRef).toJSValue()
+              : UndefinedValue());
+}
+
+void* wasm::CmExceptionValue(Instance* instance, void* exnRef) {
+  MOZ_ASSERT(SASigCmExceptionValue.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedValue value(cx, AnyRef::fromCompiledCode(exnRef)
+                            .toJSObject()
+                            .as<WasmExceptionObject>()
+                            .toJSValue());
+  return ExternRefForCompiledCode(cx, value);
+}
+
 void wasm::CmEnterGuest(Instance* instance, void* ctxRef) {
   MOZ_ASSERT(SASigCmEnterGuest.failureMode == FailureMode::Infallible);
   JSContext* cx = instance->cx();
@@ -1807,6 +2528,81 @@ int32_t wasm::CmDefineField(Instance* instance, void* objectRef, void* nameRef,
     return -1;
   }
   return 0;
+}
+
+void* wasm::CmNewVariant(Instance* instance, void* kindRef, void* valueRef,
+                         int32_t hasValue) {
+  MOZ_ASSERT(SASigCmNewVariant.failureMode == FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedValue kind(cx, AnyRef::fromCompiledCode(kindRef).toJSValue());
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  RootedObject obj(cx, NewPlainObjectWithProto(cx, nullptr));
+  if (!obj ||
+      !DefineDataProperty(cx, obj, cx->names().kind, kind, JSPROP_ENUMERATE) ||
+      (hasValue && !DefineDataProperty(cx, obj, cx->names().value, value,
+                                       JSPROP_ENUMERATE))) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue objValue(cx, ObjectValue(*obj));
+  return ExternRefForCompiledCode(cx, objValue);
+}
+
+// Returns the index of the string in `names`, an array of atoms, or throws.
+static int32_t FindCase(JSContext* cx, HandleString str, void* namesRef) {
+  JSAtom* atom = AtomizeString(cx, str);
+  if (!atom) {
+    return -1;
+  }
+  ArrayObject& names = ArrayFromRef(namesRef);
+  for (uint32_t i = 0; i < names.length(); i++) {
+    if (names.getDenseElement(i).toString() == atom) {
+      return int32_t(i);
+    }
+  }
+  UniqueChars chars = JS_EncodeStringToUTF8(cx, str);
+  if (chars) {
+    JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
+                             JSMSG_WASM_COMPONENT_BAD_CASE, chars.get());
+  }
+  return -1;
+}
+
+int32_t wasm::CmVariantCase(Instance* instance, void* valueRef,
+                            void* namesRef) {
+  MOZ_ASSERT(SASigCmVariantCase.failureMode == FailureMode::FailOnNegI32);
+  JSContext* cx = instance->cx();
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  if (!value.isObject()) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_OBJECT_REQUIRED, "value");
+    return -1;
+  }
+  RootedObject obj(cx, &value.toObject());
+  RootedValue kind(cx);
+  if (!GetProperty(cx, obj, obj, cx->names().kind, &kind)) {
+    return -1;
+  }
+  RootedString kindString(cx, ToString(cx, kind));
+  if (!kindString) {
+    return -1;
+  }
+  return FindCase(cx, kindString, namesRef);
+}
+
+int32_t wasm::CmEnumCase(Instance* instance, void* valueRef, void* namesRef) {
+  MOZ_ASSERT(SASigCmEnumCase.failureMode == FailureMode::FailOnNegI32);
+  JSContext* cx = instance->cx();
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  RootedString str(cx, ToString(cx, value));
+  if (!str) {
+    return -1;
+  }
+  return FindCase(cx, str, namesRef);
+}
+
+int32_t wasm::CmIsNullish(Instance* instance, void* valueRef) {
+  MOZ_ASSERT(SASigCmIsNullish.failureMode == FailureMode::Infallible);
+  return AnyRef::fromCompiledCode(valueRef).toJSValue().isNullOrUndefined();
 }
 
 static JSObject* NewScalarArray(JSContext* cx, Scalar::Type type,
@@ -2198,6 +2994,9 @@ int32_t wasm::CmTrap(Instance* instance, int32_t reason) {
       break;
     case AdapterTrap::ImportException:
       ReportTrapError(instance->cx(), JSMSG_WASM_COMPONENT_IMPORT_EXCEPTION);
+      break;
+    case AdapterTrap::BadDiscriminant:
+      ReportTrapError(instance->cx(), JSMSG_WASM_COMPONENT_BAD_DISCRIMINANT);
       break;
   }
   return -1;
