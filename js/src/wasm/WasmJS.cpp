@@ -2735,7 +2735,8 @@ WasmComponentInstanceObject* WasmComponentInstanceObject::create(
   }
 
   RootedObject exportsObj(cx);
-  if (!instance->init(cx) || !instance->createExportsObject(cx, &exportsObj)) {
+  if (!instance->init(cx) ||
+      !instance->createExportsObject(cx, obj, &exportsObj)) {
     return nullptr;
   }
   obj->initReservedSlotTyped(EXPORTS_SLOT, ObjectValue(*exportsObj));
