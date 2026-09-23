@@ -128,7 +128,12 @@ promise_test(async () => {
   const { R } = makeImports();
   const log = [];
   const proto = loggingProxy(R.prototype, log, "proto ");
-  const ctor = new Proxy(R, {
+  // A proxy must report a class's non-writable prototype as is, so proxy a
+  // function with the same members instead.
+  function Target() {}
+  Target.prototype = R.prototype;
+  Object.defineProperty(Target, "q", Object.getOwnPropertyDescriptor(R, "q"));
+  const ctor = new Proxy(Target, {
     get(t, key, receiver) {
       log.push(`ctor get ${String(key)}`);
       return key === "prototype" ? proto : Reflect.get(t, key, receiver);

@@ -43,11 +43,15 @@ promise_test(async () => {
   assert_value_equals(exports.roundtripList([]), []);
 }, "list<own<r>>: empty");
 
+// Elements are converted after the list is allocated in the guest, so a failing
+// element locks down the instance, and this test uses fresh ones.
 promise_test(async () => {
   class Other {}
   const a = new C();
-  assert_throws_js(TypeError, () => exports.roundtripList([a, new Other()]));
-  assert_throws_js(TypeError, () => exports.roundtripList([1]));
+  for (const list of [[a, new Other()], [1]]) {
+    const fresh = await componentExports(FIXTURE, { R: C, recv: () => {} });
+    assert_throws_js(TypeError, () => fresh.roundtripList(list));
+  }
 }, "list<own<r>>: an element failing the brand check is a TypeError");
 
 promise_test(async () => {

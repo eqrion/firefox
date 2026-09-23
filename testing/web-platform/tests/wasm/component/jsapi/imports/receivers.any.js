@@ -39,7 +39,7 @@ promise_test(async () => {
 
 promise_test(async () => {
   let args;
-  class R { m(...rest) { args = rest; return 0; } }
+  class R { m(...rest) { args = rest; return 0; } static s() { return 0; } }
   const { callM } = await componentExports("imports/receivers", { R });
   callM(new R(), 8);
   assert_array_equals(args, [8], "self is not passed as an argument");
@@ -58,7 +58,12 @@ promise_test(async () => {
   const log = [];
   const R = makeClass();
   const proto = loggingProxy(R.prototype, log, "proto ");
-  const ctor = new Proxy(R, {
+  // A proxy must report a class's non-writable prototype as is, so proxy a
+  // function with the same members instead.
+  function Target() {}
+  Target.prototype = R.prototype;
+  Target.s = R.s;
+  const ctor = new Proxy(Target, {
     get(t, key, receiver) {
       log.push(`ctor get ${String(key)}`);
       return key === "prototype" ? proto : Reflect.get(t, key, receiver);
