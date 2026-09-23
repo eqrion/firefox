@@ -452,6 +452,7 @@ static bool IsSupportedAdapterType(const ComponentType& type) {
     case ComponentTypeKind::F64:
     case ComponentTypeKind::Char:
     case ComponentTypeKind::String:
+    case ComponentTypeKind::Flags:
       return true;
     case ComponentTypeKind::List:
       return IsSupportedAdapterType(type.asList());
@@ -978,6 +979,86 @@ template <typename F>
     }
   }
   return f.localGet(record);
+}
+
+// How flags are stored in memory, which is by their number of labels.
+static ScalarLayout GetFlagsLayout(const ComponentType& type) {
+  switch (CanonElemSize(type)) {
+    case 1:
+      return {Op::I32Load8U, Op::I32Store8, 0, ValType::I32};
+    case 2:
+      return {Op::I32Load16U, Op::I32Store16, 1, ValType::I32};
+    default:
+      return {Op::I32Load, Op::I32Store, 2, ValType::I32};
+  }
+}
+
+// The JS-API's ToComponentValueFlags.
+[[nodiscard]] static bool EmitToComponentValueFlags(AdapterContext& a,
+                                                    const ComponentType& type,
+                                                    uint32_t jsValue,
+                                                    const ValueLoc& loc) {
+  using Id = BuiltinModuleFuncId;
+  AdapterFuncEncoder& f = a.f;
+  const CacheableNameVector& labels = type.asFlags();
+  uint32_t bits;
+  if (!f.addLocal(ValType::I32, &bits) || !f.localGet(jsValue) ||
+      !f.callBuiltin(Id::CmCheckObject)) {
+    return false;
+  }
+  for (size_t i = 0; i < labels.length(); i++) {
+    // A missing label is false.
+    if (!f.localGet(bits) || !f.localGet(jsValue) ||
+        !EmitName(a, labels[i].utf8Bytes(), ComponentJSCase::Camel) ||
+        !f.callBuiltin(Id::CmGetField) || !f.callBuiltin(Id::CmToBool) ||
+        !f.i32Const(int32_t(i)) || !f.op(Op::I32Shl) || !f.op(Op::I32Or) ||
+        !f.localSet(bits)) {
+      return false;
+    }
+  }
+  if (!loc.inMemory()) {
+    return f.localGet(bits) && f.localSet(loc.flatLocals()[0]);
+  }
+  ScalarLayout layout = GetFlagsLayout(type);
+  return f.localGet(loc.ptrLocal()) && f.localGet(bits) &&
+         f.memoryAccess(layout.store, layout.alignLog2, loc.offset());
+}
+
+// The JS-API's ToJSValueFlags.
+[[nodiscard]] static bool EmitToJSValueFlags(AdapterContext& a,
+                                             const ComponentType& type,
+                                             const ValueLoc& loc) {
+  using Id = BuiltinModuleFuncId;
+  AdapterFuncEncoder& f = a.f;
+  const CacheableNameVector& labels = type.asFlags();
+  uint32_t bits, flags;
+  if (!f.addLocal(ValType::I32, &bits) ||
+      !f.addLocal(ValType(RefType::extern_()), &flags)) {
+    return false;
+  }
+  if (loc.inMemory()) {
+    ScalarLayout layout = GetFlagsLayout(type);
+    if (!f.localGet(loc.ptrLocal()) ||
+        !f.memoryAccess(layout.load, layout.alignLog2, loc.offset())) {
+      return false;
+    }
+  } else if (!f.localGet(loc.flatLocals()[0])) {
+    return false;
+  }
+  if (!f.localSet(bits) || !f.callBuiltin(Id::CmNewRecord) ||
+      !f.localSet(flags)) {
+    return false;
+  }
+  for (size_t i = 0; i < labels.length(); i++) {
+    if (!f.localGet(flags) ||
+        !EmitName(a, labels[i].utf8Bytes(), ComponentJSCase::Camel) ||
+        !f.localGet(bits) || !f.i32Const(int32_t(i)) || !f.op(Op::I32ShrU) ||
+        !f.i32Const(1) || !f.op(Op::I32And) || !f.callBuiltin(Id::CmBoolToJS) ||
+        !f.callBuiltin(Id::CmDefineField)) {
+      return false;
+    }
+  }
+  return f.localGet(flags);
 }
 
 // How a variant-like type (variant, enum, option, or result) is represented in
@@ -1568,6 +1649,8 @@ template <typename E, typename F, typename G>
       return EmitToComponentValueTuple(a, type, jsValue, loc);
     case ComponentTypeKind::Record:
       return EmitToComponentValueRecord(a, type, jsValue, loc);
+    case ComponentTypeKind::Flags:
+      return EmitToComponentValueFlags(a, type, jsValue, loc);
     case ComponentTypeKind::Variant:
     case ComponentTypeKind::Enum:
     case ComponentTypeKind::Option:
@@ -1614,6 +1697,8 @@ template <typename E, typename F, typename G>
       return EmitToJSValueTuple(a, type, loc);
     case ComponentTypeKind::Record:
       return EmitToJSValueRecord(a, type, loc);
+    case ComponentTypeKind::Flags:
+      return EmitToJSValueFlags(a, type, loc);
     case ComponentTypeKind::Variant:
     case ComponentTypeKind::Enum:
     case ComponentTypeKind::Option:
