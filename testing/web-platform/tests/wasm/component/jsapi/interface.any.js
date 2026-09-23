@@ -1,7 +1,7 @@
 // META: global=window,dedicatedworker,jsshell
 // META: script=/wasm/component/jsapi/harness/assertions.js
 
-function test_interface(name, length) {
+function test_interface(name, length, parent = Function.prototype) {
   const iface = WebAssembly[name];
 
   test(() => {
@@ -15,7 +15,7 @@ function test_interface(name, length) {
 
   test(() => {
     assert_equals(typeof iface, "function");
-    assert_equals(Object.getPrototypeOf(iface), Function.prototype);
+    assert_equals(Object.getPrototypeOf(iface), parent);
   }, `WebAssembly.${name}: is a function`);
 
   test(() => {
@@ -91,10 +91,7 @@ test(() => {
   }
 }, "WebAssembly.ComponentInstance.prototype.exports: brand check");
 
-test_interface("ComponentError", 0);
-test(() => {
-  assert_equals(Object.getPrototypeOf(WebAssembly.ComponentError), Error);
-}, "WebAssembly.ComponentError: prototype");
+test_interface("ComponentError", 0, Error);
 test(() => {
   assert_equals(Object.getPrototypeOf(WebAssembly.ComponentError.prototype), Error.prototype);
 }, "WebAssembly.ComponentError.prototype: prototype");
