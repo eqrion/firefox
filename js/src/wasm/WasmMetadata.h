@@ -479,6 +479,9 @@ struct ModuleMetadata : public ShareableBase<ModuleMetadata> {
   bool addImportedFunc(ValTypeVector&& params, ValTypeVector&& results,
                        CacheableName&& importModName,
                        CacheableName&& importFieldName);
+  bool addImportedFuncWithType(uint32_t funcTypeIndex,
+                               CacheableName&& importModName,
+                               CacheableName&& importFieldName);
 
   // Generates any new metadata necessary to compile this module. This must be
   // called after the 'module environment' (everything before the code section)
