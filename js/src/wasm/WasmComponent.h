@@ -403,6 +403,15 @@ struct ComponentName {
       : name(std::move(name)), attributes(attributes) {}
 };
 
+// Converts a label to a JS identifier with the JS-API's PascalCase (for types)
+// or CamelCase (for everything else).
+enum class ComponentJSCase : uint8_t { Pascal, Camel };
+JSAtom* ComponentLabelToJS(JSContext* cx, mozilla::Span<const char> label,
+                           ComponentJSCase jsCase);
+
+// Returns the JS-API's JSName for an import or export named `name`.
+JSAtom* ComponentJSName(JSContext* cx, const ComponentName& name, bool isType);
+
 // A class which can be used to check if a set of component model names is
 // strongly-unique. The set owns its keys.
 class StronglyUniqueNameSet {
@@ -1074,6 +1083,10 @@ class ComponentInstance {
   static void destroy(ComponentInstance* instance);
 
   [[nodiscard]] bool init(JSContext* cx);
+
+  // Creates the JS-API's exports object for this instance.
+  [[nodiscard]] bool createExportsObject(JSContext* cx,
+                                         MutableHandleObject exportsObj) const;
 
   // Gets the exports object of a core instance, or null if the index is out of
   // range.

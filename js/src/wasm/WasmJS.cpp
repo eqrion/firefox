@@ -2640,10 +2640,34 @@ const ClassSpec WasmComponentInstanceObject::classSpec_ = {
 };
 
 const JSPropertySpec WasmComponentInstanceObject::properties[] = {
+    JS_PSG("exports", WasmComponentInstanceObject::exportsGetter,
+           JSPROP_ENUMERATE),
     JS_STRING_SYM_PS(toStringTag, "WebAssembly.ComponentInstance",
                      JSPROP_READONLY),
     JS_PS_END,
 };
+
+static bool IsComponentInstance(HandleValue v) {
+  return v.isObject() && v.toObject().is<WasmComponentInstanceObject>();
+}
+
+/* static */
+bool WasmComponentInstanceObject::exportsGetterImpl(JSContext* cx,
+                                                    const CallArgs& args) {
+  args.rval().setObject(args.thisv()
+                            .toObject()
+                            .as<WasmComponentInstanceObject>()
+                            .getReservedSlotTyped(EXPORTS_SLOT)
+                            .toObject());
+  return true;
+}
+
+/* static */
+bool WasmComponentInstanceObject::exportsGetter(JSContext* cx, unsigned argc,
+                                                Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  return CallNonGenericMethod<IsComponentInstance, exportsGetterImpl>(cx, args);
+}
 
 const JSFunctionSpec WasmComponentInstanceObject::methods[] = {
     JS_FS_END,
@@ -2710,9 +2734,11 @@ WasmComponentInstanceObject* WasmComponentInstanceObject::create(
     MOZ_ASSERT(!obj->isNewborn());
   }
 
-  if (!instance->init(cx)) {
+  RootedObject exportsObj(cx);
+  if (!instance->init(cx) || !instance->createExportsObject(cx, &exportsObj)) {
     return nullptr;
   }
+  obj->initReservedSlotTyped(EXPORTS_SLOT, ObjectValue(*exportsObj));
 
   return obj;
 }
