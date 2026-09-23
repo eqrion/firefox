@@ -112,11 +112,9 @@ for (const [type, expected] of [
 
 // Unsupported types fail at instantiation.
 assertErrorMessage(() => instantiate(`(component
-  (core module $m
-    (memory (export "mem") 1)
-    (func (export "f") (result i32) i32.const 0))
+  (type $r (resource (rep i32)))
+  (core module $m (func (export "f") (result i32) i32.const 0))
   (core instance $i (instantiate $m))
-  (func $f (result (list u32))
-    (canon lift (core func $i "f") (memory (core memory $i "mem"))))
+  (func $f (result (own $r)) (canon lift (core func $i "f")))
   (export "f" (func $f))
-)`), Error, /not supported yet/);
+)`), Error, /component function type is not supported yet/);

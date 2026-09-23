@@ -86,9 +86,34 @@ void* CmCharToJS(Instance* instance, int32_t value);
 // Records that the current call has entered the guest.
 void CmEnterGuest(Instance* instance, void* ctxRef);
 
-// Traps unless [ptr, ptr + length) is in memory and ptr is aligned.
-int32_t CmCheckRange(Instance* instance, int32_t ptr, int32_t length,
-                     int32_t alignment);
+// Traps unless `count` elements of `elemSize` bytes at `ptr` are in memory,
+// and ptr is aligned.
+int32_t CmCheckRange(Instance* instance, int32_t ptr, int32_t count,
+                     int32_t elemSize, int32_t alignment);
+
+// The first part of ToComponentValueList: iterates a JS value to a new dense
+// array, whose elements are then converted. Throws if the list would be larger
+// than 32-bit memory, given its elements' size.
+void* CmIterableToArray(Instance* instance, void* valueRef, int32_t elemSize);
+int32_t CmArrayLength(Instance* instance, void* arrayRef);
+// Throws unless the array has exactly `length` elements.
+int32_t CmCheckArrayLength(Instance* instance, void* arrayRef, int32_t length);
+void* CmArrayGet(Instance* instance, void* arrayRef, int32_t index);
+
+// Creates the JS array for a list or tuple, whose elements are then set.
+void* CmNewArray(Instance* instance, int32_t length);
+int32_t CmArraySet(Instance* instance, void* arrayRef, int32_t index,
+                   void* valueRef);
+
+// ToJSValue for a list<u8>, as a Uint8Array.
+void* CmBytesToJS(Instance* instance, int32_t ptr, int32_t length);
+
+// ToComponentValueBytes for a Uint8Array: CmIsUint8Array tests for one,
+// CmUint8ArrayLength gets its length, and CmCopyBytes copies it to memory.
+int32_t CmIsUint8Array(Instance* instance, void* valueRef);
+int32_t CmUint8ArrayLength(Instance* instance, void* valueRef);
+int32_t CmCopyBytes(Instance* instance, void* valueRef, int32_t ptr,
+                    int32_t length);
 
 // The steps of storing a JS string with the canonical ABI's store_string.
 // CmToString converts a JS value to a string, and the rest take that string.
