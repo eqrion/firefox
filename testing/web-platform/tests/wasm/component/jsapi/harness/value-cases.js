@@ -56,8 +56,8 @@ const valueCases = [
     cases: [[new Map()], [new Map([["a", 1], ["b", 2]])], [[["a", 1], ["a", 2]], new Map([["a", 2]])]],
   },
   {
-    fixture: "values/map", exportName: "roundtripF64String",
-    cases: [[new Map([[1.5, "x"], [NaN, "n"]])]],
+    fixture: "values/map", exportName: "roundtripS64String",
+    cases: [[new Map([[-1n, "x"], [2n, "y"]])]],
   },
   {
     fixture: "values/nesting", exportName: "roundtripTuple",

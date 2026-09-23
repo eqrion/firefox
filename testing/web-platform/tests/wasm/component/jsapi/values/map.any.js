@@ -2,15 +2,14 @@
 // META: script=/wasm/component/jsapi/harness/component-helpers.js
 // META: script=/wasm/component/jsapi/harness/assertions.js
 
-// map<string, u32>, map<f64, string>, map<u32, string>
+// map<string, u32>, map<s64, string>, map<u32, string>
 
 let exports;
 let received;
+const echo = x => { received = x; return x; };
+const imports = { echoStringU32: echo, echoS64String: echo, echoU32String: echo };
 promise_setup(async () => {
-  const echo = x => { received = x; return x; };
-  exports = await componentExports("values/map", {
-    echoStringU32: echo, echoF64String: echo, echoU32String: echo,
-  });
+  exports = await componentExports("values/map", imports);
 });
 
 promise_test(async () => {
@@ -45,18 +44,14 @@ promise_test(async () => {
 }, "map: duplicate keys keep the last value in the first position");
 
 promise_test(async () => {
-  const result = exports.roundtripF64String([[NaN, "a"], [NaN, "b"], [0, "zero"], [-0, "negative zero"]]);
-  assert_equals(result.size, 2);
-  assert_equals(result.get(NaN), "b");
-  assert_equals(result.get(0), "negative zero");
-  assert_true([...result.keys()].some(k => Object.is(k, 0)), "the key is +0");
-  assert_false([...result.keys()].some(k => Object.is(k, -0)), "-0 is normalised by Map");
-}, "map<f64, _>: keys are compared with SameValueZero");
+  const result = exports.roundtripS64String([[1n, "a"], [-1n, "b"], ["1", "c"]]);
+  assert_value_equals(result, new Map([[1n, "c"], [-1n, "b"]]));
+}, "map<s64, _>: keys are compared after conversion");
 
 promise_test(async () => {
-  const result = exports.roundtripF64String(new Map([[1.5, "x"], [Infinity, "inf"], [-Infinity, "-inf"]]));
-  assert_value_equals(result, new Map([[1.5, "x"], [Infinity, "inf"], [-Infinity, "-inf"]]));
-}, "map<f64, _>: float keys roundtrip");
+  const input = new Map([[0n, "zero"], [2n ** 63n - 1n, "max"], [-(2n ** 63n), "min"]]);
+  assert_value_equals(exports.roundtripS64String(input), input);
+}, "map<s64, _>: BigInt keys roundtrip");
 
 promise_test(async () => {
   const result = exports.roundtripU32String(new Map([[1, "one"], ["2", "two"], [3.7, "three"]]));
@@ -89,7 +84,7 @@ promise_test(async () => {
   assert_true(log.includes("get a"), "values are read with Get");
 }, "map<string, _>: the iterable check precedes property enumeration");
 
-for (const [name, description] of [["roundtripU32String", "map<u32, _>"], ["roundtripF64String", "map<f64, _>"]]) {
+for (const [name, description] of [["roundtripU32String", "map<u32, _>"], ["roundtripS64String", "map<s64, _>"]]) {
   promise_test(async () => {
     received = "unchanged";
     assert_throws_js(TypeError, () => exports[name]({ 1: "a" }));
@@ -97,12 +92,25 @@ for (const [name, description] of [["roundtripU32String", "map<u32, _>"], ["roun
   }, `${description}: a non-iterable object throws TypeError`);
 }
 
+// Entries are converted after the list is allocated in the guest, so a failing
+// entry locks down the instance, and those tests use a fresh one.
 for (const [input, description] of [
   [[["a"]], "a pair with one element"],
   [[["a", 1, 2]], "a pair with three elements"],
   [["a"], "a string element instead of a pair"],
   [[null], "a null element"],
   [[["a", "x"]], "a value that fails conversion"],
+]) {
+  promise_test(async () => {
+    received = "unchanged";
+    const e = await componentExports("values/map", imports);
+    assert_throws_js(TypeError, () => e.roundtripStringU32(input));
+    assert_equals(received, "unchanged", "echo must not be called");
+    assert_traps(() => e.roundtripStringU32([]));
+  }, `map: ${description} throws TypeError and locks down the instance`);
+}
+
+for (const [input, description] of [
   [null, "null"],
   [undefined, "undefined"],
   ["ab", "a string"],
@@ -123,14 +131,14 @@ promise_test(async () => {
 
 promise_test(async () => {
   const { roundtripStringU32 } = await componentExports("values/map", {
-    echoStringU32: () => ({ z: 26 }), echoF64String: x => x, echoU32String: x => x,
+    echoStringU32: () => ({ z: 26 }), echoS64String: x => x, echoU32String: x => x,
   });
   assert_value_equals(roundtripStringU32(new Map()), new Map([["z", 26]]));
 }, "map: an import may return a plain object for string keys");
 
 promise_test(async () => {
   const { roundtripStringU32 } = await componentExports("values/map", {
-    echoStringU32: () => 5, echoF64String: x => x, echoU32String: x => x,
+    echoStringU32: () => 5, echoS64String: x => x, echoU32String: x => x,
   });
   assert_traps(() => roundtripStringU32(new Map()));
 }, "map: an import returning a non-object traps");

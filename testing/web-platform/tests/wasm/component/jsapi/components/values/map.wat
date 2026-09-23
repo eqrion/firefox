@@ -1,7 +1,7 @@
-;; Passthrough for map<K, V> with string, f64 and u32 keys.
+;; Passthrough for map<K, V> with string, s64 and u32 keys.
 (component
   (import "echo-string-u32" (func $echo-string-u32 (param "x" (map string u32)) (result (map string u32))))
-  (import "echo-f64-string" (func $echo-f64-string (param "x" (map f64 string)) (result (map f64 string))))
+  (import "echo-s64-string" (func $echo-s64-string (param "x" (map s64 string)) (result (map s64 string))))
   (import "echo-u32-string" (func $echo-u32-string (param "x" (map u32 string)) (result (map u32 string))))
 
   (core module $Memory
@@ -26,24 +26,24 @@
   (core instance $memory (instantiate $Memory))
 
   (core func $echo-string-u32' (canon lower (func $echo-string-u32) (memory (core memory $memory "mem")) (realloc (core func $memory "realloc"))))
-  (core func $echo-f64-string' (canon lower (func $echo-f64-string) (memory (core memory $memory "mem")) (realloc (core func $memory "realloc"))))
+  (core func $echo-s64-string' (canon lower (func $echo-s64-string) (memory (core memory $memory "mem")) (realloc (core func $memory "realloc"))))
   (core func $echo-u32-string' (canon lower (func $echo-u32-string) (memory (core memory $memory "mem")) (realloc (core func $memory "realloc"))))
 
   (core module $M
     (import "" "mem" (memory 1))
     (import "" "realloc" (func $realloc (param i32 i32 i32 i32) (result i32)))
     (import "" "echo-string-u32" (func $echo-string-u32 (param i32 i32 i32)))
-    (import "" "echo-f64-string" (func $echo-f64-string (param i32 i32 i32)))
+    (import "" "echo-s64-string" (func $echo-s64-string (param i32 i32 i32)))
     (import "" "echo-u32-string" (func $echo-u32-string (param i32 i32 i32)))
     (func (export "roundtrip-string-u32") (param i32 i32) (result i32)
       (local $ret i32)
       (local.set $ret (call $realloc (i32.const 0) (i32.const 0) (i32.const 8) (i32.const 256)))
       (call $echo-string-u32 (local.get 0) (local.get 1) (local.get $ret))
       (local.get $ret))
-    (func (export "roundtrip-f64-string") (param i32 i32) (result i32)
+    (func (export "roundtrip-s64-string") (param i32 i32) (result i32)
       (local $ret i32)
       (local.set $ret (call $realloc (i32.const 0) (i32.const 0) (i32.const 8) (i32.const 256)))
-      (call $echo-f64-string (local.get 0) (local.get 1) (local.get $ret))
+      (call $echo-s64-string (local.get 0) (local.get 1) (local.get $ret))
       (local.get $ret))
     (func (export "roundtrip-u32-string") (param i32 i32) (result i32)
       (local $ret i32)
@@ -55,7 +55,7 @@
     (export "mem" (memory $memory "mem"))
     (export "realloc" (func $memory "realloc"))
     (export "echo-string-u32" (func $echo-string-u32'))
-    (export "echo-f64-string" (func $echo-f64-string'))
+    (export "echo-s64-string" (func $echo-s64-string'))
     (export "echo-u32-string" (func $echo-u32-string'))
   ))))
 
@@ -63,10 +63,10 @@
     (canon lift (core func $m "roundtrip-string-u32")
       (memory (core memory $memory "mem")) (realloc (core func $memory "realloc"))))
   (export "roundtrip-string-u32" (func $roundtrip-string-u32))
-  (func $roundtrip-f64-string (param "x" (map f64 string)) (result (map f64 string))
-    (canon lift (core func $m "roundtrip-f64-string")
+  (func $roundtrip-s64-string (param "x" (map s64 string)) (result (map s64 string))
+    (canon lift (core func $m "roundtrip-s64-string")
       (memory (core memory $memory "mem")) (realloc (core func $memory "realloc"))))
-  (export "roundtrip-f64-string" (func $roundtrip-f64-string))
+  (export "roundtrip-s64-string" (func $roundtrip-s64-string))
   (func $roundtrip-u32-string (param "x" (map u32 string)) (result (map u32 string))
     (canon lift (core func $m "roundtrip-u32-string")
       (memory (core memory $memory "mem")) (realloc (core func $memory "realloc"))))
