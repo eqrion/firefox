@@ -58,6 +58,16 @@ struct MOZ_STACK_CLASS CanonOptValues {
     HandleObject host, const CanonOptValues& opts,
     MutableHandleFunction result);
 
+// Creates the core function for a canon resource.new, resource.rep, or
+// resource.drop of the resource type at index `resourceType` of
+// Component::resourceTypes(). `dtor` is the destructor that resource.drop
+// calls, if any.
+[[nodiscard]] bool CreateResourceBuiltinFunction(
+    JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+    ComponentResourceBuiltin::Kind kind, uint32_t resourceType,
+    const TypeDef& coreFuncType, HandleFunction dtor,
+    MutableHandleFunction result);
+
 // ToComponentValue for an integer of type `kind`, a ComponentTypeKind. On
 // success, returns 0 and puts the integer's bits in the instance's scratch.
 int32_t CmToInteger(Instance* instance, void* ctxRef, void* valueRef,
@@ -198,6 +208,22 @@ int32_t CmStoreLatin1ToUTF16(Instance* instance, void* strRef, int32_t ptr,
 // ComponentStringEncoding.
 void* CmStringToJS(Instance* instance, int32_t ptr, int32_t taggedLength,
                    int32_t encoding);
+
+// The canonical ABI's resource.new, resource.rep, and resource.drop, for the
+// resource type at index `resourceType` of Component::resourceTypes().
+// CmResourceRep puts the rep in the instance's scratch. CmResourceDrop returns
+// 1 if the resource's destructor, if any, should be called with the rep in the
+// instance's scratch, and 0 otherwise.
+int32_t CmResourceNew(Instance* instance, void* ctxRef, int32_t rep,
+                      int32_t resourceType);
+int32_t CmResourceRep(Instance* instance, void* ctxRef, int32_t handle,
+                      int32_t resourceType);
+int32_t CmResourceDrop(Instance* instance, void* ctxRef, int32_t handle,
+                       int32_t resourceType);
+
+// Sets the canonical ABI's may_leave, and traps unless it is set.
+void CmSetMayLeave(Instance* instance, void* ctxRef, int32_t mayLeave);
+int32_t CmCheckMayLeave(Instance* instance, void* ctxRef);
 
 // Traps for the given AdapterTrap reason. Always fails.
 int32_t CmTrap(Instance* instance, int32_t reason);

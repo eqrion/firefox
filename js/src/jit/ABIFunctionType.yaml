@@ -360,6 +360,9 @@
   args: [General, General, General, Int32]
 
 - ret: Void
+  args: [General, General, Int32]
+
+- ret: Void
   args: [General, Int32]
 
 - ret: Void

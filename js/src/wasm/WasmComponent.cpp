@@ -1318,6 +1318,9 @@ bool Component::addImport(ComponentImport&& import) {
     return false;
   }
   numImportedItems_ += numItems;
+  if (!addImportedResourceTypes(import.externDesc())) {
+    return false;
+  }
 
   // Add import to imports vector
   uint32_t importIndex = imports_.length();
@@ -1360,9 +1363,65 @@ bool Component::addImport(ComponentImport&& import) {
   return true;
 }
 
+bool Component::addResourceType(const ComponentType& type) {
+  MOZ_ASSERT(type.kind() == ComponentTypeKind::Resource ||
+             type.kind() == ComponentTypeKind::SubResource);
+  auto p = resourceTypeIndices_.lookupForAdd(type.typeDef().get());
+  MOZ_ASSERT(!p);
+  return resourceTypeIndices_.add(p, type.typeDef().get(),
+                                  resourceTypes_.length()) &&
+         resourceTypes_.append(type);
+}
+
+bool Component::aliasResourceType(const ComponentType& alias,
+                                  const ComponentType& type) {
+  uint32_t index = resourceTypeIndex(type);
+  auto p = resourceTypeIndices_.lookupForAdd(alias.typeDef().get());
+  return p || resourceTypeIndices_.add(p, alias.typeDef().get(), index);
+}
+
+uint32_t Component::resourceTypeIndex(const ComponentType& type) const {
+  auto p = resourceTypeIndices_.lookup(type.typeDef().get());
+  MOZ_RELEASE_ASSERT(p);
+  return p->value();
+}
+
+bool Component::addImportedResourceTypes(const ComponentExternDesc& desc) {
+  switch (desc.sort()) {
+    case ComponentSort::Type: {
+      ComponentType type = desc.asType();
+      if (type.kind() == ComponentTypeKind::SubResource &&
+          !resourceTypeIndices_.has(type.typeDef().get())) {
+        return addResourceType(type);
+      }
+      return true;
+    }
+    case ComponentSort::Instance:
+      for (const ComponentInstanceTypeExport& exp :
+           desc.asInstance().asInstance().exports()) {
+        if (!addImportedResourceTypes(exp.desc)) {
+          return false;
+        }
+      }
+      return true;
+    default:
+      return true;
+  }
+}
+
 bool Component::addExport(ComponentExport&& exp) {
   ComponentSort sort = exp.externDesc().sort();
   MOZ_ASSERT(ComponentSortValidForExternDesc(sort));
+
+  // An exported resource type may be ascribed a new (sub resource) bound, which
+  // is still the exported resource type.
+  if (sort == ComponentSort::Type) {
+    ComponentType type = exp.externDesc().asType();
+    if (type.kind() == ComponentTypeKind::SubResource &&
+        !aliasResourceType(type, getType(exp.item().index))) {
+      return false;
+    }
+  }
 
   // Add export to exports vector
   uint32_t exportIndex = exports_.length();
@@ -1655,6 +1714,42 @@ void ComponentInstance::tracePrivate(JSTracer* trc) {
   importValues_.trace(trc);
   loweredFuncs_.trace(trc);
   TraceEdge(trc, &pendingErrorData_, "component pending error data");
+  handles_.trace(trc);
+}
+
+void ComponentResourceHandle::trace(JSTracer* trc) {
+  TraceEdge(trc, &hostValue, "component resource handle host value");
+}
+
+bool ComponentHandleTable::add(ComponentResourceHandle&& handle,
+                               uint32_t* index) {
+  if (!free_.empty()) {
+    *index = free_.popCopy();
+    handles_[*index] = std::move(handle);
+    return true;
+  }
+  if (handles_.length() > MaxLength) {
+    *index = 0;
+    return true;
+  }
+  // Every index can be freed, so reserve room for it in the free list.
+  *index = handles_.length();
+  return free_.reserve(handles_.length()) && handles_.append(std::move(handle));
+}
+
+ComponentResourceHandle* ComponentHandleTable::get(uint32_t index) {
+  if (index == 0 || index >= handles_.length() || handles_[index].isFree()) {
+    return nullptr;
+  }
+  return &handles_[index];
+}
+
+void ComponentHandleTable::remove(uint32_t index,
+                                  ComponentResourceHandle* removed) {
+  MOZ_ASSERT(get(index));
+  *removed = std::move(handles_[index]);
+  handles_[index] = ComponentResourceHandle();
+  free_.infallibleAppend(index);
 }
 
 // The JS-API's "find an accessor".
@@ -2012,6 +2107,46 @@ bool ComponentInstance::getLoweredFunc(
   return true;
 }
 
+bool ComponentInstance::getResourceBuiltinFunc(
+    JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+    uint32_t coreFuncIndex, const ComponentResourceBuiltin& builtin,
+    MutableHandleValue val) {
+  if (loweredFuncs_[coreFuncIndex]) {
+    val.setObject(*loweredFuncs_[coreFuncIndex]);
+    return true;
+  }
+
+  // Dropping an owned resource of a resource type defined by the component
+  // calls its destructor.
+  const ComponentType& resourceType = builtin.resourceType();
+  RootedFunction dtor(cx);
+  if (builtin.kind() == ComponentResourceBuiltin::Kind::ResourceDrop &&
+      resourceType.kind() == ComponentTypeKind::Resource) {
+    mozilla::Maybe<uint32_t> dtorIndex = resourceType.asResource().dtorIndex();
+    if (dtorIndex) {
+      RootedValue dtorValue(cx);
+      if (!getCoreItemValue(
+              cx, instanceObj,
+              ComponentSortIndex(ComponentSort::CoreFunction, *dtorIndex),
+              &dtorValue)) {
+        return false;
+      }
+      dtor = &dtorValue.toObject().as<JSFunction>();
+    }
+  }
+
+  RootedFunction result(cx);
+  if (!CreateResourceBuiltinFunction(
+          cx, instanceObj, builtin.kind(),
+          component_->resourceTypeIndex(resourceType),
+          component_->getTypeForCoreFunc(coreFuncIndex), dtor, &result)) {
+    return false;
+  }
+  loweredFuncs_[coreFuncIndex] = result;
+  val.setObject(*result);
+  return true;
+}
+
 bool ComponentInstance::getCoreItemValue(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     ComponentSortIndex sortIndex, MutableHandleValue val) {
@@ -2029,9 +2164,9 @@ bool ComponentInstance::getCoreItemValue(
                               val);
       }
 
-      // TODO(wasm-cm): Resource builtins just trap for now.
-      return GenerateDummyLoweredFunc(
-          cx, &component_->getTypeForCoreFunc(sortIndex.index), val);
+      return getResourceBuiltinFunc(
+          cx, instanceObj, sortIndex.index,
+          desc.payload().as<ComponentResourceBuiltin>(), val);
     }
     case ComponentItem::ItemKind::Alias: {
       MOZ_RELEASE_ASSERT(item.aliasKind() == ComponentAliasKind::CoreExport);
@@ -2111,7 +2246,8 @@ bool ComponentInstance::createInlineExportsObject(
 
 bool ComponentInstance::init(JSContext* cx,
                              Handle<WasmComponentInstanceObject*> instanceObj) {
-  if (!loweredFuncs_.resize(component_->coreFuncs().length())) {
+  if (!loweredFuncs_.resize(component_->coreFuncs().length()) ||
+      !handles_.init()) {
     ReportOutOfMemory(cx);
     return false;
   }

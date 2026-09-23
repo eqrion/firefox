@@ -977,6 +977,23 @@ class Component : public JS::WasmComponent {
   // Whether the JS-API's `wasm:js/global` builtin is enabled for imports.
   bool jsGlobalBuiltin_ = false;
 
+  // See resourceTypes(). Several types can be the same resource type, as when
+  // a resource type is exported with an ascribed (sub resource) bound, so this
+  // maps each of them to the index of its resource type.
+  ComponentTypeVector resourceTypes_;
+  mozilla::HashMap<const ComponentTypeDef*, uint32_t,
+                   mozilla::DefaultHasher<const ComponentTypeDef*>,
+                   SystemAllocPolicy>
+      resourceTypeIndices_;
+
+  // Adds a new resource type, or makes `alias` another name for the resource
+  // type of `type`.
+  [[nodiscard]] bool addResourceType(const ComponentType& type);
+  [[nodiscard]] bool aliasResourceType(const ComponentType& alias,
+                                       const ComponentType& type);
+  // Adds the resource types declared by an import.
+  [[nodiscard]] bool addImportedResourceTypes(const ComponentExternDesc& desc);
+
   template <typename T>
   bool addDefinedItem(
       ComponentSort sort, T&& item,
@@ -1026,9 +1043,17 @@ class Component : public JS::WasmComponent {
   ComponentType getType(uint32_t typeIndex) const;
   [[nodiscard]] bool addType(ComponentType&& type) {
     MOZ_RELEASE_ASSERT(type.isValid());
+    if (type.kind() == ComponentTypeKind::Resource && !addResourceType(type)) {
+      return false;
+    }
     return addDefinedItem(ComponentSort::Type, std::move(type), definedTypes_,
                           types_);
   }
+
+  // The distinct resource types that the component defines or imports, which
+  // are referred to by their index among them.
+  const ComponentTypeVector& resourceTypes() const { return resourceTypes_; }
+  uint32_t resourceTypeIndex(const ComponentType& type) const;
 
   // TODO(wasm-cm): Functions for components
 
@@ -1168,6 +1193,46 @@ using SharedComponent = RefPtr<const Component>;
 
 struct CanonOptValues;
 
+// A handle to a resource in a component instance's handle table.
+struct ComponentResourceHandle {
+  // The index of the handle's resource type in Component::resourceTypes().
+  uint32_t resourceType = UINT32_MAX;
+  bool own = false;
+  // The number of calls that the handle is lent to, as a borrow.
+  uint32_t numLends = 0;
+  // For a borrow, the call scope it was lent for. See
+  // ComponentInstance::callScopes_.
+  uint32_t borrowScope = 0;
+  // The representation of a resource type defined by the component.
+  int32_t rep = 0;
+  // The JS value of a resource of an imported resource type.
+  HeapPtr<JS::Value> hostValue;
+
+  bool isFree() const { return resourceType == UINT32_MAX; }
+  void trace(JSTracer* trc);
+};
+
+// The canonical ABI's table of a component instance's resource handles. Index
+// 0 is never used.
+class ComponentHandleTable {
+  GCVector<ComponentResourceHandle, 0, SystemAllocPolicy> handles_;
+  mozilla::Vector<uint32_t, 0, SystemAllocPolicy> free_;
+
+ public:
+  static constexpr uint32_t MaxLength = (1u << 28) - 1;
+
+  [[nodiscard]] bool init() { return handles_.resize(1); }
+
+  // Adds a handle, returning its index, or 0 if the table is full.
+  [[nodiscard]] bool add(ComponentResourceHandle&& handle, uint32_t* index);
+  // Gets a handle, or null if there is none at `index`.
+  ComponentResourceHandle* get(uint32_t index);
+  // Removes the handle at `index`, which must exist.
+  void remove(uint32_t index, ComponentResourceHandle* removed);
+
+  void trace(JSTracer* trc) { handles_.trace(trc); }
+};
+
 class ComponentInstance {
   // The containing JS::Realm.
   JS::Realm* realm_;
@@ -1207,6 +1272,13 @@ class ComponentInstance {
   // failure value, until the adapter code reads it.
   uint64_t scratch_ = 0;
 
+  // The canonical ABI's may_leave, which is false while the canonical ABI calls
+  // realloc or post-return, when the instance may not call out or use its
+  // handle table.
+  bool mayLeave_ = true;
+
+  ComponentHandleTable handles_;
+
   // The data of the ComponentError that a lifted function returning a
   // `result` error is about to throw.
   bool hasPendingError_ = false;
@@ -1227,6 +1299,10 @@ class ComponentInstance {
   [[nodiscard]] bool getLoweredFunc(
       JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
       uint32_t coreFuncIndex, const ComponentLoweredFuncDesc& lowered,
+      MutableHandleValue val);
+  [[nodiscard]] bool getResourceBuiltinFunc(
+      JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+      uint32_t coreFuncIndex, const ComponentResourceBuiltin& builtin,
       MutableHandleValue val);
   [[nodiscard]] bool instantiateCoreModule(
       JSContext* cx, const CoreInstanceDescFromModule& desc,
@@ -1281,6 +1357,11 @@ class ComponentInstance {
 
   uint64_t scratch() const { return scratch_; }
   void setScratch(uint64_t value) { scratch_ = value; }
+
+  bool mayLeave() const { return mayLeave_; }
+  void setMayLeave(bool mayLeave) { mayLeave_ = mayLeave; }
+
+  ComponentHandleTable& handles() { return handles_; }
 
   void setPendingError(const JS::Value& data) {
     hasPendingError_ = true;

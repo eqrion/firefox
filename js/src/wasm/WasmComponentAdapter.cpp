@@ -695,6 +695,14 @@ struct AdapterContext {
          f.memoryAccess(Op::I32Store, 2, loc.offset() + 4 * index);
 }
 
+// Sets the canonical ABI's may_leave, which is cleared while calling realloc
+// and post-return.
+[[nodiscard]] static bool EmitSetMayLeave(AdapterFuncEncoder& f,
+                                          bool mayLeave) {
+  return f.ctx() && f.i32Const(mayLeave) &&
+         f.callBuiltin(BuiltinModuleFuncId::CmSetMayLeave);
+}
+
 // Calls realloc, with `emitOld` emitting its first two arguments, and stores
 // the result in local `ptr`.
 template <typename F>
@@ -705,12 +713,13 @@ template <typename F>
   MOZ_ASSERT(a.realloc != UINT32_MAX);
   return (!a.enterGuest ||
           (f.ctx() && f.callBuiltin(BuiltinModuleFuncId::CmEnterGuest))) &&
+         EmitSetMayLeave(f, false) &&
          f.callGuest(a.realloc, mozilla::Some(ValType::I32),
                      [&]() {
                        return emitOld() && f.i32Const(alignment) &&
                               f.localGet(newSize);
                      }) &&
-         f.localSet(ptr);
+         f.localSet(ptr) && EmitSetMayLeave(f, true);
 }
 
 // The canonical ABI's allocate, of the size in local `size`.
@@ -2228,9 +2237,11 @@ template <typename F, typename G>
   }
 
   if (postReturn != UINT32_MAX) {
-    ok = ok && f.callGuest(postReturn, mozilla::Nothing(), [&]() {
-      return !calleeResultType || f.localGet(calleeResult);
-    });
+    ok = ok && EmitSetMayLeave(f, false) &&
+         f.callGuest(
+             postReturn, mozilla::Nothing(),
+             [&]() { return !calleeResultType || f.localGet(calleeResult); }) &&
+         EmitSetMayLeave(f, true);
   }
   if (funcType.resultType) {
     ok = ok && f.localGet(jsResult);
@@ -2412,6 +2423,10 @@ bool wasm::CreateLoweredFunction(
   AdapterFuncEncoder f(builder.types(), coreType.args().length());
   AdapterContext a{builder, f, opts.stringEncoding, realloc,
                    /*enterGuest=*/false};
+  if (!f.ctx() || !f.callBuiltin(BuiltinModuleFuncId::CmCheckMayLeave)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
 
   mozilla::Maybe<ComponentType> paramTuple;
   if (!GetParamsInMemory(funcType, &paramTuple)) {
@@ -2527,8 +2542,73 @@ bool wasm::CreateLoweredFunction(
 // ============================================================================
 // Builtins
 
+// Generates the core function for a resource builtin, which calls the builtin
+// module function for it, and for resource.drop, the destructor:
+//
+//   (func (param $handle i32) (result i32)?
+//     (call $CmResource* (global.get $ctx) (local.get $handle) (i32.const rt))
+//     ;; for resource.rep, the rep from scratch
+//     ;; for resource.drop, if the result is 1, call $dtor with the rep
+//   )
+bool wasm::CreateResourceBuiltinFunction(
+    JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+    ComponentResourceBuiltin::Kind kind, uint32_t resourceType,
+    const TypeDef& coreFuncType, HandleFunction dtor,
+    MutableHandleFunction result) {
+  using Id = BuiltinModuleFuncId;
+  using Kind = ComponentResourceBuiltin::Kind;
+  MOZ_ASSERT_IF(dtor, kind == Kind::ResourceDrop);
+
+  AdapterModuleBuilder builder(cx);
+  uint32_t dtorIndex = UINT32_MAX;
+  if (!builder.init(instanceObj) ||
+      (dtor && !builder.importWasmFunc(dtor, &dtorIndex)) ||
+      !builder.defineAdapterFuncWithType(coreFuncType)) {
+    return false;
+  }
+
+  AdapterFuncEncoder f(builder.types(), 1);
+  bool ok = f.ctx() && f.localGet(0) && f.i32Const(int32_t(resourceType));
+  switch (kind) {
+    case Kind::ResourceNew:
+      ok = ok && f.callBuiltin(Id::CmResourceNew);
+      break;
+    case Kind::ResourceRep:
+      ok = ok && f.callBuiltin(Id::CmResourceRep) && f.ctx() &&
+           f.callBuiltin(Id::CmScratchI32);
+      break;
+    case Kind::ResourceDrop:
+      ok = ok && f.callBuiltin(Id::CmResourceDrop);
+      if (dtor) {
+        ok = ok && f.block(Op::If, mozilla::Nothing()) &&
+             f.callGuest(dtorIndex, mozilla::Nothing(),
+                         [&]() {
+                           return f.ctx() && f.callBuiltin(Id::CmScratchI32);
+                         }) &&
+             f.op(Op::End);
+      } else {
+        ok = ok && f.op(Op::Drop);
+      }
+      break;
+  }
+
+  Bytes body;
+  if (!ok || !f.finish(&body)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  return builder.finish(body, result);
+}
+
 static ComponentInstance& InstanceFromCtx(HandleObject ctx) {
   return ctx->as<WasmComponentInstanceObject>().instance();
+}
+
+static ComponentInstance& InstanceFromCtxRef(void* ctxRef) {
+  return AnyRef::fromCompiledCode(ctxRef)
+      .toJSObject()
+      .as<WasmComponentInstanceObject>()
+      .instance();
 }
 
 // The canonical ABI's lift_flat_signed and lift_flat_unsigned, which keep only
@@ -3580,6 +3660,102 @@ void* wasm::CmStringToJS(Instance* instance, int32_t ptr, int32_t taggedLength,
   }
   RootedValue value(cx, StringValue(str));
   return ExternRefForCompiledCode(cx, value);
+}
+
+// Gets the handle at `index`, trapping unless it has the given resource type.
+static ComponentResourceHandle* GetResourceHandle(JSContext* cx,
+                                                  ComponentInstance& instance,
+                                                  int32_t index,
+                                                  int32_t resourceType) {
+  ComponentResourceHandle* handle = instance.handles().get(uint32_t(index));
+  if (!handle) {
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_BAD_HANDLE);
+    return nullptr;
+  }
+  if (handle->resourceType != uint32_t(resourceType)) {
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_WRONG_RESOURCE_TYPE);
+    return nullptr;
+  }
+  return handle;
+}
+
+static bool CheckMayLeave(JSContext* cx, const ComponentInstance& instance) {
+  if (!instance.mayLeave()) {
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_MAY_NOT_LEAVE);
+    return false;
+  }
+  return true;
+}
+
+int32_t wasm::CmResourceNew(Instance* instance, void* ctxRef, int32_t rep,
+                            int32_t resourceType) {
+  MOZ_ASSERT(SASigCmResourceNew.failureMode == FailureMode::FailOnNegI32);
+  JSContext* cx = instance->cx();
+  ComponentInstance& componentInstance = InstanceFromCtxRef(ctxRef);
+  if (!CheckMayLeave(cx, componentInstance)) {
+    return -1;
+  }
+  ComponentResourceHandle handle;
+  handle.resourceType = uint32_t(resourceType);
+  handle.own = true;
+  handle.rep = rep;
+  uint32_t index;
+  if (!componentInstance.handles().add(std::move(handle), &index)) {
+    ReportOutOfMemory(cx);
+    return -1;
+  }
+  if (index == 0) {
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_TABLE_FULL);
+    return -1;
+  }
+  return int32_t(index);
+}
+
+int32_t wasm::CmResourceRep(Instance* instance, void* ctxRef, int32_t handle,
+                            int32_t resourceType) {
+  MOZ_ASSERT(SASigCmResourceRep.failureMode == FailureMode::FailOnNegI32);
+  ComponentInstance& componentInstance = InstanceFromCtxRef(ctxRef);
+  ComponentResourceHandle* h = GetResourceHandle(
+      instance->cx(), componentInstance, handle, resourceType);
+  if (!h) {
+    return -1;
+  }
+  componentInstance.setScratch(uint32_t(h->rep));
+  return 0;
+}
+
+int32_t wasm::CmResourceDrop(Instance* instance, void* ctxRef, int32_t handle,
+                             int32_t resourceType) {
+  MOZ_ASSERT(SASigCmResourceDrop.failureMode == FailureMode::FailOnNegI32);
+  JSContext* cx = instance->cx();
+  ComponentInstance& componentInstance = InstanceFromCtxRef(ctxRef);
+  if (!CheckMayLeave(cx, componentInstance)) {
+    return -1;
+  }
+  ComponentResourceHandle* h =
+      GetResourceHandle(cx, componentInstance, handle, resourceType);
+  if (!h) {
+    return -1;
+  }
+  if (h->numLends != 0) {
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_HANDLE_LENT);
+    return -1;
+  }
+  ComponentResourceHandle removed;
+  componentInstance.handles().remove(uint32_t(handle), &removed);
+  MOZ_RELEASE_ASSERT(removed.own);
+  componentInstance.setScratch(uint32_t(removed.rep));
+  return 1;
+}
+
+void wasm::CmSetMayLeave(Instance* instance, void* ctxRef, int32_t mayLeave) {
+  MOZ_ASSERT(SASigCmSetMayLeave.failureMode == FailureMode::Infallible);
+  InstanceFromCtxRef(ctxRef).setMayLeave(mayLeave);
+}
+
+int32_t wasm::CmCheckMayLeave(Instance* instance, void* ctxRef) {
+  MOZ_ASSERT(SASigCmCheckMayLeave.failureMode == FailureMode::FailOnNegI32);
+  return CheckMayLeave(instance->cx(), InstanceFromCtxRef(ctxRef)) ? 0 : -1;
 }
 
 int32_t wasm::CmTrap(Instance* instance, int32_t reason) {
