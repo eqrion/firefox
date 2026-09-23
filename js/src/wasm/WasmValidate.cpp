@@ -5946,6 +5946,197 @@ enum class ComponentTypeBoundKindRaw : uint8_t {
   return true;
 }
 
+// The names of the imports or exports in one scope: a component's imports, a
+// component's exports, or an instance type's exports. They must be
+// strongly-unique, and names with annotations like `[constructor]` must follow
+// the rules for them.
+class ComponentExternNames {
+  using Attr = ComponentNameAttribute;
+  using ResourceMap = mozilla::HashMap<CacheableName, ComponentType,
+                                       CacheableNameHasher, SystemAllocPolicy>;
+  using NameSet =
+      mozilla::HashSet<CacheableName, CacheableNameHasher, SystemAllocPolicy>;
+
+  // "import" or "export".
+  const char* thing_;
+  StronglyUniqueNameSet dedup_;
+  // The resource types with plain names, by name.
+  ResourceMap resources_;
+  // The names with a `[get]` annotation.
+  NameSet getters_;
+
+  static mozilla::Span<const char> WithoutPrefix(mozilla::Span<const char> name,
+                                                 std::string_view prefix) {
+    if (name.size() >= prefix.size() &&
+        std::string_view(name.data(), prefix.size()) == prefix) {
+      return name.From(prefix.size());
+    }
+    return name;
+  }
+
+  // The label of the resource type named by a `[constructor]`, `[method]`, or
+  // `[static]` name.
+  static mozilla::Span<const char> ResourceLabel(const ComponentName& name) {
+    mozilla::Span<const char> label = name.name.utf8Bytes();
+    for (std::string_view prefix :
+         {"[constructor]", "[method]", "[static]", "[get]", "[set]"}) {
+      label = WithoutPrefix(label, prefix);
+    }
+    auto dot = std::find(label.begin(), label.end(), '.');
+    return label.To(dot - label.begin());
+  }
+
+  static bool IsOwnOf(const ComponentType& type,
+                      const ComponentType& resource) {
+    return type.kind() == ComponentTypeKind::Own && type.asOwn() == resource;
+  }
+
+  [[nodiscard]] bool checkFuncType(Decoder& d, const ComponentName& name,
+                                   const ComponentFuncType& funcType,
+                                   const ComponentType* resource) {
+    ComponentNameAttributes attrs = name.attributes;
+    size_t numParams = funcType.paramTypes.length();
+
+    if (attrs.contains(Attr::Constructor)) {
+      bool valid = false;
+      if (funcType.resultType) {
+        const ComponentType& result = *funcType.resultType;
+        valid = IsOwnOf(result, *resource) ||
+                (result.kind() == ComponentTypeKind::Result &&
+                 result.asResult().type &&
+                 IsOwnOf(*result.asResult().type, *resource));
+      }
+      if (!valid) {
+        return d.failf("%s \"%.*s\" must return an owned resource", thing_,
+                       ComponentName_Printf(name.name));
+      }
+    }
+
+    size_t numSelfParams = 0;
+    if (attrs.contains(Attr::Method)) {
+      numSelfParams = 1;
+      if (numParams == 0 ||
+          funcType.paramNames[0].utf8Bytes() !=
+              mozilla::Span<const char>("self", 4) ||
+          funcType.paramTypes[0].kind() != ComponentTypeKind::Borrow ||
+          funcType.paramTypes[0].asBorrow() != *resource) {
+        return d.failf(
+            "%s \"%.*s\" must take a borrowed resource named \"self\" first",
+            thing_, ComponentName_Printf(name.name));
+      }
+    }
+
+    if (attrs.contains(Attr::Get) &&
+        (numParams != numSelfParams || !funcType.resultType)) {
+      return d.failf("getter %s \"%.*s\" must have no parameters and a result",
+                     thing_, ComponentName_Printf(name.name));
+    }
+    if (attrs.contains(Attr::Set)) {
+      const mozilla::Maybe<ComponentType>& result = funcType.resultType;
+      bool validResult =
+          !result || (result->kind() == ComponentTypeKind::Result &&
+                      !result->asResult().type);
+      if (numParams != numSelfParams + 1 || !validResult) {
+        return d.failf(
+            "setter %s \"%.*s\" must have one parameter and no result", thing_,
+            ComponentName_Printf(name.name));
+      }
+    }
+    return true;
+  }
+
+  // The name with `[set]` replaced by `[get]`.
+  static bool GetterName(const ComponentName& name, CacheableName* getter) {
+    mozilla::Span<const char> nameBytes = name.name.utf8Bytes();
+    UTF8Bytes bytes;
+    if (!bytes.append(nameBytes.data(), nameBytes.size())) {
+      return false;
+    }
+    std::string_view view(bytes.begin(), bytes.length());
+    size_t index = view.find("[set]");
+    MOZ_RELEASE_ASSERT(index != std::string_view::npos);
+    bytes[index + 1] = 'g';
+    *getter = CacheableName(std::move(bytes));
+    return true;
+  }
+
+ public:
+  explicit ComponentExternNames(const char* thing) : thing_(thing) {}
+
+  // Adds a name, given the type of what it names.
+  [[nodiscard]] bool add(Decoder& d, const ComponentName& name,
+                         const ComponentExternDesc& desc) {
+    ComponentNameAttributes attrs = name.attributes;
+    if (!attrs.isEmpty() && desc.sort() != ComponentSort::Func) {
+      return d.failf("annotated %s name \"%.*s\" must name a function", thing_,
+                     ComponentName_Printf(name.name));
+    }
+
+    bool duplicate;
+    if (!dedup_.add(name.name.utf8Bytes(), &duplicate)) {
+      return false;
+    }
+    if (duplicate) {
+      return d.failf("%s name \"%.*s\" is not strongly-unique", thing_,
+                     ComponentName_Printf(name.name));
+    }
+
+    mozilla::Maybe<ComponentType> resource;
+    if (attrs.contains(Attr::Constructor) || attrs.contains(Attr::Method) ||
+        attrs.contains(Attr::Static)) {
+      auto p = resources_.lookup(ResourceLabel(name));
+      if (!p) {
+        return d.failf("%s \"%.*s\" does not name a preceding resource type %s",
+                       thing_, ComponentName_Printf(name.name), thing_);
+      }
+      resource.emplace(p->value());
+    }
+    if (desc.sort() == ComponentSort::Func &&
+        !checkFuncType(d, name, desc.asFunc().asFunc(),
+                       resource.ptrOr(nullptr))) {
+      return false;
+    }
+    if (attrs.contains(Attr::Set)) {
+      CacheableName getter;
+      if (!GetterName(name, &getter)) {
+        return false;
+      }
+      if (!getters_.has(getter.utf8Bytes())) {
+        return d.failf("setter %s \"%.*s\" must follow its getter", thing_,
+                       ComponentName_Printf(name.name));
+      }
+    }
+
+    if (attrs.contains(Attr::Get)) {
+      CacheableName getter;
+      if (!name.name.clone(&getter)) {
+        return false;
+      }
+      auto p = getters_.lookupForAdd(getter.utf8Bytes());
+      MOZ_ASSERT(!p);
+      if (!getters_.add(p, std::move(getter))) {
+        return false;
+      }
+    }
+    if (attrs.isEmpty() && desc.sort() == ComponentSort::Type) {
+      ComponentType type = desc.asType();
+      if (type.kind() == ComponentTypeKind::Resource ||
+          type.kind() == ComponentTypeKind::SubResource) {
+        CacheableName label;
+        if (!name.name.clone(&label)) {
+          return false;
+        }
+        auto p = resources_.lookupForAdd(label.utf8Bytes());
+        MOZ_ASSERT(!p);
+        if (!resources_.add(p, std::move(label), type)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+};
+
 enum class ComponentInstanceDeclKindRaw : uint8_t {
   CoreType = 0x00,
   Type = 0x01,
@@ -6008,7 +6199,7 @@ enum class AliasKindRaw : uint8_t {
 
   ComponentTypeScope scope(outer);
   ComponentInstanceType instanceType;
-  StronglyUniqueNameSet exportNameDedup;
+  ComponentExternNames exportNames("export");
   for (uint32_t i = 0; i < numDecls; i++) {
     uint8_t kind;
     if (!d.readFixedU8(&kind)) {
@@ -6046,13 +6237,8 @@ enum class AliasKindRaw : uint8_t {
           return false;
         }
 
-        bool duplicate;
-        if (!exportNameDedup.add(name.name.utf8Bytes(), &duplicate)) {
+        if (!exportNames.add(d, name, desc)) {
           return false;
-        }
-        if (duplicate) {
-          return d.failf("export name \"%.*s\" is not strongly-unique",
-                         ComponentName_Printf(name.name));
         }
 
         if (desc.sort() == ComponentSort::Type) {
@@ -6849,7 +7035,7 @@ enum class CanonDefKindRaw : uint8_t {
 }
 
 static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
-                                  StronglyUniqueNameSet& nameDedup) {
+                                  ComponentExternNames& names) {
   ComponentName importName;
   if (!DecodeComponentExternName(d, "import", &importName)) {
     return false;
@@ -6869,20 +7055,15 @@ static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
     }
   }
 
-  bool duplicate;
-  if (!nameDedup.add(importName.name.utf8Bytes(), &duplicate)) {
+  if (!names.add(d, importName, externDesc)) {
     return false;
-  }
-  if (duplicate) {
-    return d.failf("import name \"%.*s\" is not strongly-unique",
-                   ComponentName_Printf(importName.name));
   }
 
   return c->addImport(ComponentImport(std::move(importName), externDesc));
 }
 
-[[nodiscard]] static bool DecodeComponentExport(
-    Decoder& d, MutableComponent& c, StronglyUniqueNameSet& nameDedup) {
+[[nodiscard]] static bool DecodeComponentExport(Decoder& d, MutableComponent& c,
+                                                ComponentExternNames& names) {
   ComponentName exportName;
   if (!DecodeComponentExternName(d, "export", &exportName)) {
     return false;
@@ -6956,15 +7137,8 @@ static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
   // restriction as well, including e.g. records but excluding e.g. s32. What is
   // this list? Who knows.)
 
-  // TODO(wasm-cm): Validate all the naming-related conditions
-
-  bool duplicate;
-  if (!nameDedup.add(exportName.name.utf8Bytes(), &duplicate)) {
+  if (!names.add(d, exportName, externDesc)) {
     return false;
-  }
-  if (duplicate) {
-    return d.failf("export name \"%.*s\" is not strongly-unique",
-                   ComponentName_Printf(exportName.name));
   }
 
   return c->addExport(
@@ -7071,7 +7245,7 @@ static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
 }
 
 [[nodiscard]] static bool DecodeComponentImportSection(
-    Decoder& d, MutableComponent& c, StronglyUniqueNameSet& nameDedup) {
+    Decoder& d, MutableComponent& c, ComponentExternNames& names) {
   uint32_t numImports;
   if (!d.readVarU32(&numImports)) {
     return d.fail("expected number of imports");
@@ -7081,7 +7255,7 @@ static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
   }
 
   for (uint32_t i = 0; i < numImports; i++) {
-    if (!DecodeComponentImport(d, c, nameDedup)) {
+    if (!DecodeComponentImport(d, c, names)) {
       return false;
     }
   }
@@ -7090,7 +7264,7 @@ static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
 }
 
 [[nodiscard]] static bool DecodeComponentExportSection(
-    Decoder& d, MutableComponent& c, StronglyUniqueNameSet& nameDedup) {
+    Decoder& d, MutableComponent& c, ComponentExternNames& names) {
   uint32_t numExports;
   if (!d.readVarU32(&numExports)) {
     return d.fail("expected number of exports");
@@ -7100,7 +7274,7 @@ static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
   }
 
   for (uint32_t i = 0; i < numExports; i++) {
-    if (!DecodeComponentExport(d, c, nameDedup)) {
+    if (!DecodeComponentExport(d, c, names)) {
       return false;
     }
   }
@@ -7117,8 +7291,8 @@ bool wasm::DecodeComponent(Decoder& d, MutableComponent c,
     return false;
   }
 
-  StronglyUniqueNameSet importNameDedup;
-  StronglyUniqueNameSet exportNameDedup;
+  ComponentExternNames importNames("import");
+  ComponentExternNames exportNames("export");
 
   while (!d.done()) {
     uint8_t sectionID;
@@ -7182,12 +7356,12 @@ bool wasm::DecodeComponent(Decoder& d, MutableComponent c,
           }
         } break;
         case uint8_t(ComponentSectionId::Import): {
-          if (!DecodeComponentImportSection(d, c, importNameDedup)) {
+          if (!DecodeComponentImportSection(d, c, importNames)) {
             return false;
           }
         } break;
         case uint8_t(ComponentSectionId::Export): {
-          if (!DecodeComponentExportSection(d, c, exportNameDedup)) {
+          if (!DecodeComponentExportSection(d, c, exportNames)) {
             return false;
           }
         } break;

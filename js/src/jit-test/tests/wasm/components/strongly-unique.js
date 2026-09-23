@@ -1,16 +1,31 @@
 // |jit-test| skip-if: !wasmComponentsEnabled()
 
 // We use imported functions as our oracle for strongly-uniqueness, as only
-// functions allow the full range of plain names.
+// functions allow the full range of plain names. A plain name that annotated
+// names refer to is imported as a resource type instead.
+function funcImport(name) {
+  const [, attrs, resource] = /^((?:\[[a-z]+\])*)([^.]*)/.exec(name);
+  if (attrs.includes("[constructor]")) {
+    return `(import "${name}" (func (result (own $${resource}))))`;
+  }
+  const self = attrs.includes("[method]") ? `(param "self" (borrow $${resource}))` : "";
+  const value = attrs.includes("[set]") ? `(param "v" u32)` : "";
+  const result = attrs.includes("[get]") ? "(result u32)" : "";
+  return `(import "${name}" (func ${self} ${value} ${result}))`;
+}
+function imports(names) {
+  const resources = new Set(names.map(n => /^(?:\[[a-z]+\])+([^.]+)/.exec(n)?.[1]));
+  return names.map(n => resources.has(n)
+    ? `(import "${n}" (type $${n} (sub resource)))`
+    : funcImport(n)).join("\n");
+}
 function assertAllStronglyUnique(names) {
-  wasmValidateText(`(component
-    ${names.map(n => `(import "${n}" (func))`).join("\n")}
-  )`);
+  wasmValidateText(`(component ${imports(names)})`);
 }
 function assertNotStronglyUnique(okNames, badName) {
   assertAllStronglyUnique(okNames);
   wasmFailValidateText(`(component
-    ${okNames.map(n => `(import "${n}" (func))`).join("\n")}
+    ${imports(okNames)}
     (import "${badName}" (func))
   )`, /not strongly-unique/);
 }
