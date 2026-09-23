@@ -51,8 +51,9 @@ SharedModule CompileModule(const CompileArgs& args,
 
 #ifdef ENABLE_WASM_COMPONENTS
 SharedComponent CompileComponent(
-    const CompileArgs& args, const BytecodeBufferOrSource& bytecode,
-    UniqueChars* error, UniqueCharsVector* warnings,
+    const CompileArgs& args, bool jsGlobalBuiltin,
+    const BytecodeBufferOrSource& bytecode, UniqueChars* error,
+    UniqueCharsVector* warnings,
     JS::OptimizedEncodingListener* listener = nullptr);
 #endif
 

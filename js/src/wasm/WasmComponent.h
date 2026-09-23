@@ -974,6 +974,9 @@ class Component : public JS::WasmComponent {
   mozilla::Vector<uint32_t, 0, SystemAllocPolicy> importFirstItems_;
   uint32_t numImportedItems_ = 0;
 
+  // Whether the JS-API's `wasm:js/global` builtin is enabled for imports.
+  bool jsGlobalBuiltin_ = false;
+
   template <typename T>
   bool addDefinedItem(
       ComponentSort sort, T&& item,
@@ -1000,6 +1003,9 @@ class Component : public JS::WasmComponent {
 
  public:
   Component() = default;
+
+  bool jsGlobalBuiltin() const { return jsGlobalBuiltin_; }
+  void setJSGlobalBuiltin(bool enabled) { jsGlobalBuiltin_ = enabled; }
 
   // --------------------------------------------------------------------------
   // Accessors and adders for each index space
@@ -1233,11 +1239,17 @@ class ComponentInstance {
       const ComponentInlineExports& inlineExports,
       MutableHandleObject exportsObj);
   // Reads the import (or instance export) `name` from `importObj`, if it is
-  // not null, into the imported items starting at `firstItem`.
+  // not null, into the imported items starting at `firstItem`. Builtins are
+  // only resolved for the component's own imports, when `resolveBuiltins`.
   [[nodiscard]] bool readImport(JSContext* cx, HandleObject importObj,
                                 const ComponentName& name,
                                 const ComponentExternDesc& desc,
-                                uint32_t firstItem);
+                                uint32_t firstItem, bool resolveBuiltins);
+  // The JS-API's "resolve a builtin specifier", which sets `isBuiltin` and
+  // `value` if `name` is an enabled builtin.
+  [[nodiscard]] bool resolveBuiltin(JSContext* cx, const ComponentName& name,
+                                    bool* isBuiltin,
+                                    MutableHandleValue value) const;
 
  public:
   ComponentInstance(JSContext* cx, Handle<WasmComponentInstanceObject*> object,
