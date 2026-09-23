@@ -87,6 +87,38 @@ if (!("setTimeout" in this)) {
   this.clearInterval = this.clearTimeout;
 }
 
+// fetch, restricted to reading files from the web-platform-tests tree.
+// <https://fetch.spec.whatwg.org/#fetch-method>
+if (!("fetch" in this) && "os" in this) {
+  const roots = [
+    ["/_mozilla/", "../../../testing/web-platform/mozilla/tests/"],
+    ["/", "../../../testing/web-platform/tests/"],
+  ];
+  const readFile = os.file.readRelativeToScript;
+
+  this.fetch = async function (url) {
+    url = String(url);
+    const root = roots.find(([prefix]) => url.startsWith(prefix));
+    if (!root) {
+      throw new TypeError(`fetch: unsupported URL ${url}`);
+    }
+    const [prefix, dir] = root;
+    let bytes;
+    try {
+      bytes = readFile(dir + url.slice(prefix.length), "binary");
+    } catch (e) {
+      return { ok: false, status: 404 };
+    }
+    return {
+      ok: true,
+      status: 200,
+      async arrayBuffer() {
+        return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      },
+    };
+  };
+}
+
 // Some tests in web platform tests leave promise rejections unhandled.
 if ("ignoreUnhandledRejections" in this) {
   ignoreUnhandledRejections();
