@@ -735,6 +735,8 @@ class ComponentInlineExports {
   bool addExport(Builder* builder, CacheableName&& name,
                  ComponentSortIndex exported);
 
+  const ExportMap& exports() const { return exports_; }
+
   // Gets a sortidx representing the given exported item within this
   // inline-export instance (i.e. not the original sortidx of the item being
   // re-exported).
@@ -743,11 +745,6 @@ class ComponentInlineExports {
   // Given an export that originated from this instance, resolves the sortidx of
   // the original item being re-exported. Crashes if the item does not exist.
   ComponentSortIndex resolveOriginal(ComponentSortIndex expFromThis) const;
-
-  // Combines getExport + resolveOriginal to get the original sortidx within the
-  // component, for a given export name.
-  ComponentSortIndex mustResolveExportToOriginal(
-      const CacheableName& name) const;
 };
 
 // Instructions for instantiating a core instance.
@@ -1091,17 +1088,28 @@ class ComponentInstance {
   // The wasm::Component for this instance.
   const SharedComponent component_;
 
-  using CoreInstanceVector =
-      GCVector<HeapPtr<WasmInstanceObject*>, 0, SystemAllocPolicy>;
-  // An array of all the core instances owned by this component instance. NOTE!
-  // This array is sparse; its indices will always correspond 1:1 with
-  // Component::coreInstances(), but not all such instances will get a
-  // WasmInstanceObject.
-  CoreInstanceVector coreInstances_;
+  using CoreInstanceExportsVector =
+      GCVector<HeapPtr<JSObject*>, 0, SystemAllocPolicy>;
+  // The exports object of every core instance, whether instantiated from a
+  // module or built from inline exports. Indices correspond 1:1 with
+  // Component::coreInstances().
+  CoreInstanceExportsVector coreInstanceExports_;
 
   // Only WasmComponentInstanceObject can call the private trace function.
   friend class js::WasmComponentInstanceObject;
   void tracePrivate(JSTracer* trc);
+
+  // Gets the JS value of a core func, table, memory, global, or tag in the
+  // component's index spaces.
+  [[nodiscard]] bool getCoreItemValue(JSContext* cx,
+                                      ComponentSortIndex sortIndex,
+                                      MutableHandleValue val) const;
+  [[nodiscard]] bool instantiateCoreModule(
+      JSContext* cx, const CoreInstanceDescFromModule& desc,
+      MutableHandleObject exportsObj) const;
+  [[nodiscard]] bool createInlineExportsObject(
+      JSContext* cx, const ComponentInlineExports& inlineExports,
+      MutableHandleObject exportsObj) const;
 
  public:
   ComponentInstance(JSContext* cx, Handle<WasmComponentInstanceObject*> object,
@@ -1115,14 +1123,13 @@ class ComponentInstance {
 
   [[nodiscard]] bool init(JSContext* cx);
 
-  // Gets a core instance object for a given index in the component, if one
-  // exists. (It may not; inline-export instances do not get actual objects.)
-  // The result may therefore be null.
-  WasmInstanceObject* coreInstance(uint32_t index) const {
-    if (coreInstances_.length() <= index) {
+  // Gets the exports object of a core instance, or null if the index is out of
+  // range.
+  JSObject* coreInstanceExports(uint32_t index) const {
+    if (coreInstanceExports_.length() <= index) {
       return nullptr;
     }
-    return coreInstances_[index];
+    return coreInstanceExports_[index];
   }
 };
 

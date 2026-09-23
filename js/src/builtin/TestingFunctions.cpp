@@ -2517,11 +2517,12 @@ static bool WasmGcArrayLength(JSContext* cx, unsigned argc, Value* vp) {
 }
 
 #ifdef ENABLE_WASM_COMPONENTS
-static bool WasmComponentCoreInstance(JSContext* cx, unsigned argc, Value* vp) {
+static bool WasmComponentCoreInstanceExports(JSContext* cx, unsigned argc,
+                                             Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
   RootedObject callee(cx, &args.callee());
 
-  if (!args.requireAtLeast(cx, "wasmComponentCoreInstance", 2)) {
+  if (!args.requireAtLeast(cx, "wasmComponentCoreInstanceExports", 2)) {
     return false;
   }
 
@@ -2540,15 +2541,14 @@ static bool WasmComponentCoreInstance(JSContext* cx, unsigned argc, Value* vp) {
   const WasmComponentInstanceObject& instanceObj =
       args[0].toObject().as<WasmComponentInstanceObject>();
   const wasm::ComponentInstance& instance = instanceObj.instance();
-  WasmInstanceObject* coreInstance = instance.coreInstance(coreInstanceIndex);
-  if (!coreInstance) {
+  JSObject* exportsObj = instance.coreInstanceExports(coreInstanceIndex);
+  if (!exportsObj) {
     ReportUsageErrorASCII(
-        cx, callee,
-        "Second argument must refer to a `(core instance (instantiate ...))`");
+        cx, callee, "Second argument must be a valid core instance index");
     return false;
   }
 
-  args.rval().setObject(*coreInstance);
+  args.rval().setObject(*exportsObj);
   return true;
 }
 #endif
@@ -11697,9 +11697,9 @@ JS_FN_HELP("getFuseState", GetFuseState, 0, 0,
 "  Prints an analysis of the size of metadata on this wasm object.\n"),
 
 #ifdef ENABLE_WASM_COMPONENTS
-    JS_FN_HELP("wasmComponentCoreInstance", WasmComponentCoreInstance, 2, 0,
-"wasmComponentCoreInstance(componentInstance, coreInstanceIndex)",
-"  Extracts a WebAssembly.Instance from a WebAssembly.ComponentInstance.\n"),
+    JS_FN_HELP("wasmComponentCoreInstanceExports", WasmComponentCoreInstanceExports, 2, 0,
+"wasmComponentCoreInstanceExports(componentInstance, coreInstanceIndex)",
+"  Gets the exports object of a core instance in a WebAssembly.ComponentInstance.\n"),
 #endif
 
     JS_FS_HELP_END
