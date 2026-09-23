@@ -6271,7 +6271,8 @@ enum class CanonDefKindRaw : uint8_t {
         }
       }
 
-      if (!c->addFunc(ComponentLiftedFuncDesc(typeIndex, std::move(opts)))) {
+      if (!c->addFunc(
+              ComponentLiftedFuncDesc(typeIndex, coreFuncIndex, opts))) {
         return false;
       }
     } break;
@@ -6324,8 +6325,9 @@ enum class CanonDefKindRaw : uint8_t {
         return d.fail("realloc required for canon lower");
       }
 
-      if (!c->addDefinedCoreFunc(ComponentCoreFuncDesc::lowered(funcIndex),
-                                 *flattenedCanonical)) {
+      if (!c->addDefinedCoreFunc(
+              ComponentCoreFuncDesc::lowered(funcIndex, opts),
+              *flattenedCanonical)) {
         return false;
       }
     } break;
@@ -6584,7 +6586,8 @@ enum class ComponentExportFlagsRaw : uint8_t {
                    ComponentName_Printf(exportName.name));
   }
 
-  return c->addExport(ComponentExport(std::move(exportName), externDesc));
+  return c->addExport(
+      ComponentExport(std::move(exportName), exported, externDesc));
 }
 
 [[nodiscard]] static bool DecodeComponentCoreModuleSection(

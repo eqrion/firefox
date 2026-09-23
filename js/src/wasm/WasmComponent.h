@@ -431,16 +431,27 @@ struct ComponentCanonOpts {
 
 class ComponentLiftedFuncDesc {
   uint32_t typeIndex_;
+  uint32_t coreFuncIndex_;
   ComponentCanonOpts canonOpts_;
 
  public:
-  ComponentLiftedFuncDesc(uint32_t typeIndex, ComponentCanonOpts canonOpts)
-      : typeIndex_(typeIndex), canonOpts_(canonOpts) {}
+  ComponentLiftedFuncDesc(uint32_t typeIndex, uint32_t coreFuncIndex,
+                          ComponentCanonOpts canonOpts)
+      : typeIndex_(typeIndex),
+        coreFuncIndex_(coreFuncIndex),
+        canonOpts_(canonOpts) {}
 
   // This returns the raw type index. To get the ComponentFuncType, call
   // Component::typeForFunc instead.
   uint32_t typeIndex() const { return typeIndex_; }
+  uint32_t coreFuncIndex() const { return coreFuncIndex_; }
   const ComponentCanonOpts& canonOpts() const { return canonOpts_; }
+};
+
+// A component function lowered with (canon lower).
+struct ComponentLoweredFuncDesc {
+  uint32_t funcIndex;
+  ComponentCanonOpts canonOpts;
 };
 
 // TODO(wasm-cm): Eventually this should probably be reworked to support all the
@@ -472,7 +483,8 @@ class ComponentResourceBuiltin {
 // such that a core module can call it. This includes both (canon lower) and
 // other things like builtin definitions (e.g. (canon resource.new)).
 class ComponentCoreFuncDesc {
-  using Payload = mozilla::Variant<uint32_t, ComponentResourceBuiltin>;
+  using Payload =
+      mozilla::Variant<ComponentLoweredFuncDesc, ComponentResourceBuiltin>;
 
  private:
   Payload payload_;
@@ -481,8 +493,10 @@ class ComponentCoreFuncDesc {
       : payload_(std::move(payload)) {}
 
  public:
-  static ComponentCoreFuncDesc lowered(uint32_t funcIndex) {
-    return ComponentCoreFuncDesc(Payload(funcIndex));
+  static ComponentCoreFuncDesc lowered(uint32_t funcIndex,
+                                       const ComponentCanonOpts& canonOpts) {
+    return ComponentCoreFuncDesc(
+        Payload(ComponentLoweredFuncDesc{funcIndex, canonOpts}));
   }
   static ComponentCoreFuncDesc builtin(ComponentResourceBuiltin&& builtinDesc) {
     return ComponentCoreFuncDesc(Payload(std::move(builtinDesc)));
@@ -791,13 +805,17 @@ class ComponentImport {
 
 class ComponentExport {
   ComponentName name_;
+  ComponentSortIndex item_;
   ComponentExternDesc externDesc_;
 
  public:
-  explicit ComponentExport(ComponentName&& name, ComponentExternDesc externDesc)
-      : name_(std::move(name)), externDesc_(externDesc) {}
+  explicit ComponentExport(ComponentName&& name, ComponentSortIndex item,
+                           ComponentExternDesc externDesc)
+      : name_(std::move(name)), item_(item), externDesc_(externDesc) {}
 
   const ComponentName& name() const { return name_; }
+  // The exported item, in this component's index spaces.
+  ComponentSortIndex item() const { return item_; }
   const ComponentExternDesc& externDesc() const { return externDesc_; }
 };
 
