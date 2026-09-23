@@ -1,0 +1,16 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A bare function import resolves through an import map to a default export</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script type="importmap">
+{ "imports": { "log": "./resources/log-module.js" } }
+</script>
+<script type="module">
+promise_test(async () => {
+  const { run } = await import("./resources/logger.wasm");
+  assert_equals(globalThis.logged, undefined, "not called before run");
+  assert_equals(run(), 1);
+  assert_array_equals(globalThis.logged, ["hello"]);
+}, "a plain-name function import takes the default export of the mapped module");
+</script>

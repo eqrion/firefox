@@ -1,0 +1,16 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A component's start function runs at module evaluation</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script type="importmap">
+{ "imports": { "log": "./resources/log-module.js" } }
+</script>
+<script type="module">
+promise_test(async () => {
+  assert_equals(globalThis.logged, undefined);
+  const ns = await import("./resources/start.wasm");
+  assert_array_equals(globalThis.logged, ["started"], "start ran during evaluation");
+  assert_equals(ns.answer(), 7);
+}, "the start function runs once when the module is evaluated");
+</script>

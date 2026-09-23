@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A core module import is a source phase import</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script type="importmap">
+{ "imports": { "m": "./resources/core.wasm" } }
+</script>
+<script type="module">
+promise_test(async () => {
+  let supported = true;
+  try {
+    const { default: core } = await import("./resources/core-source.mjs");
+    assert_true(core instanceof WebAssembly.Module, "import source gives a Module");
+  } catch (e) {
+    if (e instanceof SyntaxError) {
+      supported = false;
+    } else {
+      throw e;
+    }
+  }
+  assert_implements_optional(supported, "source phase imports are not supported");
+  const { callF } = await import("./resources/core-module-import.wasm");
+  assert_equals(callF(), 9);
+}, "a core module import receives the module source of the mapped specifier");
+</script>

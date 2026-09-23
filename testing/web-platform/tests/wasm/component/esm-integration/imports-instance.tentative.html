@@ -1,0 +1,22 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>An instance import under an interface name takes named imports</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script type="importmap">
+{ "imports": { "test:pkg/math@1.0.0": "./resources/math.mjs" } }
+</script>
+<script type="module">
+import { Thing } from "./resources/math.mjs";
+
+promise_test(async () => {
+  const { addThree, getThing } = await import("./resources/iface-import.wasm");
+  assert_equals(addThree(1, 2, 3), 6);
+  assert_equals(getThing(new Thing(9)), 9);
+}, "plain exports of the instance type become named imports; members are read off the class");
+
+promise_test(async () => {
+  const { getThing } = await import("./resources/iface-import.wasm");
+  assert_throws_js(TypeError, () => getThing({ get() { return 1; } }));
+}, "the named class is the brand for the resource type");
+</script>

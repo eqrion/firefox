@@ -1,0 +1,32 @@
+;; A minimal guest resource `counter` whose class can satisfy another
+;; component's resource type import.
+(component
+  (core module $Dtor (func (export "dtor") (param i32)))
+  (core instance $dtor (instantiate $Dtor))
+  (type $counter (resource (rep i32) (dtor (core func $dtor "dtor"))))
+  (canon resource.new $counter (core func $new))
+  (canon resource.rep $counter (core func $rep))
+  (canon resource.drop $counter (core func $drop))
+  (core module $M
+    (import "" "new" (func $new (param i32) (result i32)))
+    (import "" "rep" (func $rep (param i32) (result i32)))
+    (import "" "drop" (func $drop (param i32)))
+    (func (export "ctor") (param i32) (result i32) (call $new (local.get 0)))
+    (func (export "increment") (param $rep i32) (result i32) (i32.add (local.get $rep) (i32.const 1)))
+    (func (export "take") (param $h i32) (result i32)
+      (local $r i32)
+      (local.set $r (call $rep (local.get $h)))
+      (call $drop (local.get $h))
+      (local.get $r)))
+  (core instance $m (instantiate $M (with "" (instance
+    (export "new" (func $new))
+    (export "rep" (func $rep))
+    (export "drop" (func $drop))))))
+  (export $c "counter" (type $counter))
+  (func $ctor (param "start" u32) (result (own $c)) (canon lift (core func $m "ctor")))
+  (func $increment (param "self" (borrow $c)) (result u32) (canon lift (core func $m "increment")))
+  (func $take (param "x" (own $c)) (result u32) (canon lift (core func $m "take")))
+  (export "[constructor]counter" (func $ctor))
+  (export "[method]counter.increment" (func $increment))
+  (export "take" (func $take))
+)

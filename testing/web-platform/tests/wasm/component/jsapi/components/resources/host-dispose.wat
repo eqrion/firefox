@@ -1,0 +1,27 @@
+;; Drops of handles of a host resource, which call its Symbol.dispose for an
+;; own handle.
+(component
+  (import "r" (type $r (sub resource)))
+  (core func $drop-r (canon resource.drop $r))
+  (core module $M
+    (import "" "drop-r" (func $drop-r (param i32)))
+    (global $kept (mut i32) (i32.const 0))
+    (func (export "drop-handle") (param i32) (call $drop-r (local.get 0)))
+    (func (export "give-back") (param i32) (result i32) (local.get 0))
+    (func (export "keep") (param i32) (global.set $kept (local.get 0)))
+    (func (export "drop-kept") (call $drop-r (global.get $kept)))
+    (func (export "ok") (result i32) (i32.const 1)))
+  (core instance $m (instantiate $M (with "" (instance (export "drop-r" (func $drop-r))))))
+  (func $drop-own (param "x" (own $r)) (canon lift (core func $m "drop-handle")))
+  (func $drop-borrow (param "x" (borrow $r)) (canon lift (core func $m "drop-handle")))
+  (func $give-back (param "x" (own $r)) (result (own $r)) (canon lift (core func $m "give-back")))
+  (func $keep (param "x" (own $r)) (canon lift (core func $m "keep")))
+  (func $drop-kept (canon lift (core func $m "drop-kept")))
+  (func $ok (result u32) (canon lift (core func $m "ok")))
+  (export "drop-own" (func $drop-own))
+  (export "drop-borrow" (func $drop-borrow))
+  (export "give-back" (func $give-back))
+  (export "keep" (func $keep))
+  (export "drop-kept" (func $drop-kept))
+  (export "ok" (func $ok))
+)

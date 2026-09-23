@@ -1,0 +1,37 @@
+;; Consumer side of the through-JS linking test.
+(component
+  (import "add" (func $add (param "a" u32) (param "b" u32) (result u32)))
+  (import "counter" (type $counter (sub resource)))
+  (import "[constructor]counter" (func $make (param "start" u32) (result (own $counter))))
+  (import "[method]counter.get" (func $get (param "self" (borrow $counter)) (result u32)))
+  (import "iface" (instance $iface (export "mul" (func (param "a" u32) (param "b" u32) (result u32)))))
+  (alias export $iface "mul" (func $mul))
+  (core func $add' (canon lower (func $add)))
+  (core func $make' (canon lower (func $make)))
+  (core func $get' (canon lower (func $get)))
+  (core func $mul' (canon lower (func $mul)))
+  (core func $drop (canon resource.drop $counter))
+  (core module $M
+    (import "" "add" (func $add (param i32 i32) (result i32)))
+    (import "" "make" (func $make (param i32) (result i32)))
+    (import "" "get" (func $get (param i32) (result i32)))
+    (import "" "mul" (func $mul (param i32 i32) (result i32)))
+    (import "" "drop" (func $drop (param i32)))
+    (func (export "run") (param $x i32) (result i32)
+      (local $h i32) (local $r i32)
+      (local.set $h (call $make (local.get $x)))
+      (local.set $r
+        (i32.add
+          (i32.add (call $add (local.get $x) (i32.const 1)) (call $mul (local.get $x) (i32.const 2)))
+          (call $get (local.get $h))))
+      (call $drop (local.get $h))
+      (local.get $r)))
+  (core instance $m (instantiate $M (with "" (instance
+    (export "add" (func $add'))
+    (export "make" (func $make'))
+    (export "get" (func $get'))
+    (export "mul" (func $mul'))
+    (export "drop" (func $drop))))))
+  (func $run (param "x" u32) (result u32) (canon lift (core func $m "run")))
+  (export "run" (func $run))
+)

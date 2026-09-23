@@ -1,0 +1,14 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A missing named import from an instance specifier is a SyntaxError</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script type="importmap">
+{ "imports": { "test:pkg/math@1.0.0": "./resources/math-no-thing.mjs" } }
+</script>
+<script type="module">
+// iface-import.wasm takes `add` and `Thing` as named imports from the
+// interface-name specifier. The module only exports `add`.
+promise_test(t => promise_rejects_js(t, SyntaxError, import("./resources/iface-import.wasm")),
+             "a named import with no matching export fails to link with SyntaxError");
+</script>
