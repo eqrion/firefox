@@ -34,8 +34,10 @@ promise_test(async () => {
     imports[camel] = () => 0;
   }
   const exports = await componentExports("names/casing-funcs", imports);
-  for (const [label] of casingTable) {
-    assert_false(Object.hasOwn(exports, label), `export key ${label} is not kebab-case`);
+  for (const [label, camel] of casingTable) {
+    if (label !== camel) {
+      assert_false(Object.hasOwn(exports, label), `export key ${label} is not kebab-case`);
+    }
   }
 }, "kebab-case names are not used as JS keys");
 

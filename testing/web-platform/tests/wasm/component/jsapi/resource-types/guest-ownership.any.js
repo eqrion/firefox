@@ -76,7 +76,9 @@ promise_test(async () => {
   assert_throws_js(TypeError, () => takeThenBorrow(counter, counter));
   assert_traps(() => dropCount(), "the instance is locked down");
   assert_traps(() => peek(new Counter(1)), "every later call traps");
-  assert_throws_js(TypeError, () => counter.value(), "the consumed instance stays empty");
+  // Disposing a consumed instance does nothing, even though the instance is
+  // locked down.
+  assert_equals(counter[Symbol.dispose](), undefined, "the consumed instance stays empty");
 }, "(own, borrow) of the same instance throws TypeError and locks the instance down");
 
 promise_test(async () => {
@@ -95,17 +97,19 @@ promise_test(async () => {
   const a = new Counter(1);
   assert_throws_js(TypeError, () => takeList([a, {}]));
   assert_traps(() => dropCount(), "the instance is locked down");
-  assert_throws_js(TypeError, () => a.value(), "the consumed instance stays empty");
+  assert_equals(a[Symbol.dispose](), undefined, "the consumed instance stays empty");
 }, "a list with a later invalid element throws TypeError and locks the instance down");
 
+// A list is allocated in the guest before its elements are converted, so only
+// a value that isn't a list fails before the guest is entered.
 promise_test(async () => {
   const { Counter, takeList, dropCount, peek } = await componentExports("resources/guest-counter", { notify() {} });
   const a = new Counter(1);
   const before = dropCount();
-  assert_throws_js(TypeError, () => takeList([{}, a]));
+  assert_throws_js(TypeError, () => takeList(a));
   assert_equals(dropCount(), before, "nothing was dropped");
   assert_equals(peek(a), 1, "the instance is still usable");
-}, "a list whose first element is invalid fails before the guest is entered");
+}, "a value that is not a list fails before the guest is entered");
 
 promise_test(async () => {
   const { Counter, take } = exports;

@@ -127,11 +127,13 @@ promise_test(async () => {
   assert_equals(unwrapMap({ x: exports.make() }), 0, "plain object with string keys");
 }, "map<string, own<R>>");
 
+// Elements are converted after the list is allocated in the guest, so a failing
+// element locks down the instance, and this test uses a fresh one. Disposing a
+// consumed instance does nothing, even though the instance is locked down.
 promise_test(async () => {
-  const { Counter, unwrapList, dropCount } = exports;
-  const a = exports.make();
-  const before = dropCount();
+  const { make, unwrapList, dropCount } = await componentExports("resources/guest-containers");
+  const a = make();
   assert_throws_js(TypeError, () => unwrapList([a, 1]));
-  assert_throws_js(TypeError, () => a.value(), "earlier owns are consumed");
-  assert_equals(dropCount(), before);
+  assert_traps(() => dropCount(), "the instance is locked down");
+  assert_equals(a[Symbol.dispose](), undefined, "earlier owns are consumed");
 }, "a container with an invalid element fails after consuming earlier owns");
