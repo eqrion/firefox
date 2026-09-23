@@ -6345,6 +6345,13 @@ static bool WebAssemblyClassFinish(JSContext* cx, HandleObject object,
                                       &ctorValue, &id)) {
       return false;
     }
+
+    constexpr NameAndProtoKey componentErrorEntry = {
+        "ComponentError", GetExceptionProtoKey(JSEXN_WASMCOMPONENTERROR)};
+    if (!WebAssemblyDefineConstructor(cx, wasm, componentErrorEntry, &ctorValue,
+                                      &id)) {
+      return false;
+    }
   }
 #endif
 

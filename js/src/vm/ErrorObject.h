@@ -60,6 +60,13 @@ class ErrorObject : public NativeObject {
   static const uint32_t RESERVED_SLOTS_MAYBE_WASM_TRAP =
       WASM_TRAP_SLOT.index() + 1;
 
+#ifdef ENABLE_WASM_COMPONENTS
+  // This slot is only used for WebAssembly.ComponentError, for its `data`.
+  static const uint32_t COMPONENT_ERROR_DATA_SLOT = SOURCEID_SLOT.index() + 1;
+  static const uint32_t RESERVED_SLOTS_COMPONENT_ERROR =
+      COMPONENT_ERROR_DATA_SLOT + 1;
+#endif
+
  public:
   static const JSClass classes[JSEXN_ERROR_LIMIT];
 
@@ -167,6 +174,20 @@ class ErrorObject : public NativeObject {
     }
   }
   void setFromWasmTrap();
+
+#ifdef ENABLE_WASM_COMPONENTS
+  const Value& componentErrorData() const {
+    MOZ_ASSERT(type() == JSEXN_WASMCOMPONENTERROR);
+    return getReservedSlot(COMPONENT_ERROR_DATA_SLOT);
+  }
+  void initComponentErrorData(const Value& data) {
+    MOZ_ASSERT(type() == JSEXN_WASMCOMPONENTERROR);
+    setReservedSlot(COMPONENT_ERROR_DATA_SLOT, data);
+  }
+
+  // Getter for the WebAssembly.ComponentError.prototype.data accessor.
+  static bool getComponentErrorData(JSContext* cx, unsigned argc, Value* vp);
+#endif
 };
 
 JSString* ErrorToSource(JSContext* cx, HandleObject obj);
@@ -235,6 +256,12 @@ static_assert(
         JSProto_Error + int(JSEXN_WASMRUNTIMEERROR) == JSProto_RuntimeError &&
 #ifdef ENABLE_WASM_JSPI
         JSProto_Error + int(JSEXN_WASMSUSPENDERROR) == JSProto_SuspendError &&
+#endif
+#ifdef ENABLE_WASM_COMPONENTS
+        JSProto_Error + int(JSEXN_WASMCOMPONENTERROR) ==
+            JSProto_ComponentError &&
+        JSEXN_WASMCOMPONENTERROR + 1 == JSEXN_WARN &&
+#elif defined(ENABLE_WASM_JSPI)
         JSEXN_WASMSUSPENDERROR + 1 == JSEXN_WARN &&
 #else
         JSEXN_WASMRUNTIMEERROR + 1 == JSEXN_WARN &&
