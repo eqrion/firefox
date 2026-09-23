@@ -6491,7 +6491,7 @@ enum class CanonDefKindRaw : uint8_t {
   return true;
 }
 
-enum class ComponentImportFlagsRaw : uint8_t {
+enum class ComponentExternNameFlagsRaw : uint8_t {
   // Strangely, the binary encoding currently allows either 0x00 or 0x01 for the
   // flags. Both do exactly the same thing. This is supposed to be cleaned up
   // eventually.
@@ -6500,26 +6500,34 @@ enum class ComponentImportFlagsRaw : uint8_t {
   VersionSuffix = 0x02,
 };
 
+// Decodes the name of an import or export (`importname'` or `exportname'`),
+// where `thing` is "import" or "export".
+[[nodiscard]] static bool DecodeComponentExternName(Decoder& d,
+                                                    const char* thing,
+                                                    ComponentName* name) {
+  uint8_t flags;
+  if (!d.readFixedU8(&flags)) {
+    return d.failf("expected %s flags", thing);
+  }
+
+  switch (flags) {
+    case uint8_t(ComponentExternNameFlagsRaw::Plain1):
+    case uint8_t(ComponentExternNameFlagsRaw::Plain2):
+      break;
+    case uint8_t(ComponentExternNameFlagsRaw::VersionSuffix):
+      // TODO(wasm-cm): Support semver?
+      return d.failf("version suffixes on %ss are not allowed", thing);
+    default:
+      return d.failf("invalid %s flags %#x", thing, flags);
+  }
+
+  return DecodeComponentName(d, thing, name);
+}
+
 static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
                                   StronglyUniqueNameSet& nameDedup) {
-  uint8_t importFlags;
-  if (!d.readFixedU8(&importFlags)) {
-    return d.fail("expected import flags");
-  }
-
-  switch (importFlags) {
-    case uint8_t(ComponentImportFlagsRaw::Plain1):
-    case uint8_t(ComponentImportFlagsRaw::Plain2):
-      break;
-    case uint8_t(ComponentImportFlagsRaw::VersionSuffix):
-      // TODO(wasm-cm): Support semver?
-      return d.fail("version suffixes on imports are not allowed");
-    default:
-      return d.failf("invalid import flags %#x", importFlags);
-  }
-
   ComponentName importName;
-  if (!DecodeComponentName(d, "import", &importName)) {
+  if (!DecodeComponentExternName(d, "import", &importName)) {
     return false;
   }
 
@@ -6548,33 +6556,10 @@ static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
   return c->addImport(ComponentImport(std::move(importName), externDesc));
 }
 
-enum class ComponentExportFlagsRaw : uint8_t {
-  // As with imports, 0x00 and 0x01 are equivalent flags For Now.
-  Plain1 = 0x00,
-  Plain2 = 0x01,
-  VersionSuffix = 0x02,
-};
-
 [[nodiscard]] static bool DecodeComponentExport(
     Decoder& d, MutableComponent& c, StronglyUniqueNameSet& nameDedup) {
-  uint8_t exportFlags;
-  if (!d.readFixedU8(&exportFlags)) {
-    return d.fail("expected export flags");
-  }
-
-  switch (exportFlags) {
-    case uint8_t(ComponentImportFlagsRaw::Plain1):
-    case uint8_t(ComponentImportFlagsRaw::Plain2):
-      break;
-    case uint8_t(ComponentImportFlagsRaw::VersionSuffix):
-      // TODO(wasm-cm): Support semver?
-      return d.fail("version suffixes on exports are not allowed");
-    default:
-      return d.failf("invalid export flags %#x", exportFlags);
-  }
-
   ComponentName exportName;
-  if (!DecodeComponentName(d, "export", &exportName)) {
+  if (!DecodeComponentExternName(d, "export", &exportName)) {
     return false;
   }
 
