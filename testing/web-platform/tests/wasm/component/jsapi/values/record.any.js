@@ -56,8 +56,13 @@ for (const [fields, description] of [
   [{ ...full, age: -1 }, "out-of-range age"],
   [{ ...full, firstName: Symbol() }, "Symbol for a string field"],
 ]) {
+  // A failure after first-name is stored has entered the guest to allocate the
+  // string, which locks down the instance, so each case uses a fresh one.
   promise_test(async () => {
     received = "unchanged";
+    const { roundtrip } = await componentExports("values/record", {
+      echo: x => { received = x; return x; },
+    });
     assert_throws_js(TypeError, () => roundtrip(fields));
     assert_equals(received, "unchanged", "echo must not be called");
   }, `record: ${description} throws TypeError`);
@@ -106,6 +111,7 @@ for (const value of [null, undefined, "firstName", 1, true, Symbol(), 1n]) {
 promise_test(async () => {
   class MyError extends Error { name = "MyError"; }
   const input = { ...full, get age() { throw new MyError(); } };
+  const { roundtrip } = await componentExports("values/record", { echo: x => x });
   assert_throws_js(MyError, () => roundtrip(input));
 }, "record: a throwing getter propagates its exception");
 

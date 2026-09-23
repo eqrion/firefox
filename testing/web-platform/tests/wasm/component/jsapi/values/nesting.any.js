@@ -87,10 +87,20 @@ promise_test(async () => {
   assert_value_equals(exports.roundtripDeep([nest(49, [7]), nest(49, [])]), [nest(49, [7]), nest(49, [])]);
 }, "50-deep list: empty lists at various depths");
 
-promise_test(async () => {
-  assert_throws_js(TypeError, () => exports.roundtripDeep(nest(49, [1])), "one level too shallow");
-  assert_throws_js(TypeError, () => exports.roundtripDeep(nest(50, "x")), "wrong leaf type");
-}, "50-deep list: the wrong depth throws TypeError");
+// The failing element is converted after the outer lists are allocated in the
+// guest, which locks down the instance, so each case uses a fresh one.
+for (const [input, description] of [
+  [() => nest(49, [1]), "one level too shallow"],
+  [() => nest(50, "x"), "wrong leaf type"],
+]) {
+  promise_test(async () => {
+    const { roundtripDeep } = await componentExports("values/nesting", {
+      echoListRecord() {}, echoOptionList() {}, echoShape() {}, echoTuple() {},
+      echoResults() {}, echoDeep: x => x, echoWebPage() {},
+    });
+    assert_throws_js(TypeError, () => roundtripDeep(input()));
+  }, `50-deep list: ${description} throws TypeError`);
+}
 
 promise_test(async () => {
   const { roundtripShape } = await componentExports("values/nesting", {
