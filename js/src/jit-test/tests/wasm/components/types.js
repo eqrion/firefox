@@ -153,6 +153,41 @@ wasmValidateText(`
 )
 `);
 
+// Fixed-size list.
+wasmValidateText(`
+(component
+  (type (list u32 4))
+)
+`);
+
+// Empty fixed-size list (invalid).
+wasmFailValidateText(`
+(component
+  (type (list u32 0))
+)
+`, /fixed-length list must not be empty/);
+
+// ----------------------------------------------------------------------------
+// Map types
+
+wasmValidateText(`
+(component
+  (type (map string u32))
+  (type (map u64 (list string)))
+  (type (map char bool))
+  (type (map bool f64))
+)
+`);
+
+// Keys that are not a bool, integer, char or string (invalid).
+for (const key of ["f32", "f64", "(list u8)", "(tuple u32)", "(option u32)"]) {
+  wasmFailValidateText(`
+  (component
+    (type (map ${key} u32))
+  )
+  `, /invalid map key type/);
+}
+
 // ----------------------------------------------------------------------------
 // Tuple types
 
@@ -560,6 +595,35 @@ assertValTypesUnequal(`
   (type $e (tuple s32))
   (type $f s32)
 `, ["$a", "$b", "$c", "$d", "$e", "$f"]);
+
+// Fixed-size lists
+assertValTypesEqual(`
+  (type s32)
+  (type $a (list s32 2))
+  (type $b (list s32 2))
+  (type $c (list 0 2))
+`, ["$a", "$b", "$c"]);
+assertValTypesUnequal(`
+  (type $a (list s32 2))
+  (type $b (list s32 3))
+  (type $c (list u32 2))
+  (type $d (list s32))
+  (type $e (tuple s32 s32))
+`, ["$a", "$b", "$c", "$d", "$e"]);
+
+// Maps
+assertValTypesEqual(`
+  (type string)
+  (type $a (map string u32))
+  (type $b (map string u32))
+  (type $c (map 0 u32))
+`, ["$a", "$b", "$c"]);
+assertValTypesUnequal(`
+  (type $a (map string u32))
+  (type $b (map string s32))
+  (type $c (map u32 u32))
+  (type $d (list (tuple string u32)))
+`, ["$a", "$b", "$c", "$d"]);
 
 // Tuples
 assertValTypesEqual(`
