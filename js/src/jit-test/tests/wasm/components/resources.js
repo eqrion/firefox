@@ -187,3 +187,108 @@ wasmFailValidateText(`(component
   (type $T1 (resource (rep i32)))
   (import "T1E" (type $T1E (eq $T1)))
 )`, /cannot import a type equal to a defined resource type/);
+
+// ----------------------------------------------------------------------------
+// Names of resource functions
+
+// [constructor], [method], and [static] must name a preceding resource type,
+// imported or exported respectively in the same scope.
+wasmFailValidateText(`(component
+  (import "[static]r.f" (func))
+)`, /import "\[static\]r.f" does not name a preceding resource type import/);
+wasmFailValidateText(`(component
+  (import "[static]r.f" (func))
+  (import "r" (type (sub resource)))
+)`, /does not name a preceding resource type import/);
+wasmFailValidateText(`(component
+  (type $u u32)
+  (import "r" (type (eq $u)))
+  (import "[static]r.f" (func))
+)`, /does not name a preceding resource type import/);
+wasmFailValidateText(`(component
+  (type $r (resource (rep i32)))
+  (core module $m (func (export "f")))
+  (core instance $i (instantiate $m))
+  (func $f (canon lift (core func $i "f")))
+  (export "[static]r.f" (func $f))
+)`, /export "\[static\]r.f" does not name a preceding resource type export/);
+wasmValidateText(`(component
+  (type $r (resource (rep i32)))
+  (core module $m (func (export "f")))
+  (core instance $i (instantiate $m))
+  (func $f (canon lift (core func $i "f")))
+  (export $r2 "r" (type $r))
+  (export "[static]r.f" (func $f))
+)`);
+wasmFailValidateText(`(component
+  (import "i" (instance
+    (export "[static]r.f" (func))))
+)`, /export "\[static\]r.f" does not name a preceding resource type export/);
+wasmValidateText(`(component
+  (import "i" (instance
+    (export "r" (type $r (sub resource)))
+    (export "[constructor]r" (func (result (own $r))))
+    (export "[method]r.m" (func (param "self" (borrow $r))))
+    (export "[static]r.s" (func))))
+)`);
+
+// Annotated names must name functions.
+wasmFailValidateText(`(component
+  (import "r" (type (sub resource)))
+  (import "[constructor]r" (type (sub resource)))
+)`, /annotated import name "\[constructor\]r" must name a function/);
+
+// [constructor] must return an owned resource, possibly in a result.
+wasmValidateText(`(component
+  (import "r" (type $r (sub resource)))
+  (import "[constructor]r" (func (result (result (own $r) (error string)))))
+)`);
+for (const func of [
+  `(func)`,
+  `(func (result u32))`,
+  `(func (result (borrow $r)))`,
+  `(func (result (own $s)))`,
+  `(func (result (result (error (own $r)))))`,
+]) {
+  wasmFailValidateText(`(component
+    (import "r" (type $r (sub resource)))
+    (import "s" (type $s (sub resource)))
+    (import "[constructor]r" ${func})
+  )`, /must return an owned resource/);
+}
+
+// [method] must take `self` as a borrowed resource first.
+for (const func of [
+  `(func)`,
+  `(func (param "this" (borrow $r)))`,
+  `(func (param "self" (own $r)))`,
+  `(func (param "self" (borrow $s)))`,
+  `(func (param "x" u32) (param "self" (borrow $r)))`,
+]) {
+  wasmFailValidateText(`(component
+    (import "r" (type $r (sub resource)))
+    (import "s" (type $s (sub resource)))
+    (import "[method]r.m" ${func})
+  )`, /must take a borrowed resource named "self" first/);
+}
+
+// Getters have no parameters and a result, and setters have one parameter, no
+// result, and follow their getter.
+wasmFailValidateText(`(component
+  (import "[get]p" (func))
+)`, /getter import "\[get\]p" must have no parameters and a result/);
+wasmFailValidateText(`(component
+  (import "r" (type $r (sub resource)))
+  (import "[method][get]r.p" (func (param "self" (borrow $r)) (param "x" u32) (result u32)))
+)`, /must have no parameters and a result/);
+wasmFailValidateText(`(component
+  (import "[get]p" (func (result u32)))
+  (import "[set]p" (func (param "x" u32) (result u32)))
+)`, /setter import "\[set\]p" must have one parameter and no result/);
+wasmValidateText(`(component
+  (import "[get]p" (func (result u32)))
+  (import "[set]p" (func (param "x" u32) (result (result (error string)))))
+)`);
+wasmFailValidateText(`(component
+  (import "[set]p" (func (param "x" u32)))
+)`, /setter import "\[set\]p" must follow its getter/);
