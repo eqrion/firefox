@@ -5794,6 +5794,42 @@ static const char* DefinitionKindName(DefinitionKind kind) {
   }
 }
 
+// Checks that there is room for one more core func, table, memory, global, or
+// tag in the component's index space for `sort`.
+[[nodiscard]] static bool CheckCanAddCoreItem(Decoder& d, const Component& c,
+                                              ComponentSort sort) {
+  uint32_t max;
+  const char* items;
+  switch (sort) {
+    case ComponentSort::CoreFunction:
+      max = MaxComponentCoreFuncs;
+      items = "funcs";
+      break;
+    case ComponentSort::CoreTable:
+      max = MaxComponentCoreTables;
+      items = "tables";
+      break;
+    case ComponentSort::CoreMemory:
+      max = MaxComponentCoreMemories;
+      items = "memories";
+      break;
+    case ComponentSort::CoreGlobal:
+      max = MaxComponentCoreGlobals;
+      items = "globals";
+      break;
+    case ComponentSort::CoreTag:
+      max = MaxComponentCoreTags;
+      items = "tags";
+      break;
+    default:
+      MOZ_CRASH();
+  }
+  if (c.coreIndexSpace(sort).length() >= max) {
+    return d.failf("too many core %s (max %u)", items, max);
+  }
+  return true;
+}
+
 [[nodiscard]] static bool DecodeCoreInstance(Decoder& d, MutableComponent& c) {
   uint8_t exprType;
   if (!d.readFixedU8(&exprType)) {
@@ -5875,12 +5911,12 @@ static const char* DefinitionKindName(DefinitionKind kind) {
         }
       }
 
-      CoreInstanceDesc desc(c,
-                            CoreInstanceDescFromModule{
-                                .moduleIndex = moduleIndex,
-                                .args = std::move(args),
-                            },
-                            moduleType.instanceType());
+      CoreInstanceDesc desc(
+          CoreInstanceDescFromModule{
+              .moduleIndex = moduleIndex,
+              .args = std::move(args),
+          },
+          moduleType.instanceType());
       if (!c->addCoreInstance(std::move(desc))) {
         return false;
       }
@@ -5896,12 +5932,10 @@ static const char* DefinitionKindName(DefinitionKind kind) {
       }
 
       ComponentInlineExports inlineExports;
-      ComponentInlineExports::Builder builder;
       MutableCoreInstanceType instanceType = js_new<CoreInstanceType>();
       if (!instanceType) {
         return false;
       }
-      NameSet exportNames;
       for (uint32_t i = 0; i < numExports; i++) {
         CacheableName name;
         ComponentSortIndex sortIndex;
@@ -5920,13 +5954,8 @@ static const char* DefinitionKindName(DefinitionKind kind) {
           sortIndex = ComponentSortIndex(sort, index);
         }
 
-        // Check for duplicate names
-        auto p = exportNames.lookupForAdd(name.utf8Bytes());
-        if (p) {
+        if (instanceType->getExport(name)) {
           return d.fail("duplicate name of inline export");
-        }
-        if (!exportNames.add(p, name.utf8Bytes())) {
-          return false;
         }
 
         // Component-level sorts like Func and CoreModule are not allowed for
@@ -5946,12 +5975,12 @@ static const char* DefinitionKindName(DefinitionKind kind) {
             !instanceType->addExport(
                 std::move(typeName),
                 CoreExternType(c->getCoreItemType(sortIndex))) ||
-            !inlineExports.addExport(&builder, std::move(name), sortIndex)) {
+            !inlineExports.addExport(std::move(name), sortIndex)) {
           return false;
         }
       }
 
-      if (!c->addCoreInstance(CoreInstanceDesc(c, std::move(inlineExports),
+      if (!c->addCoreInstance(CoreInstanceDesc(std::move(inlineExports),
                                                std::move(instanceType)))) {
         return false;
       }
@@ -6001,104 +6030,27 @@ enum class AliasKindRaw : uint8_t {
       if (c->coreInstances().length() <= instanceIndex) {
         return d.failf("invalid core instance index %d", instanceIndex);
       }
-      const CoreInstanceDesc& instance = c->getCoreInstance(instanceIndex);
-      mozilla::Maybe<ComponentSortIndex> maybeExp =
-          instance.getExport(exportName);
-      if (maybeExp.isNothing()) {
+      mozilla::Maybe<const CoreExternType&> aliasType =
+          c->getCoreInstance(instanceIndex).type().getExport(exportName);
+      if (aliasType.isNothing()) {
         return d.failf("core instance %d has no export \"%.*s\"", instanceIndex,
                        ComponentName_Printf(exportName));
       }
-      ComponentSortIndex exp = *maybeExp;
-      CoreExternType aliasType = *instance.type().getExport(exportName);
-
-      ComponentItem newAlias = ComponentItem::alias(
-          ComponentAliasKind::CoreExport, sort, instanceIndex, exp.index);
-
-      ComponentSortIndex newAliasSortIndex;
-      switch (sort) {
-        case ComponentSort::CoreFunction: {
-          if (c->coreFuncs().length() >= MaxComponentCoreFuncs) {
-            return d.failf("too many core funcs (max %d)",
-                           MaxComponentCoreFuncs);
-          }
-          if (exp.sort != ComponentSort::CoreFunction) {
-            return d.failf(
-                "export \"%.*s\" of core instance %d is not a function",
-                ComponentName_Printf(exportName), instanceIndex);
-          }
-          newAliasSortIndex = ComponentSortIndex(ComponentSort::CoreFunction,
-                                                 c->coreFuncs().length());
-          if (!c->addCoreAlias(newAlias, std::move(aliasType))) {
-            return false;
-          }
-        } break;
-        case ComponentSort::CoreTable: {
-          if (c->coreTables().length() >= MaxComponentCoreTables) {
-            return d.failf("too many core tables (max %d)",
-                           MaxComponentCoreTables);
-          }
-          if (exp.sort != ComponentSort::CoreTable) {
-            return d.failf("export \"%.*s\" of core instance %d is not a table",
-                           ComponentName_Printf(exportName), instanceIndex);
-          }
-          newAliasSortIndex = ComponentSortIndex(ComponentSort::CoreTable,
-                                                 c->coreTables().length());
-          if (!c->addCoreAlias(newAlias, std::move(aliasType))) {
-            return false;
-          }
-        } break;
-        case ComponentSort::CoreMemory: {
-          if (c->coreMemories().length() >= MaxComponentCoreMemories) {
-            return d.failf("too many core memories (max %d)",
-                           MaxComponentCoreMemories);
-          }
-          if (exp.sort != ComponentSort::CoreMemory) {
-            return d.failf(
-                "export \"%.*s\" of core instance %d is not a memory",
-                ComponentName_Printf(exportName), instanceIndex);
-          }
-          newAliasSortIndex = ComponentSortIndex(ComponentSort::CoreMemory,
-                                                 c->coreMemories().length());
-          if (!c->addCoreAlias(newAlias, std::move(aliasType))) {
-            return false;
-          }
-        } break;
-        case ComponentSort::CoreGlobal: {
-          if (c->coreGlobals().length() >= MaxComponentCoreGlobals) {
-            return d.failf("too many core globals (max %d)",
-                           MaxComponentCoreGlobals);
-          }
-          if (exp.sort != ComponentSort::CoreGlobal) {
-            return d.failf(
-                "export \"%.*s\" of core instance %d is not a global",
-                ComponentName_Printf(exportName), instanceIndex);
-          }
-          newAliasSortIndex = ComponentSortIndex(ComponentSort::CoreGlobal,
-                                                 c->coreGlobals().length());
-          if (!c->addCoreAlias(newAlias, std::move(aliasType))) {
-            return false;
-          }
-        } break;
-        case ComponentSort::CoreTag: {
-          if (c->coreTags().length() >= MaxComponentCoreTags) {
-            return d.failf("too many core tags (max %d)", MaxComponentCoreTags);
-          }
-          if (exp.sort != ComponentSort::CoreTag) {
-            return d.failf("export \"%.*s\" of core instance %d is not a tag",
-                           ComponentName_Printf(exportName), instanceIndex);
-          }
-          newAliasSortIndex = ComponentSortIndex(ComponentSort::CoreTag,
-                                                 c->coreTags().length());
-          if (!c->addCoreAlias(newAlias, std::move(aliasType))) {
-            return false;
-          }
-        } break;
-        default:
-          return d.failf("invalid alias sort 0x%02x", uint8_t(sort));
+      if (!ComponentSortIsCoreSort(sort)) {
+        return d.failf("invalid alias sort 0x%02x", uint8_t(sort));
+      }
+      if (!CheckCanAddCoreItem(d, *c, sort)) {
+        return false;
+      }
+      DefinitionKind kind = CoreSortFromComponentSort(sort);
+      if (aliasType->kind() != kind) {
+        return d.failf("export \"%.*s\" of core instance %d is not a %s",
+                       ComponentName_Printf(exportName), instanceIndex,
+                       DefinitionKindName(kind));
       }
 
-      if (!c->saveExportNameForAlias(newAliasSortIndex,
-                                     std::move(exportName))) {
+      if (!c->addCoreExportAlias(sort, instanceIndex, std::move(exportName),
+                                 CoreExternType(*aliasType))) {
         return false;
       }
     } break;

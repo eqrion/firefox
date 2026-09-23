@@ -125,111 +125,11 @@ bool StronglyUniqueNameSet::add(mozilla::Span<const char> name,
   return data_.add(p, std::move(canonicalized));
 }
 
-uint32_t ComponentInlineExports::Builder::trackItemOfSort(ComponentSort sort) {
-  switch (sort) {
-    case ComponentSort::Func:
-      return numFuncs++;
-    case ComponentSort::Type:
-      return numTypes++;
-    case ComponentSort::Component:
-      return numComponents++;
-    case ComponentSort::Instance:
-      return numInstances++;
-    case ComponentSort::CoreFunction:
-      return numCoreFunctions++;
-    case ComponentSort::CoreTable:
-      return numCoreTables++;
-    case ComponentSort::CoreMemory:
-      return numCoreMemories++;
-    case ComponentSort::CoreGlobal:
-      return numCoreGlobals++;
-    case ComponentSort::CoreTag:
-      return numCoreTags++;
-    case ComponentSort::CoreType:
-      return numCoreTypes++;
-    case ComponentSort::CoreModule:
-      return numCoreModules++;
-    case ComponentSort::CoreInstance:
-      return numCoreInstances++;
-    default:
-      MOZ_CRASH();
-  }
-}
-
-bool ComponentInlineExports::addExport(Builder* builder, CacheableName&& name,
+bool ComponentInlineExports::addExport(CacheableName&& name,
                                        ComponentSortIndex exported) {
-  uint32_t indexInThisInstance = builder->trackItemOfSort(exported.sort);
-  ComponentSortIndex itemInThisInstance(exported.sort, indexInThisInstance);
-
-  // Add export name -> item-in-this-instance mapping
-  auto p1 = exports_.lookupForAdd(name.utf8Bytes());
-  MOZ_RELEASE_ASSERT(!p1, "duplicates should have been caught in validation");
-  if (!exports_.add(p1, std::move(name), itemInThisInstance)) {
-    return false;
-  }
-
-  // Add item-in-this-instance -> original index mapping
-  auto p2 = originalIndices_.lookupForAdd(itemInThisInstance);
-  MOZ_RELEASE_ASSERT(!p2);
-  if (!originalIndices_.add(p2, itemInThisInstance, exported.index)) {
-    return false;
-  }
-
-  return true;
-}
-
-mozilla::Maybe<ComponentSortIndex> ComponentInlineExports::getExport(
-    const CacheableName& name) const {
-  auto p = exports_.lookup(name.utf8Bytes());
-  if (!p) {
-    return mozilla::Nothing();
-  }
-  return mozilla::Some(p->value());
-}
-
-ComponentSortIndex ComponentInlineExports::resolveOriginal(
-    ComponentSortIndex expFromThis) const {
-  auto p = originalIndices_.lookup(expFromThis);
-  MOZ_RELEASE_ASSERT(p.found());
-  ComponentSortIndex orig = ComponentSortIndex(expFromThis.sort, p->value());
-  MOZ_ASSERT(orig.sort == expFromThis.sort);
-  return orig;
-}
-
-mozilla::Maybe<ComponentSortIndex> CoreInstanceDesc::getExport(
-    const CacheableName& name) const {
-  return desc_.match(
-      [&](const CoreInstanceDescFromModule& fromModule)
-          -> mozilla::Maybe<ComponentSortIndex> {
-        SharedModule mod = component_->getCoreModule(fromModule.moduleIndex);
-        mozilla::Maybe<const Export&> exp = mod->moduleMeta().getExport(name);
-        if (exp.isNothing()) {
-          return mozilla::Nothing();
-        }
-        switch (exp->kind()) {
-          case DefinitionKind::Function:
-            return mozilla::Some(ComponentSortIndex(ComponentSort::CoreFunction,
-                                                    exp->funcIndex()));
-          case DefinitionKind::Table:
-            return mozilla::Some(ComponentSortIndex(ComponentSort::CoreTable,
-                                                    exp->tableIndex()));
-          case DefinitionKind::Memory:
-            return mozilla::Some(ComponentSortIndex(ComponentSort::CoreMemory,
-                                                    exp->memoryIndex()));
-          case DefinitionKind::Global:
-            return mozilla::Some(ComponentSortIndex(ComponentSort::CoreGlobal,
-                                                    exp->globalIndex()));
-          case DefinitionKind::Tag:
-            return mozilla::Some(
-                ComponentSortIndex(ComponentSort::CoreTag, exp->tagIndex()));
-          default:
-            MOZ_CRASH();
-        }
-      },
-      [&](const ComponentInlineExports& inlineExports)
-          -> mozilla::Maybe<ComponentSortIndex> {
-        return inlineExports.getExport(name);
-      });
+  auto p = exports_.lookupForAdd(name.utf8Bytes());
+  MOZ_RELEASE_ASSERT(!p, "duplicates should have been caught in validation");
+  return exports_.add(p, std::move(name), exported);
 }
 
 bool ComponentExternDesc::compatible(const ComponentExternDesc& defined,
@@ -1289,25 +1189,6 @@ ComponentItem Component::resolveSortIndex(ComponentSortIndex sortIndex) const {
   }
 }
 
-bool Component::saveExportNameForAlias(ComponentSortIndex sortIndexOfAlias,
-                                       CacheableName&& name) {
-  ComponentItem alias = resolveSortIndex(sortIndexOfAlias);
-  MOZ_RELEASE_ASSERT(alias.kind() == ComponentItem::ItemKind::Alias);
-  MOZ_RELEASE_ASSERT(alias.aliasKind() == ComponentAliasKind::CoreExport ||
-                     alias.aliasKind() == ComponentAliasKind::Export);
-
-  auto p = aliasNames_.lookupForAdd(sortIndexOfAlias);
-  MOZ_RELEASE_ASSERT(!p);
-  return aliasNames_.add(p, sortIndexOfAlias, std::move(name));
-}
-
-const CacheableName& Component::getExportNameForAlias(
-    ComponentSortIndex sortIndexOfAlias) const {
-  auto p = aliasNames_.lookup(sortIndexOfAlias);
-  MOZ_RELEASE_ASSERT(p);
-  return p->value();
-}
-
 bool Component::instantiate(
     JSContext* cx, HandleObject instanceProto,
     MutableHandle<WasmComponentInstanceObject*> instance) const {
@@ -1473,7 +1354,7 @@ bool ComponentInstance::getCoreItemValue(JSContext* cx,
       RootedObject exportsObj(cx,
                               coreInstanceExports_[item.aliasInstanceIndex()]);
       return GetValidatedNamedPropertyFromObject(
-          cx, exportsObj, component_->getExportNameForAlias(sortIndex), val);
+          cx, exportsObj, component_->coreExportAliasName(item), val);
     }
     default:
       MOZ_CRASH();
@@ -1533,8 +1414,7 @@ bool ComponentInstance::createInlineExportsObject(
     }
     RootedId id(cx, AtomToId(atom));
     RootedValue val(cx);
-    if (!getCoreItemValue(cx, inlineExports.resolveOriginal(iter.get().value()),
-                          &val) ||
+    if (!getCoreItemValue(cx, iter.get().value(), &val) ||
         !JS_DefinePropertyById(
             cx, exportsObj, id, val,
             JSPROP_ENUMERATE | JSPROP_READONLY | JSPROP_PERMANENT)) {
