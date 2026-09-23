@@ -31,6 +31,7 @@ using namespace js::wasm;
 // Reasons for CmTrap.
 enum class AdapterTrap : int32_t {
   UncaughtException,
+  ImportException,
 };
 
 // Every adapter module imports its WasmComponentInstanceObject as this global.
@@ -58,8 +59,14 @@ class MOZ_STACK_CLASS AdapterModuleBuilder {
   // added before the adapter function.
   [[nodiscard]] bool importWasmFunc(HandleFunction func, uint32_t* funcIndex);
 
+  // Imports a function that is not a wasm function, which is called like a JS
+  // function with this signature.
+  [[nodiscard]] bool importJSFunc(HandleObject func, ValTypeVector&& params,
+                                  ValTypeVector&& results, uint32_t* funcIndex);
+
   [[nodiscard]] bool defineAdapterFunc(ValTypeVector&& params,
                                        ValTypeVector&& results);
+  [[nodiscard]] bool defineAdapterFuncWithType(const TypeDef& funcType);
 
   [[nodiscard]] bool finish(const Bytes& body, MutableHandleFunction result);
 };
@@ -110,6 +117,36 @@ bool AdapterModuleBuilder::importWasmFunc(HandleFunction func,
       !moduleMeta_->addImportedFuncWithType(typeIndex, CacheableName(),
                                             CacheableName()) ||
       !imports_.get().funcs.append(func)) {
+    ReportOutOfMemory(cx_);
+    return false;
+  }
+  return true;
+}
+
+bool AdapterModuleBuilder::importJSFunc(HandleObject func,
+                                        ValTypeVector&& params,
+                                        ValTypeVector&& results,
+                                        uint32_t* funcIndex) {
+  MOZ_ASSERT(!(func->is<JSFunction>() && func->as<JSFunction>().isWasm()));
+  MOZ_ASSERT(adapterFuncIndex_ == UINT32_MAX);
+  *funcIndex = codeMeta_->funcs.length();
+  if (!moduleMeta_->addImportedFunc(std::move(params), std::move(results),
+                                    CacheableName(), CacheableName()) ||
+      !imports_.get().funcs.append(func)) {
+    ReportOutOfMemory(cx_);
+    return false;
+  }
+  return true;
+}
+
+bool AdapterModuleBuilder::defineAdapterFuncWithType(const TypeDef& funcType) {
+  MOZ_ASSERT(adapterFuncIndex_ == UINT32_MAX);
+  MOZ_ASSERT(funcType.recGroup().numTypes() == 1);
+  adapterFuncIndex_ = codeMeta_->funcs.length();
+  uint32_t typeIndex = codeMeta_->types->length();
+  if (!codeMeta_->types->addRecGroup(&funcType.recGroup()) ||
+      !moduleMeta_->addDefinedFuncWithType(typeIndex, /*declareForRef=*/true,
+                                           mozilla::Some(CacheableName()))) {
     ReportOutOfMemory(cx_);
     return false;
   }
@@ -475,6 +512,101 @@ bool wasm::CreateLiftedFunction(
   return true;
 }
 
+// Generates the adapter for a lowered function, which has the flattened core
+// function type and calls the host function with one externref for each
+// parameter:
+//
+//   (func (param flat-param)* (result flat-result)?
+//     ;; ToJSValue for each parameter, into externref locals
+//     block
+//       try_table (result flat-result)? (catch_all 0)
+//         (local.get js-param)*
+//         call $host
+//         ;; ToComponentValue for the result, if any
+//       end
+//       return
+//     end
+//     ;; the host function or the result conversion threw
+//     trap
+//   )
+bool wasm::CreateLoweredFunction(
+    JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+    const ComponentFuncType& funcType, const TypeDef& coreFuncType,
+    HandleObject host, MutableHandleFunction result) {
+  if (!IsSupportedAdapterFuncType(funcType)) {
+    JS_ReportErrorASCII(cx, "component function type is not supported yet");
+    return false;
+  }
+
+  AdapterModuleBuilder builder(cx);
+  uint32_t numParams = funcType.paramTypes.length();
+  ValTypeVector hostParams, hostResults;
+  if (!hostParams.appendN(ValType(RefType::extern_()), numParams) ||
+      (funcType.resultType &&
+       !hostResults.append(ValType(RefType::extern_())))) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  uint32_t hostIndex;
+  if (!builder.init(instanceObj) ||
+      !builder.importJSFunc(host, std::move(hostParams), std::move(hostResults),
+                            &hostIndex) ||
+      !builder.defineAdapterFuncWithType(coreFuncType)) {
+    return false;
+  }
+
+  const FuncType& coreType = coreFuncType.funcType();
+  AdapterFuncEncoder f(builder.types(), coreType.args().length());
+
+  // The flattened parameters are the adapter's own parameters.
+  uint32_t nextFlatParam = 0;
+  Vector<uint32_t, 8, SystemAllocPolicy> jsParams;
+  for (const ComponentType& type : funcType.paramTypes) {
+    FlatLocals flat;
+    uint32_t jsParam;
+    if (!flat.append(nextFlatParam++) ||
+        !f.addLocal(ValType(RefType::extern_()), &jsParam) ||
+        !jsParams.append(jsParam) || !EmitToJSValue(f, type, flat) ||
+        !f.localSet(jsParam)) {
+      ReportOutOfMemory(cx);
+      return false;
+    }
+  }
+
+  FlatLocals flatResult;
+  mozilla::Maybe<ValType> flatResultType;
+  uint32_t jsResult = 0;
+  if (funcType.resultType) {
+    if (!AddFlatLocals(f, *funcType.resultType, &flatResult) ||
+        !f.addLocal(ValType(RefType::extern_()), &jsResult)) {
+      ReportOutOfMemory(cx);
+      return false;
+    }
+    flatResultType.emplace(ValType::I32);
+  }
+
+  bool ok = f.block(Op::Block, mozilla::Nothing()) &&
+            f.tryTableCatchAll(flatResultType, 0);
+  for (uint32_t jsParam : jsParams) {
+    ok = ok && f.localGet(jsParam);
+  }
+  ok = ok && f.call(hostIndex);
+  if (funcType.resultType) {
+    ok = ok && f.localSet(jsResult) &&
+         EmitToComponentValue(f, *funcType.resultType, jsResult, flatResult) &&
+         f.localGet(flatResult[0]);
+  }
+  ok = ok && f.op(Op::End) && f.op(Op::Return) && f.op(Op::End) &&
+       f.trap(AdapterTrap::ImportException);
+
+  Bytes body;
+  if (!ok || !f.finish(&body)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  return builder.finish(body, result);
+}
+
 // ============================================================================
 // Builtins
 
@@ -576,6 +708,9 @@ int32_t wasm::CmTrap(Instance* instance, int32_t reason) {
   switch (AdapterTrap(reason)) {
     case AdapterTrap::UncaughtException:
       ReportTrapError(instance->cx(), JSMSG_WASM_COMPONENT_UNCAUGHT_EXCEPTION);
+      break;
+    case AdapterTrap::ImportException:
+      ReportTrapError(instance->cx(), JSMSG_WASM_COMPONENT_IMPORT_EXCEPTION);
       break;
   }
   return -1;

@@ -2704,7 +2704,8 @@ void WasmComponentInstanceObject::trace(JSTracer* trc, JSObject* obj) {
 
 /* static */
 WasmComponentInstanceObject* WasmComponentInstanceObject::create(
-    JSContext* cx, HandleObject proto, const SharedComponent component) {
+    JSContext* cx, HandleObject proto, const SharedComponent component,
+    HandleObject importObj) {
   ComponentInstance* instance = nullptr;
   Rooted<WasmComponentInstanceObject*> obj(cx);
 
@@ -2735,7 +2736,7 @@ WasmComponentInstanceObject* WasmComponentInstanceObject::create(
   }
 
   RootedObject exportsObj(cx);
-  if (!instance->init(cx) ||
+  if (!instance->readImports(cx, importObj) || !instance->init(cx, obj) ||
       !instance->createExportsObject(cx, obj, &exportsObj)) {
     return nullptr;
   }
@@ -2773,7 +2774,10 @@ bool WasmComponentInstanceObject::construct(JSContext* cx, unsigned argc,
     return false;
   }
 
-  // TODO(wasm-cm): Introduce imports
+  RootedObject importObj(cx);
+  if (!GetImportArg(cx, args.get(1), &importObj)) {
+    return false;
+  }
 
   RootedObject proto(
       cx, GetWasmConstructorPrototype(cx, args, JSProto_WasmComponentInstance));
@@ -2783,7 +2787,8 @@ bool WasmComponentInstanceObject::construct(JSContext* cx, unsigned argc,
   }
 
   Rooted<WasmComponentInstanceObject*> instanceObj(cx);
-  if (!componentObj->component().instantiate(cx, proto, &instanceObj)) {
+  if (!componentObj->component().instantiate(cx, proto, importObj,
+                                             &instanceObj)) {
     return false;
   }
 
@@ -5220,9 +5225,8 @@ class AsyncInstantiateComponentTask : public OffThreadPromiseTask {
       return RejectWithPendingException(cx, promise);
     }
 
-    // TODO(wasm-cm): Read the imports from importObj_.
     Rooted<WasmComponentInstanceObject*> instanceObj(cx);
-    if (!component_->instantiate(cx, instanceProto, &instanceObj)) {
+    if (!component_->instantiate(cx, instanceProto, importObj_, &instanceObj)) {
       return RejectWithPendingException(cx, promise);
     }
 

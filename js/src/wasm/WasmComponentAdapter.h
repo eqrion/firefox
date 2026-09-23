@@ -37,6 +37,14 @@ class Instance;
     const ComponentFuncType& funcType, HandleFunction callee,
     Handle<JSAtom*> name, MutableHandleFunction result);
 
+// Creates the core function for a component function lowered from `host`, a
+// function read from the imports object. `coreFuncType` is the flattened type
+// of the component function.
+[[nodiscard]] bool CreateLoweredFunction(
+    JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+    const ComponentFuncType& funcType, const TypeDef& coreFuncType,
+    HandleObject host, MutableHandleFunction result);
+
 // Converts a JS value to an integer of type `kind`, a ComponentTypeKind. On
 // success, returns 0 and puts the integer in the instance's scratch.
 int32_t CmToInteger(Instance* instance, void* ctxRef, void* valueRef,
