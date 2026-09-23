@@ -69,6 +69,9 @@ class MOZ_STACK_CLASS AdapterModuleBuilder {
   [[nodiscard]] bool importJSFunc(HandleObject func, ValTypeVector&& params,
                                   ValTypeVector&& results, uint32_t* funcIndex);
 
+  // Imports the memory for the canonical ABI as memory 0.
+  [[nodiscard]] bool importMemory(Handle<WasmMemoryObject*> memory);
+
   [[nodiscard]] bool defineAdapterFunc(ValTypeVector&& params,
                                        ValTypeVector&& results);
   [[nodiscard]] bool defineAdapterFuncWithType(const TypeDef& funcType);
@@ -141,6 +144,23 @@ bool AdapterModuleBuilder::importJSFunc(HandleObject func,
     ReportOutOfMemory(cx_);
     return false;
   }
+  return true;
+}
+
+bool AdapterModuleBuilder::importMemory(Handle<WasmMemoryObject*> memory) {
+  MOZ_ASSERT(codeMeta_->memories.empty());
+  MOZ_ASSERT(memory->addressType() == AddressType::I32 && !memory->isShared());
+  Limits limits(/*initial=*/0, mozilla::Nothing(), Shareable::False,
+                memory->pageSize());
+  uint32_t importIndex = moduleMeta_->imports.length();
+  if (!codeMeta_->memories.emplaceBack(MemoryDesc(limits)) ||
+      !moduleMeta_->imports.emplaceBack(CacheableName(), CacheableName(),
+                                        DefinitionKind::Memory) ||
+      !imports_.get().memories.append(memory)) {
+    ReportOutOfMemory(cx_);
+    return false;
+  }
+  codeMeta_->memories.back().importIndex = mozilla::Some(importIndex);
   return true;
 }
 
@@ -276,9 +296,30 @@ class AdapterFuncEncoder {
            encoder_.writeFixedU8(0x2) && encoder_.writeVarU32(depth);
   }
 
+  [[nodiscard]] bool br(uint32_t depth) {
+    return encoder_.writeOp(Op::Br) && encoder_.writeVarU32(depth);
+  }
+
+  // Loads and stores from memory 0.
+  [[nodiscard]] bool memoryAccess(Op op, uint32_t alignLog2, uint32_t offset) {
+    return encoder_.writeOp(op) && encoder_.writeVarU32(alignLog2) &&
+           encoder_.writeVarU32(offset);
+  }
+
   [[nodiscard]] bool trap(AdapterTrap reason) {
     return i32Const(int32_t(reason)) &&
            callBuiltin(BuiltinModuleFuncId::CmTrap) && op(Op::Unreachable);
+  }
+
+  // Calls a function of the guest, trapping if it throws. `emitArgs` emits
+  // the arguments.
+  template <typename F>
+  [[nodiscard]] bool callGuest(uint32_t funcIndex,
+                               mozilla::Maybe<ValType> result, F emitArgs) {
+    return block(Op::Block, result) && block(Op::Block, mozilla::Nothing()) &&
+           tryTableCatchAll(result, 0) && emitArgs() && call(funcIndex) &&
+           op(Op::End) && br(1) && op(Op::End) &&
+           trap(AdapterTrap::UncaughtException) && op(Op::End);
   }
 
   [[nodiscard]] bool finish(Bytes* body) {
@@ -304,7 +345,8 @@ static bool IsIntegerKind(ComponentTypeKind kind) {
   }
 }
 
-static bool IsSupportedAdapterType(const ComponentType& type) {
+static bool IsSupportedAdapterType(const ComponentType& type,
+                                   const CanonOptValues& opts) {
   switch (type.kind()) {
     case ComponentTypeKind::Bool:
     case ComponentTypeKind::S64:
@@ -313,17 +355,20 @@ static bool IsSupportedAdapterType(const ComponentType& type) {
     case ComponentTypeKind::F64:
     case ComponentTypeKind::Char:
       return true;
+    case ComponentTypeKind::String:
+      return opts.stringEncoding != ComponentStringEncoding::Latin1PlusUTF16;
     default:
       return IsIntegerKind(type.kind());
   }
 }
 
 [[nodiscard]] static bool CheckSupportedAdapterFuncType(
-    JSContext* cx, const ComponentFuncType& funcType) {
+    JSContext* cx, const ComponentFuncType& funcType,
+    const CanonOptValues& opts) {
   bool supported = funcType.resultType.isNothing() ||
-                   IsSupportedAdapterType(*funcType.resultType);
+                   IsSupportedAdapterType(*funcType.resultType, opts);
   for (const ComponentType& type : funcType.paramTypes) {
-    supported = supported && IsSupportedAdapterType(type);
+    supported = supported && IsSupportedAdapterType(type, opts);
   }
 
   ValTypeVector flatParams;
@@ -341,7 +386,7 @@ static bool IsSupportedAdapterType(const ComponentType& type) {
 }
 
 // The core wasm types a component value is flattened to, stored in locals.
-using FlatLocals = Vector<uint32_t, 1, SystemAllocPolicy>;
+using FlatLocals = Vector<uint32_t, 2, SystemAllocPolicy>;
 
 [[nodiscard]] static bool FlatTypes(const ComponentType& type,
                                     ValTypeVector* flat) {
@@ -349,26 +394,10 @@ using FlatLocals = Vector<uint32_t, 1, SystemAllocPolicy>;
   return FlattenType(type, flat, &hasStringsOrLists, &tooDeep, 0);
 }
 
-// Gets the type of the single flat value that a result is returned as.
-[[nodiscard]] static bool FlatResultType(const ComponentType& type,
-                                         mozilla::Maybe<ValType>* result) {
-  ValTypeVector flat;
-  if (!FlatTypes(type, &flat)) {
-    return false;
-  }
-  MOZ_RELEASE_ASSERT(flat.length() == 1);
-  result->emplace(flat[0]);
-  return true;
-}
-
 [[nodiscard]] static bool AddFlatLocals(AdapterFuncEncoder& f,
-                                        const ComponentType& type,
+                                        const ValTypeVector& flatTypes,
                                         FlatLocals* locals) {
-  ValTypeVector flat;
-  if (!FlatTypes(type, &flat)) {
-    return false;
-  }
-  for (ValType flatType : flat) {
+  for (ValType flatType : flatTypes) {
     uint32_t index;
     if (!f.addLocal(flatType, &index) || !locals->append(index)) {
       return false;
@@ -377,66 +406,312 @@ using FlatLocals = Vector<uint32_t, 1, SystemAllocPolicy>;
   return true;
 }
 
+// Where the core representation of a component value is: either flattened
+// into locals, or stored in memory at a pointer (held in a local) plus an
+// offset.
+class ValueLoc {
+  mozilla::Span<const uint32_t> flat_;
+  uint32_t ptr_ = UINT32_MAX;
+  uint32_t offset_ = 0;
+
+ public:
+  static ValueLoc flat(mozilla::Span<const uint32_t> locals) {
+    ValueLoc loc;
+    loc.flat_ = locals;
+    return loc;
+  }
+  static ValueLoc memory(uint32_t ptrLocal, uint32_t offset) {
+    ValueLoc loc;
+    loc.ptr_ = ptrLocal;
+    loc.offset_ = offset;
+    return loc;
+  }
+
+  bool inMemory() const { return ptr_ != UINT32_MAX; }
+  mozilla::Span<const uint32_t> flatLocals() const { return flat_; }
+  uint32_t ptrLocal() const { return ptr_; }
+  uint32_t offset() const { return offset_; }
+};
+
+// How a scalar is loaded from and stored to memory, and its flat type.
+struct ScalarLayout {
+  Op load;
+  Op store;
+  uint32_t alignLog2;
+  ValType flatType;
+};
+
+static ScalarLayout GetScalarLayout(ComponentTypeKind kind) {
+  switch (kind) {
+    case ComponentTypeKind::Bool:
+    case ComponentTypeKind::U8:
+      return {Op::I32Load8U, Op::I32Store8, 0, ValType::I32};
+    case ComponentTypeKind::S8:
+      return {Op::I32Load8S, Op::I32Store8, 0, ValType::I32};
+    case ComponentTypeKind::U16:
+      return {Op::I32Load16U, Op::I32Store16, 1, ValType::I32};
+    case ComponentTypeKind::S16:
+      return {Op::I32Load16S, Op::I32Store16, 1, ValType::I32};
+    case ComponentTypeKind::S32:
+    case ComponentTypeKind::U32:
+    case ComponentTypeKind::Char:
+      return {Op::I32Load, Op::I32Store, 2, ValType::I32};
+    case ComponentTypeKind::S64:
+    case ComponentTypeKind::U64:
+      return {Op::I64Load, Op::I64Store, 3, ValType::I64};
+    case ComponentTypeKind::F32:
+      return {Op::F32Load, Op::F32Store, 2, ValType::F32};
+    case ComponentTypeKind::F64:
+      return {Op::F64Load, Op::F64Store, 3, ValType::F64};
+    default:
+      MOZ_CRASH("not a scalar type");
+  }
+}
+
+// State shared by the code converting the values of one adapter.
+struct AdapterContext {
+  AdapterFuncEncoder& f;
+  ComponentStringEncoding stringEncoding;
+  // The realloc function, or UINT32_MAX if there is none.
+  uint32_t realloc;
+  // Whether calls to realloc enter the guest, which is true when lifting.
+  bool enterGuest;
+};
+
+// Pushes a scalar from `loc`.
+[[nodiscard]] static bool EmitGetScalar(AdapterFuncEncoder& f,
+                                        ComponentTypeKind kind,
+                                        const ValueLoc& loc) {
+  if (!loc.inMemory()) {
+    return f.localGet(loc.flatLocals()[0]);
+  }
+  ScalarLayout layout = GetScalarLayout(kind);
+  return f.localGet(loc.ptrLocal()) &&
+         f.memoryAccess(layout.load, layout.alignLog2, loc.offset());
+}
+
+// Stores the scalar on the stack to `loc`.
+[[nodiscard]] static bool EmitSetScalar(AdapterFuncEncoder& f,
+                                        ComponentTypeKind kind,
+                                        const ValueLoc& loc) {
+  if (!loc.inMemory()) {
+    return f.localSet(loc.flatLocals()[0]);
+  }
+  ScalarLayout layout = GetScalarLayout(kind);
+  uint32_t value;
+  return f.addLocal(layout.flatType, &value) && f.localSet(value) &&
+         f.localGet(loc.ptrLocal()) && f.localGet(value) &&
+         f.memoryAccess(layout.store, layout.alignLog2, loc.offset());
+}
+
+// Pushes the i32 at `index` of a value made of i32s, like a string.
+[[nodiscard]] static bool EmitGetI32(AdapterFuncEncoder& f, const ValueLoc& loc,
+                                     uint32_t index) {
+  if (!loc.inMemory()) {
+    return f.localGet(loc.flatLocals()[index]);
+  }
+  return f.localGet(loc.ptrLocal()) &&
+         f.memoryAccess(Op::I32Load, 2, loc.offset() + 4 * index);
+}
+
+// Stores the i32 in local `value` at `index` of a value made of i32s.
+[[nodiscard]] static bool EmitSetI32(AdapterFuncEncoder& f, const ValueLoc& loc,
+                                     uint32_t index, uint32_t value) {
+  if (!loc.inMemory()) {
+    return f.localGet(value) && f.localSet(loc.flatLocals()[index]);
+  }
+  return f.localGet(loc.ptrLocal()) && f.localGet(value) &&
+         f.memoryAccess(Op::I32Store, 2, loc.offset() + 4 * index);
+}
+
+// Calls realloc, with `emitOld` emitting its first two arguments, and stores
+// the result in local `ptr`.
+template <typename F>
+[[nodiscard]] static bool EmitRealloc(AdapterContext& a, F emitOld,
+                                      int32_t alignment, uint32_t newSize,
+                                      uint32_t ptr) {
+  AdapterFuncEncoder& f = a.f;
+  MOZ_ASSERT(a.realloc != UINT32_MAX);
+  return (!a.enterGuest ||
+          (f.ctx() && f.callBuiltin(BuiltinModuleFuncId::CmEnterGuest))) &&
+         f.callGuest(a.realloc, mozilla::Some(ValType::I32),
+                     [&]() {
+                       return emitOld() && f.i32Const(alignment) &&
+                              f.localGet(newSize);
+                     }) &&
+         f.localSet(ptr);
+}
+
+// The canonical ABI's allocate, of the size in local `size`.
+[[nodiscard]] static bool EmitAllocate(AdapterContext& a, int32_t alignment,
+                                       uint32_t size, uint32_t ptr) {
+  return EmitRealloc(
+      a, [&]() { return a.f.i32Const(0) && a.f.i32Const(0); }, alignment, size,
+      ptr);
+}
+
+// The canonical ABI's reallocate, of `ptr` from `oldSize` to `newSize`, all
+// locals.
+[[nodiscard]] static bool EmitReallocate(AdapterContext& a, uint32_t oldSize,
+                                         int32_t alignment, uint32_t newSize,
+                                         uint32_t ptr) {
+  return EmitRealloc(
+      a, [&]() { return a.f.localGet(ptr) && a.f.localGet(oldSize); },
+      alignment, newSize, ptr);
+}
+
+// ToComponentValue for a string, with the canonical ABI's store_string. JS
+// strings are stored as if their encoding is UTF-16.
+[[nodiscard]] static bool EmitStoreString(AdapterContext& a, uint32_t jsValue,
+                                          const ValueLoc& loc) {
+  using Id = BuiltinModuleFuncId;
+  AdapterFuncEncoder& f = a.f;
+  uint32_t str, length, ptr, byteLength;
+  if (!f.addLocal(ValType(RefType::extern_()), &str) ||
+      !f.addLocal(ValType::I32, &length) || !f.addLocal(ValType::I32, &ptr) ||
+      !f.addLocal(ValType::I32, &byteLength) || !f.localGet(jsValue) ||
+      !f.callBuiltin(Id::CmToString) || !f.localSet(str) || !f.localGet(str) ||
+      !f.callBuiltin(Id::CmStringLength) || !f.localSet(length)) {
+    return false;
+  }
+
+  switch (a.stringEncoding) {
+    case ComponentStringEncoding::UTF8: {
+      // Optimistically allocate one byte per code unit, and if the string
+      // turns out not to be ASCII, grow to the worst case and then shrink.
+      uint32_t asciiLength;
+      if (!f.addLocal(ValType::I32, &asciiLength) ||
+          !EmitAllocate(a, 1, length, ptr) || !f.localGet(str) ||
+          !f.localGet(ptr) || !f.localGet(length) ||
+          !f.callBuiltin(Id::CmStoreASCII) || !f.localSet(asciiLength) ||
+          !f.localGet(asciiLength) || !f.localGet(length) || !f.op(Op::I32Ne) ||
+          !f.block(Op::If, mozilla::Nothing())) {
+        return false;
+      }
+      uint32_t worstCase;
+      if (!f.addLocal(ValType::I32, &worstCase) || !f.localGet(length) ||
+          !f.i32Const(3) || !f.op(Op::I32Mul) || !f.localSet(worstCase) ||
+          !EmitReallocate(a, length, 1, worstCase, ptr) || !f.ctx() ||
+          !f.localGet(str) || !f.localGet(ptr) || !f.localGet(worstCase) ||
+          !f.callBuiltin(Id::CmStoreUTF8) || !f.ctx() ||
+          !f.callBuiltin(Id::CmScratchI32) || !f.localSet(byteLength) ||
+          !f.localGet(worstCase) || !f.localGet(byteLength) ||
+          !f.op(Op::I32GtU) || !f.block(Op::If, mozilla::Nothing()) ||
+          !EmitReallocate(a, worstCase, 1, byteLength, ptr) ||
+          !f.localGet(ptr) || !f.localGet(byteLength) || !f.i32Const(1) ||
+          !f.callBuiltin(Id::CmCheckRange) || !f.op(Op::End) ||
+          !f.localGet(byteLength) || !f.localSet(length) || !f.op(Op::End)) {
+        return false;
+      }
+      break;
+    }
+    case ComponentStringEncoding::UTF16:
+      if (!f.localGet(length) || !f.i32Const(1) || !f.op(Op::I32Shl) ||
+          !f.localSet(byteLength) || !EmitAllocate(a, 2, byteLength, ptr) ||
+          !f.localGet(str) || !f.localGet(ptr) || !f.localGet(length) ||
+          !f.callBuiltin(Id::CmStoreUTF16)) {
+        return false;
+      }
+      break;
+    case ComponentStringEncoding::Latin1PlusUTF16:
+      MOZ_CRASH("not supported yet");
+  }
+
+  return EmitSetI32(f, loc, 0, ptr) && EmitSetI32(f, loc, 1, length);
+}
+
 // Emits ToComponentValue for the JS value in local `jsValue`, storing the
-// flattened component value to `dest`.
-[[nodiscard]] static bool EmitToComponentValue(AdapterFuncEncoder& f,
+// component value to `loc`.
+[[nodiscard]] static bool EmitToComponentValue(AdapterContext& a,
                                                const ComponentType& type,
                                                uint32_t jsValue,
-                                               const FlatLocals& dest) {
+                                               const ValueLoc& loc) {
   using Id = BuiltinModuleFuncId;
+  AdapterFuncEncoder& f = a.f;
   ComponentTypeKind kind = type.kind();
   switch (kind) {
     case ComponentTypeKind::Bool:
       return f.localGet(jsValue) && f.callBuiltin(Id::CmToBool) &&
-             f.localSet(dest[0]);
+             EmitSetScalar(f, kind, loc);
     case ComponentTypeKind::S64:
     case ComponentTypeKind::U64:
       return f.ctx() && f.localGet(jsValue) && f.i32Const(int32_t(kind)) &&
              f.callBuiltin(Id::CmToInteger) && f.ctx() &&
-             f.callBuiltin(Id::CmScratchI64) && f.localSet(dest[0]);
+             f.callBuiltin(Id::CmScratchI64) && EmitSetScalar(f, kind, loc);
     case ComponentTypeKind::F32:
     case ComponentTypeKind::F64:
       return f.ctx() && f.localGet(jsValue) && f.callBuiltin(Id::CmToFloat) &&
              f.ctx() && f.callBuiltin(Id::CmScratchF64) &&
              (kind == ComponentTypeKind::F64 || f.op(Op::F32DemoteF64)) &&
-             f.localSet(dest[0]);
+             EmitSetScalar(f, kind, loc);
     case ComponentTypeKind::Char:
       return f.localGet(jsValue) && f.callBuiltin(Id::CmToChar) &&
-             f.localSet(dest[0]);
+             EmitSetScalar(f, kind, loc);
+    case ComponentTypeKind::String:
+      return EmitStoreString(a, jsValue, loc);
     default:
       MOZ_ASSERT(IsIntegerKind(kind));
       return f.ctx() && f.localGet(jsValue) && f.i32Const(int32_t(kind)) &&
              f.callBuiltin(Id::CmToInteger) && f.ctx() &&
-             f.callBuiltin(Id::CmScratchI32) && f.localSet(dest[0]);
+             f.callBuiltin(Id::CmScratchI32) && EmitSetScalar(f, kind, loc);
   }
 }
 
-// Emits ToJSValue for the flattened component value in `src`, leaving the JS
-// value on the stack.
-[[nodiscard]] static bool EmitToJSValue(AdapterFuncEncoder& f,
+// Emits ToJSValue for the component value at `loc`, leaving the JS value on
+// the stack.
+[[nodiscard]] static bool EmitToJSValue(AdapterContext& a,
                                         const ComponentType& type,
-                                        const FlatLocals& src) {
+                                        const ValueLoc& loc) {
   using Id = BuiltinModuleFuncId;
+  AdapterFuncEncoder& f = a.f;
   ComponentTypeKind kind = type.kind();
   switch (kind) {
     case ComponentTypeKind::Bool:
-      return f.localGet(src[0]) && f.callBuiltin(Id::CmBoolToJS);
+      return EmitGetScalar(f, kind, loc) && f.callBuiltin(Id::CmBoolToJS);
     case ComponentTypeKind::S64:
     case ComponentTypeKind::U64:
-      return f.localGet(src[0]) && f.i32Const(int32_t(kind)) &&
+      return EmitGetScalar(f, kind, loc) && f.i32Const(int32_t(kind)) &&
              f.callBuiltin(Id::CmInt64ToJS);
     case ComponentTypeKind::F32:
-      return f.localGet(src[0]) && f.op(Op::F64PromoteF32) &&
+      return EmitGetScalar(f, kind, loc) && f.op(Op::F64PromoteF32) &&
              f.callBuiltin(Id::CmFloatToJS);
     case ComponentTypeKind::F64:
-      return f.localGet(src[0]) && f.callBuiltin(Id::CmFloatToJS);
+      return EmitGetScalar(f, kind, loc) && f.callBuiltin(Id::CmFloatToJS);
     case ComponentTypeKind::Char:
-      return f.localGet(src[0]) && f.callBuiltin(Id::CmCharToJS);
+      return EmitGetScalar(f, kind, loc) && f.callBuiltin(Id::CmCharToJS);
+    case ComponentTypeKind::String:
+      return EmitGetI32(f, loc, 0) && EmitGetI32(f, loc, 1) &&
+             f.i32Const(int32_t(a.stringEncoding)) &&
+             f.callBuiltin(Id::CmStringToJS);
     default:
       MOZ_ASSERT(IsIntegerKind(kind));
-      return f.localGet(src[0]) && f.i32Const(int32_t(kind)) &&
+      return EmitGetScalar(f, kind, loc) && f.i32Const(int32_t(kind)) &&
              f.callBuiltin(Id::CmIntegerToJS);
   }
+}
+
+// Traps unless `ptr` is aligned for `type` and all of `type` fits in memory.
+[[nodiscard]] static bool EmitCheckPointer(AdapterFuncEncoder& f,
+                                           const ComponentType& type,
+                                           uint32_t ptr) {
+  return f.localGet(ptr) && f.i32Const(int32_t(CanonElemSize(type))) &&
+         f.i32Const(int32_t(CanonAlignment(type))) &&
+         f.callBuiltin(BuiltinModuleFuncId::CmCheckRange);
+}
+
+// Imports the memory and functions of the canonical options into `builder`,
+// and sets up `realloc` and `postReturn` with their function indices, or
+// UINT32_MAX if they are absent.
+[[nodiscard]] static bool ImportCanonOpts(AdapterModuleBuilder& builder,
+                                          const CanonOptValues& opts,
+                                          uint32_t* realloc,
+                                          uint32_t* postReturn) {
+  *realloc = UINT32_MAX;
+  *postReturn = UINT32_MAX;
+  return (!opts.memory || builder.importMemory(opts.memory)) &&
+         (!opts.realloc || builder.importWasmFunc(opts.realloc, realloc)) &&
+         (!opts.postReturn ||
+          builder.importWasmFunc(opts.postReturn, postReturn));
 }
 
 // Generates the adapter for a lifted function, which takes one externref for
@@ -444,25 +719,19 @@ using FlatLocals = Vector<uint32_t, 1, SystemAllocPolicy>;
 //
 //   (func (param externref)* (result externref)?
 //     ;; ToComponentValue for each parameter, into flat locals
-//     block
-//       try_table (result flat-result)? (catch_all 0)
-//         (local.get flat-param)*
-//         call $callee
-//       end
-//       ;; ToJSValue for the result, if any
-//       return
-//     end
-//     ;; the callee threw
-//     trap
+//     ;; call $callee, trapping if it throws
+//     ;; ToJSValue for the result, from flat locals or the result pointer
+//     ;; call $post-return, if any
 //   )
 [[nodiscard]] static bool GenerateLiftAdapter(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     const ComponentFuncType& funcType, HandleFunction callee,
-    MutableHandleFunction result) {
+    const CanonOptValues& opts, MutableHandleFunction result) {
   AdapterModuleBuilder builder(cx);
-  uint32_t calleeIndex;
+  uint32_t calleeIndex, realloc, postReturn;
   if (!builder.init(instanceObj) ||
-      !builder.importWasmFunc(callee, &calleeIndex)) {
+      !builder.importWasmFunc(callee, &calleeIndex) ||
+      !ImportCanonOpts(builder, opts, &realloc, &postReturn)) {
     return false;
   }
 
@@ -478,43 +747,72 @@ using FlatLocals = Vector<uint32_t, 1, SystemAllocPolicy>;
   }
 
   AdapterFuncEncoder f(builder.types(), numParams);
-  Vector<FlatLocals, 8, SystemAllocPolicy> flatParams;
-  if (!flatParams.resize(numParams)) {
-    ReportOutOfMemory(cx);
-    return false;
-  }
+  AdapterContext a{f, opts.stringEncoding, realloc, /*enterGuest=*/true};
+
+  FlatLocals flatArgs;
   for (uint32_t i = 0; i < numParams; i++) {
     const ComponentType& type = funcType.paramTypes[i];
-    if (!AddFlatLocals(f, type, &flatParams[i]) ||
-        !EmitToComponentValue(f, type, i, flatParams[i])) {
+    ValTypeVector flatTypes;
+    size_t start = flatArgs.length();
+    if (!FlatTypes(type, &flatTypes) ||
+        !AddFlatLocals(f, flatTypes, &flatArgs) ||
+        !EmitToComponentValue(
+            a, type, i,
+            ValueLoc::flat(
+                mozilla::Span<const uint32_t>(flatArgs).From(start)))) {
       ReportOutOfMemory(cx);
       return false;
     }
   }
 
-  FlatLocals flatResult;
-  mozilla::Maybe<ValType> flatResultType;
+  // Results with more than one flat value are returned through a pointer.
+  ValTypeVector flatResultTypes;
   if (funcType.resultType &&
-      (!AddFlatLocals(f, *funcType.resultType, &flatResult) ||
-       !FlatResultType(*funcType.resultType, &flatResultType))) {
+      !FlatTypes(*funcType.resultType, &flatResultTypes)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  bool useRetPtr = flatResultTypes.length() > MaxFlatResults;
+  mozilla::Maybe<ValType> calleeResultType;
+  if (!flatResultTypes.empty()) {
+    calleeResultType.emplace(useRetPtr ? ValType::I32 : flatResultTypes[0]);
+  }
+  uint32_t calleeResult = UINT32_MAX;
+  if (calleeResultType && !f.addLocal(*calleeResultType, &calleeResult)) {
     ReportOutOfMemory(cx);
     return false;
   }
 
-  bool ok = f.block(Op::Block, mozilla::Nothing()) &&
-            f.tryTableCatchAll(flatResultType, 0);
-  for (const FlatLocals& locals : flatParams) {
-    for (uint32_t local : locals) {
-      ok = ok && f.localGet(local);
-    }
+  bool ok = f.ctx() && f.callBuiltin(BuiltinModuleFuncId::CmEnterGuest) &&
+            f.callGuest(calleeIndex, calleeResultType, [&]() {
+              bool ok = true;
+              for (uint32_t local : flatArgs) {
+                ok = ok && f.localGet(local);
+              }
+              return ok;
+            });
+  if (calleeResultType) {
+    ok = ok && f.localSet(calleeResult);
   }
-  ok = ok && f.call(calleeIndex) && f.op(Op::End);
+
+  uint32_t jsResult = UINT32_MAX;
   if (funcType.resultType) {
-    ok = ok && f.localSet(flatResult[0]) &&
-         EmitToJSValue(f, *funcType.resultType, flatResult);
+    ValueLoc loc = useRetPtr ? ValueLoc::memory(calleeResult, 0)
+                             : ValueLoc::flat(mozilla::Span(&calleeResult, 1));
+    ok = ok && f.addLocal(ValType(RefType::extern_()), &jsResult) &&
+         (!useRetPtr ||
+          EmitCheckPointer(f, *funcType.resultType, calleeResult)) &&
+         EmitToJSValue(a, *funcType.resultType, loc) && f.localSet(jsResult);
   }
-  ok = ok && f.op(Op::Return) && f.op(Op::End) &&
-       f.trap(AdapterTrap::UncaughtException);
+
+  if (postReturn != UINT32_MAX) {
+    ok = ok && f.callGuest(postReturn, mozilla::Nothing(), [&]() {
+      return !calleeResultType || f.localGet(calleeResult);
+    });
+  }
+  if (funcType.resultType) {
+    ok = ok && f.localGet(jsResult);
+  }
 
   Bytes body;
   if (!ok || !f.finish(&body)) {
@@ -566,25 +864,30 @@ static bool CallLiftedFunction(JSContext* cx, unsigned argc, Value* vp) {
     adapterArgs[i].set(args.get(i));
   }
 
-  if (!Call(cx, adapter, UndefinedHandleValue, adapterArgs, args.rval())) {
-    if (IsPendingTrap(cx)) {
-      instance.setTrapped();
-    }
-    return false;
+  // A call that fails after entering the guest locks down the instance, even
+  // if the failure is not a trap. Calls into the instance from an import can
+  // nest, so the outer call's state is restored afterwards.
+  bool outerEnteredGuest = instance.enteredGuest();
+  instance.setEnteredGuest(false);
+  bool ok = Call(cx, adapter, UndefinedHandleValue, adapterArgs, args.rval());
+  if (!ok && (instance.enteredGuest() || IsPendingTrap(cx))) {
+    instance.setTrapped();
   }
-  return true;
+  instance.setEnteredGuest(outerEnteredGuest);
+  return ok;
 }
 
 bool wasm::CreateLiftedFunction(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     const ComponentFuncType& funcType, HandleFunction callee,
-    Handle<JSAtom*> name, MutableHandleFunction result) {
-  if (!CheckSupportedAdapterFuncType(cx, funcType)) {
+    const CanonOptValues& opts, Handle<JSAtom*> name,
+    MutableHandleFunction result) {
+  if (!CheckSupportedAdapterFuncType(cx, funcType, opts)) {
     return false;
   }
 
   RootedFunction adapter(cx);
-  if (!GenerateLiftAdapter(cx, instanceObj, funcType, callee, &adapter)) {
+  if (!GenerateLiftAdapter(cx, instanceObj, funcType, callee, opts, &adapter)) {
     return false;
   }
 
@@ -606,13 +909,14 @@ bool wasm::CreateLiftedFunction(
 // function type and calls the host function with one externref for each
 // parameter:
 //
-//   (func (param flat-param)* (result flat-result)?
+//   (func (param flat-param)* (param $retptr i32)? (result flat-result)?
 //     ;; ToJSValue for each parameter, into externref locals
 //     block
 //       try_table (result flat-result)? (catch_all 0)
 //         (local.get js-param)*
 //         call $host
-//         ;; ToComponentValue for the result, if any
+//         ;; ToComponentValue for the result, if any, into a flat local or
+//         ;; to $retptr
 //       end
 //       return
 //     end
@@ -622,8 +926,9 @@ bool wasm::CreateLiftedFunction(
 bool wasm::CreateLoweredFunction(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     const ComponentFuncType& funcType, const TypeDef& coreFuncType,
-    HandleObject host, MutableHandleFunction result) {
-  if (!CheckSupportedAdapterFuncType(cx, funcType)) {
+    HandleObject host, const CanonOptValues& opts,
+    MutableHandleFunction result) {
+  if (!CheckSupportedAdapterFuncType(cx, funcType, opts)) {
     return false;
   }
 
@@ -636,16 +941,19 @@ bool wasm::CreateLoweredFunction(
     ReportOutOfMemory(cx);
     return false;
   }
-  uint32_t hostIndex;
+  uint32_t hostIndex, realloc, postReturn;
   if (!builder.init(instanceObj) ||
       !builder.importJSFunc(host, std::move(hostParams), std::move(hostResults),
                             &hostIndex) ||
+      !ImportCanonOpts(builder, opts, &realloc, &postReturn) ||
       !builder.defineAdapterFuncWithType(coreFuncType)) {
     return false;
   }
+  MOZ_ASSERT(postReturn == UINT32_MAX);
 
   const FuncType& coreType = coreFuncType.funcType();
   AdapterFuncEncoder f(builder.types(), coreType.args().length());
+  AdapterContext a{f, opts.stringEncoding, realloc, /*enterGuest=*/false};
 
   // The flattened parameters are the adapter's own parameters.
   uint32_t nextFlatParam = 0;
@@ -665,20 +973,27 @@ bool wasm::CreateLoweredFunction(
     }
     uint32_t jsParam;
     if (!f.addLocal(ValType(RefType::extern_()), &jsParam) ||
-        !jsParams.append(jsParam) || !EmitToJSValue(f, type, flat) ||
-        !f.localSet(jsParam)) {
+        !jsParams.append(jsParam) ||
+        !EmitToJSValue(a, type, ValueLoc::flat(flat)) || !f.localSet(jsParam)) {
       ReportOutOfMemory(cx);
       return false;
     }
   }
 
-  FlatLocals flatResult;
+  // Results with more than one flat value are stored to a pointer that is
+  // passed as the last parameter.
+  bool useRetPtr =
+      coreType.results().empty() && coreType.args().length() > nextFlatParam;
+  uint32_t retPtr = nextFlatParam;
   mozilla::Maybe<ValType> flatResultType;
-  uint32_t jsResult = 0;
-  if (funcType.resultType &&
-      (!AddFlatLocals(f, *funcType.resultType, &flatResult) ||
-       !FlatResultType(*funcType.resultType, &flatResultType) ||
-       !f.addLocal(ValType(RefType::extern_()), &jsResult))) {
+  if (!coreType.results().empty()) {
+    flatResultType.emplace(coreType.results()[0]);
+  }
+  uint32_t jsResult = UINT32_MAX;
+  uint32_t flatResult = UINT32_MAX;
+  if ((funcType.resultType &&
+       !f.addLocal(ValType(RefType::extern_()), &jsResult)) ||
+      (flatResultType && !f.addLocal(*flatResultType, &flatResult))) {
     ReportOutOfMemory(cx);
     return false;
   }
@@ -690,9 +1005,14 @@ bool wasm::CreateLoweredFunction(
   }
   ok = ok && f.call(hostIndex);
   if (funcType.resultType) {
+    ValueLoc loc = useRetPtr ? ValueLoc::memory(retPtr, 0)
+                             : ValueLoc::flat(mozilla::Span(&flatResult, 1));
     ok = ok && f.localSet(jsResult) &&
-         EmitToComponentValue(f, *funcType.resultType, jsResult, flatResult) &&
-         f.localGet(flatResult[0]);
+         (!useRetPtr || EmitCheckPointer(f, *funcType.resultType, retPtr)) &&
+         EmitToComponentValue(a, *funcType.resultType, jsResult, loc);
+  }
+  if (flatResultType) {
+    ok = ok && f.localGet(flatResult);
   }
   ok = ok && f.op(Op::End) && f.op(Op::Return) && f.op(Op::End) &&
        f.trap(AdapterTrap::ImportException);
@@ -919,6 +1239,222 @@ void* wasm::CmCharToJS(Instance* instance, int32_t value) {
   }
   RootedValue jsValue(cx, StringValue(str));
   return ExternRefForCompiledCode(cx, jsValue);
+}
+
+void wasm::CmEnterGuest(Instance* instance, void* ctxRef) {
+  MOZ_ASSERT(SASigCmEnterGuest.failureMode == FailureMode::Infallible);
+  JSContext* cx = instance->cx();
+  RootedObject ctx(cx, &AnyRef::fromCompiledCode(ctxRef).toJSObject());
+  InstanceFromCtx(ctx).setEnteredGuest(true);
+}
+
+// Gets [ptr, ptr + length) in memory 0, or traps if it is out of bounds.
+static uint8_t* GetMemoryRange(Instance* instance, uint32_t ptr,
+                               uint64_t length) {
+  uint64_t memoryLength = instance->memory(0)->volatileMemoryLength();
+  if (uint64_t(ptr) + length > memoryLength) {
+    ReportTrapError(instance->cx(), JSMSG_WASM_OUT_OF_BOUNDS);
+    return nullptr;
+  }
+  return instance->memoryBase(0).unwrap() + ptr;
+}
+
+static bool CheckAlignment(Instance* instance, uint32_t ptr,
+                           uint32_t alignment) {
+  if (ptr % alignment != 0) {
+    ReportTrapError(instance->cx(), JSMSG_WASM_UNALIGNED_ACCESS);
+    return false;
+  }
+  return true;
+}
+
+int32_t wasm::CmCheckRange(Instance* instance, int32_t ptr, int32_t length,
+                           int32_t alignment) {
+  MOZ_ASSERT(SASigCmCheckRange.failureMode == FailureMode::FailOnNegI32);
+  if (!CheckAlignment(instance, uint32_t(ptr), uint32_t(alignment)) ||
+      !GetMemoryRange(instance, uint32_t(ptr), uint32_t(length))) {
+    return -1;
+  }
+  return 0;
+}
+
+void* wasm::CmToString(Instance* instance, void* valueRef) {
+  MOZ_ASSERT(SASigCmToString.failureMode == FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  JSString* str = ToString(cx, value);
+  if (!str) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue strValue(cx, StringValue(str));
+  return ExternRefForCompiledCode(cx, strValue);
+}
+
+int32_t wasm::CmStringLength(Instance* instance, void* strRef) {
+  MOZ_ASSERT(SASigCmStringLength.failureMode == FailureMode::Infallible);
+  return int32_t(
+      AnyRef::fromCompiledCode(strRef).toJSValue().toString()->length());
+}
+
+static JSLinearString* LinearStringFromRef(JSContext* cx, void* strRef) {
+  return AnyRef::fromCompiledCode(strRef).toJSValue().toString()->ensureLinear(
+      cx);
+}
+
+int32_t wasm::CmStoreASCII(Instance* instance, void* strRef, int32_t ptr,
+                           int32_t length) {
+  MOZ_ASSERT(SASigCmStoreASCII.failureMode == FailureMode::FailOnNegI32);
+  JSLinearString* str = LinearStringFromRef(instance->cx(), strRef);
+  if (!str) {
+    return -1;
+  }
+  uint8_t* dst = GetMemoryRange(instance, uint32_t(ptr), uint32_t(length));
+  if (!dst) {
+    return -1;
+  }
+
+  JS::AutoCheckCannotGC nogc;
+  size_t i = 0;
+  for (; i < str->length(); i++) {
+    char16_t c = str->latin1OrTwoByteChar(i);
+    if (c >= 0x80) {
+      break;
+    }
+    dst[i] = uint8_t(c);
+  }
+  return int32_t(i);
+}
+
+int32_t wasm::CmStoreUTF8(Instance* instance, void* ctxRef, void* strRef,
+                          int32_t ptr, int32_t length) {
+  MOZ_ASSERT(SASigCmStoreUTF8.failureMode == FailureMode::FailOnNegI32);
+  JSContext* cx = instance->cx();
+  RootedObject ctx(cx, &AnyRef::fromCompiledCode(ctxRef).toJSObject());
+  JSLinearString* str = LinearStringFromRef(cx, strRef);
+  if (!str) {
+    return -1;
+  }
+  uint8_t* dst = GetMemoryRange(instance, uint32_t(ptr), uint32_t(length));
+  if (!dst) {
+    return -1;
+  }
+
+  // This replaces lone surrogates with U+FFFD, as for a USVString. It also
+  // rewrites the ASCII prefix that CmStoreASCII already wrote, which is
+  // unobservable.
+  size_t written = JS::DeflateStringToUTF8Buffer(
+      str, mozilla::Span(reinterpret_cast<char*>(dst), uint32_t(length)));
+  MOZ_ASSERT(written == JS::GetDeflatedUTF8StringLength(str));
+  InstanceFromCtx(ctx).setScratch(written);
+  return 0;
+}
+
+int32_t wasm::CmStoreUTF16(Instance* instance, void* strRef, int32_t ptr,
+                           int32_t length) {
+  MOZ_ASSERT(SASigCmStoreUTF16.failureMode == FailureMode::FailOnNegI32);
+  JSLinearString* str = LinearStringFromRef(instance->cx(), strRef);
+  if (!str || !CheckAlignment(instance, uint32_t(ptr), 2)) {
+    return -1;
+  }
+  uint8_t* dst =
+      GetMemoryRange(instance, uint32_t(ptr), 2 * uint64_t(uint32_t(length)));
+  if (!dst) {
+    return -1;
+  }
+
+  // Replace lone surrogates with U+FFFD, as for a USVString.
+  JS::AutoCheckCannotGC nogc;
+  size_t n = str->length();
+  for (size_t i = 0; i < n; i++) {
+    char16_t c = str->latin1OrTwoByteChar(i);
+    if (unicode::IsLeadSurrogate(c) && i + 1 < n &&
+        unicode::IsTrailSurrogate(str->latin1OrTwoByteChar(i + 1))) {
+      mozilla::LittleEndian::writeUint16(dst + 2 * i, c);
+      i++;
+      c = str->latin1OrTwoByteChar(i);
+    } else if (unicode::IsSurrogate(c)) {
+      c = unicode::REPLACEMENT_CHARACTER;
+    }
+    mozilla::LittleEndian::writeUint16(dst + 2 * i, c);
+  }
+  return 0;
+}
+
+// The canonical ABI's load_string_from_range, converted to a JS string.
+void* wasm::CmStringToJS(Instance* instance, int32_t ptr, int32_t taggedLength,
+                         int32_t encoding) {
+  MOZ_ASSERT(SASigCmStringToJS.failureMode == FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+
+  uint32_t length = uint32_t(taggedLength);
+  bool isLatin1 = false;
+  uint32_t alignment = 2;
+  switch (ComponentStringEncoding(encoding)) {
+    case ComponentStringEncoding::UTF8:
+      alignment = 1;
+      break;
+    case ComponentStringEncoding::UTF16:
+      break;
+    case ComponentStringEncoding::Latin1PlusUTF16: {
+      constexpr uint32_t UTF16Tag = 1u << 31;
+      isLatin1 = !(length & UTF16Tag);
+      length &= ~UTF16Tag;
+      break;
+    }
+  }
+  bool isUTF8 =
+      ComponentStringEncoding(encoding) == ComponentStringEncoding::UTF8;
+  uint64_t byteLength = isUTF8 || isLatin1 ? length : 2 * uint64_t(length);
+
+  constexpr uint64_t MaxStringByteLength = (1 << 28) - 1;
+  if (byteLength > MaxStringByteLength) {
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_STRING_TOO_LONG);
+    return AnyRef::invalid().forCompiledCode();
+  }
+  if (!CheckAlignment(instance, uint32_t(ptr), alignment)) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  const uint8_t* src = GetMemoryRange(instance, uint32_t(ptr), byteLength);
+  if (!src) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+
+  // Memory is not moved by GC, so it's safe to read while allocating.
+  JSLinearString* str;
+  if (isUTF8) {
+    auto chars = mozilla::Span(reinterpret_cast<const char*>(src), length);
+    if (!mozilla::IsUtf8(chars)) {
+      ReportTrapError(cx, JSMSG_WASM_COMPONENT_BAD_STRING);
+      return AnyRef::invalid().forCompiledCode();
+    }
+    str = NewStringCopyUTF8N(cx, JS::UTF8Chars(chars.data(), length));
+  } else if (isLatin1) {
+    str = NewStringCopyN<CanGC>(cx, reinterpret_cast<const Latin1Char*>(src),
+                                length);
+  } else {
+    Vector<char16_t, 32> chars(cx);
+    if (!chars.resize(length)) {
+      return AnyRef::invalid().forCompiledCode();
+    }
+    for (uint32_t i = 0; i < length; i++) {
+      chars[i] = mozilla::LittleEndian::readUint16(src + 2 * i);
+    }
+    for (uint32_t i = 0; i < length; i++) {
+      if (unicode::IsLeadSurrogate(chars[i]) && i + 1 < length &&
+          unicode::IsTrailSurrogate(chars[i + 1])) {
+        i++;
+      } else if (unicode::IsSurrogate(chars[i])) {
+        ReportTrapError(cx, JSMSG_WASM_COMPONENT_BAD_STRING);
+        return AnyRef::invalid().forCompiledCode();
+      }
+    }
+    str = NewStringCopyN<CanGC>(cx, chars.begin(), length);
+  }
+  if (!str) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue value(cx, StringValue(str));
+  return ExternRefForCompiledCode(cx, value);
 }
 
 int32_t wasm::CmTrap(Instance* instance, int32_t reason) {

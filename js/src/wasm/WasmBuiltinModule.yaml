@@ -660,6 +660,117 @@
   fail_mode: FailOnInvalidRef
   uses_memory: false
 
+- op: CmEnterGuest
+  symbolic_address:
+    name: CmEnterGuest
+    type: Args_Void_GeneralGeneral
+    needs_thunk: true
+  entry: CmEnterGuest
+  export: cmEnterGuest
+  params:
+    - 'externref'
+  fail_mode: Infallible
+  uses_memory: false
+
+- op: CmCheckRange
+  symbolic_address:
+    name: CmCheckRange
+    type: Args_Int32_GeneralInt32Int32Int32
+    needs_thunk: true
+  entry: CmCheckRange
+  export: cmCheckRange
+  params:
+    - 'i32'
+    - 'i32'
+    - 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmToString
+  symbolic_address:
+    name: CmToString
+    type: Args_General2
+    needs_thunk: true
+  entry: CmToString
+  export: cmToString
+  params:
+    - 'externref'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: CmStringLength
+  symbolic_address:
+    name: CmStringLength
+    type: Args_Int32_GeneralGeneral
+    needs_thunk: true
+  entry: CmStringLength
+  export: cmStringLength
+  params:
+    - 'externref'
+  result: 'i32'
+  fail_mode: Infallible
+  uses_memory: false
+
+- op: CmStoreASCII
+  symbolic_address:
+    name: CmStoreASCII
+    type: Args_Int32_GeneralGeneralInt32Int32
+    needs_thunk: true
+  entry: CmStoreASCII
+  export: cmStoreASCII
+  params:
+    - 'externref'
+    - 'i32'
+    - 'i32'
+  result: 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmStoreUTF8
+  symbolic_address:
+    name: CmStoreUTF8
+    type: Args_Int32_GeneralGeneralGeneralInt32Int32
+    needs_thunk: true
+  entry: CmStoreUTF8
+  export: cmStoreUTF8
+  params:
+    - 'externref'
+    - 'externref'
+    - 'i32'
+    - 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmStoreUTF16
+  symbolic_address:
+    name: CmStoreUTF16
+    type: Args_Int32_GeneralGeneralInt32Int32
+    needs_thunk: true
+  entry: CmStoreUTF16
+  export: cmStoreUTF16
+  params:
+    - 'externref'
+    - 'i32'
+    - 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmStringToJS
+  symbolic_address:
+    name: CmStringToJS
+    type: Args_General_GeneralInt32Int32Int32
+    needs_thunk: true
+  entry: CmStringToJS
+  export: cmStringToJS
+  params:
+    - 'i32'
+    - 'i32'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
 - op: CmTrap
   symbolic_address:
     name: CmTrap

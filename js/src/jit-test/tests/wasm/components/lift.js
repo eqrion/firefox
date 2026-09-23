@@ -116,7 +116,7 @@ assertErrorMessage(() => instantiate(`(component
     (memory (export "mem") 1)
     (func (export "f") (result i32) i32.const 0))
   (core instance $i (instantiate $m))
-  (func $f (result string)
+  (func $f (result (list u32))
     (canon lift (core func $i "f") (memory (core memory $i "mem"))))
   (export "f" (func $f))
 )`), Error, /not supported yet/);
