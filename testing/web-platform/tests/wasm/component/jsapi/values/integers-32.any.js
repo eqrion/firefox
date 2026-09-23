@@ -29,7 +29,7 @@ function roundtrip(type, value) {
 }
 
 for (const [type, { min, max }] of Object.entries(types)) {
-  for (const value of [min, max, 0, 1, min + 1, max - 1]) {
+  for (const value of new Set([min, max, 0, 1, min + 1, max - 1])) {
     promise_test(async () => {
       assert_equals(roundtrip(type, value), value);
       assert_equals(received[type], value, "value seen by echo");
