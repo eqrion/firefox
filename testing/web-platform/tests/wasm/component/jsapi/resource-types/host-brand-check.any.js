@@ -9,11 +9,11 @@
 const FIXTURE = "resources/host-brand-check";
 
 async function instantiate(ctor, make = () => { throw new Error("unused"); }) {
-  return componentExports(FIXTURE, { r: ctor, make });
+  return componentExports(FIXTURE, { R: ctor, make });
 }
 
 for (const value of [undefined, null, true, 1, "URL", 1n, Symbol(), {}, [], URL.prototype]) {
-  test_instantiation_error(WebAssembly.LinkError, FIXTURE, { r: value, make() {} }, undefined,
+  test_instantiation_error(WebAssembly.LinkError, FIXTURE, { R: value, make() {} }, undefined,
                            `a resource type import satisfied by ${format_value(value)} is a LinkError`);
 }
 

@@ -17,7 +17,7 @@ function makeClass(log = []) {
 promise_test(async () => {
   const log = [];
   const R = makeClass(log);
-  const { make, callM, callS } = await componentExports("imports/receivers", { r: R });
+  const { make, callM, callS } = await componentExports("imports/receivers", { R });
   const instance = make(3);
   assert_true(instance instanceof R);
   assert_equals(instance.x, 3);
@@ -40,7 +40,7 @@ promise_test(async () => {
 promise_test(async () => {
   let args;
   class R { m(...rest) { args = rest; return 0; } }
-  const { callM } = await componentExports("imports/receivers", { r: R });
+  const { callM } = await componentExports("imports/receivers", { R });
   callM(new R(), 8);
   assert_array_equals(args, [8], "self is not passed as an argument");
 }, "a method import receives the arguments after self");
@@ -48,10 +48,10 @@ promise_test(async () => {
 promise_test(async () => {
   const log = [];
   const R = makeClass();
-  const imports = loggingProxy({ r: R, m: () => 0, s: () => 0, make: () => 0,
+  const imports = loggingProxy({ R, m: () => 0, s: () => 0, make: () => 0,
                                  "[constructor]r": () => 0, "[method]r.m": () => 0, "[static]r.s": () => 0 }, log);
   await componentExports("imports/receivers", imports);
-  assert_array_equals(log, ["get r"]);
+  assert_array_equals(log, ["get R"]);
 }, "member imports are not read from the imports object");
 
 promise_test(async () => {
@@ -64,32 +64,32 @@ promise_test(async () => {
       return key === "prototype" ? proto : Reflect.get(t, key, receiver);
     },
   });
-  await componentExports("imports/receivers", { r: ctor });
+  await componentExports("imports/receivers", { R: ctor });
   assert_array_equals(log, ["ctor get prototype", "proto get m", "ctor get s"]);
 }, "a method is read from R.prototype and a static from R, in declaration order");
 
 promise_test(async () => {
   class Base { m(y) { return y + 100; } static s(z) { return z + 200; } }
   class R extends Base {}
-  const { make, callM, callS } = await componentExports("imports/receivers", { r: R });
+  const { make, callM, callS } = await componentExports("imports/receivers", { R });
   assert_equals(callM(make(0), 1), 101);
   assert_equals(callS(1), 201);
 }, "inherited methods and statics are found on the prototype chain");
 
 test_instantiation_error(WebAssembly.LinkError, "imports/receivers",
-                         { r: class { static s() {} } }, undefined,
+                         { R: class { static s() {} } }, undefined,
                          "a missing method on R.prototype is a LinkError");
 test_instantiation_error(WebAssembly.LinkError, "imports/receivers",
-                         { r: class { m() {} } }, undefined,
+                         { R: class { m() {} } }, undefined,
                          "a missing static on R is a LinkError");
 test_instantiation_error(WebAssembly.LinkError, "imports/receivers",
-                         { r: class { m() {} static s = 42; } }, undefined,
+                         { R: class { m() {} static s = 42; } }, undefined,
                          "a non-callable static is a LinkError");
 test_instantiation_error(WebAssembly.LinkError, "imports/receivers",
-                         { r: (() => { function F() {} F.prototype = null; F.s = () => 0; return F; })() }, undefined,
+                         { R: (() => { function F() {} F.prototype = null; F.s = () => 0; return F; })() }, undefined,
                          "R.prototype being null is a LinkError");
 test_instantiation_error(WebAssembly.LinkError, "imports/receivers",
-                         { r: (() => { function F() {} F.prototype = 1; F.s = () => 0; return F; })() }, undefined,
+                         { R: (() => { function F() {} F.prototype = 1; F.s = () => 0; return F; })() }, undefined,
                          "R.prototype being a primitive is a LinkError");
 
 promise_test(async () => {
@@ -98,13 +98,13 @@ promise_test(async () => {
     m() { return 0; }
     static s() { return 0; }
   }
-  const { make } = await componentExports("imports/receivers", { r: R });
+  const { make } = await componentExports("imports/receivers", { R });
   assert_traps(() => make(1));
 }, "a constructor returning an object that fails the brand check traps");
 
 promise_test(async () => {
   const R = makeClass();
-  const { make } = await componentExports("imports/receivers", { r: R });
+  const { make } = await componentExports("imports/receivers", { R });
   const first = make(1);
   const second = make(1);
   assert_not_equals(first, second, "each construction yields a fresh object");
@@ -112,7 +112,7 @@ promise_test(async () => {
 
 promise_test(async () => {
   const R = makeClass();
-  const { callM } = await componentExports("imports/receivers", { r: R });
+  const { callM } = await componentExports("imports/receivers", { R });
   assert_throws_js(TypeError, () => callM({}, 1));
   assert_throws_js(TypeError, () => callM(undefined, 1));
 }, "the self argument is brand checked against the constructor before the call");

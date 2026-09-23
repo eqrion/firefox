@@ -41,9 +41,9 @@ promise_test(async () => {
 promise_test(async () => {
   const log = [];
   const imports = loggingProxy({ ...makeImports(), log: () => {}, dup1: () => 1, dup2: () => 1,
-                                 r: class {}, cfg: 1, iface: {} }, log);
+                                 R: class {}, cfg: 1, iface: {} }, log);
   await componentExports("imports/external-id", imports);
-  assert_false(log.some(entry => /get (log|dup1|dup2|r|cfg|iface)$/.test(entry)),
+  assert_false(log.some(entry => /get (log|dup1|dup2|R|cfg|iface)$/.test(entry)),
                `JS names must not be read: ${log}`);
 }, "the JS name is not consulted when an external-id is present");
 

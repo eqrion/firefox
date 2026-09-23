@@ -33,7 +33,7 @@ promise_test(async () => {
 promise_test(async () => {
   const a = await componentExports(GUEST);
   const b = await componentExports(GUEST);
-  const host = await componentExports(HOST, { r: a.Counter, make: () => new a.Counter(0) });
+  const host = await componentExports(HOST, { R: a.Counter, make: () => new a.Counter(0) });
   const fromA = new a.Counter(1);
   const fromB = new b.Counter(1);
   assert_equals(host.identity(fromA), fromA);
@@ -42,8 +42,8 @@ promise_test(async () => {
 
 promise_test(async () => {
   class C {}
-  const x = await componentExports(HOST, { r: C, make: () => new C() });
-  const y = await componentExports(HOST, { r: C, make: () => new C() });
+  const x = await componentExports(HOST, { R: C, make: () => new C() });
+  const y = await componentExports(HOST, { R: C, make: () => new C() });
   const c = new C();
   assert_equals(x.identity(c), c);
   assert_equals(y.identity(c), c);

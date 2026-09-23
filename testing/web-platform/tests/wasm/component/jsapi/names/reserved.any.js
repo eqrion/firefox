@@ -21,7 +21,7 @@ promise_test(async () => {
   function R() {}
   R.prototype = function proto() { return 7; };
   R.prototype.constructor = function ctor() { receiver = this; return 5; };
-  const { callConstructor, callPrototype } = await componentExports("names/reserved-imports", { r: R });
+  const { callConstructor, callPrototype } = await componentExports("names/reserved-imports", { R });
   const r = new R();
   assert_equals(callConstructor(r), 5, "[method]r.constructor reads R.prototype.constructor");
   assert_equals(receiver, r, "and calls it with self as this");

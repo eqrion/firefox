@@ -12,7 +12,7 @@ class C {}
 let received;
 let exports;
 promise_setup(async () => {
-  exports = await componentExports(FIXTURE, { r: C, recv: x => { received = x; } });
+  exports = await componentExports(FIXTURE, { R: C, recv: x => { received = x; } });
 });
 
 promise_test(async () => {
@@ -97,7 +97,7 @@ promise_test(async () => {
 
 promise_test(async () => {
   const url = new URL("https://example.com/");
-  const { roundtripOption, send } = await componentExports(FIXTURE, { r: URL, recv: x => { received = x; } });
+  const { roundtripOption, send } = await componentExports(FIXTURE, { R: URL, recv: x => { received = x; } });
   assert_equals(roundtripOption(url), url);
   send(url);
   assert_equals(received, url);

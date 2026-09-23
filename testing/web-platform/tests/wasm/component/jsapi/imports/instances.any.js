@@ -7,7 +7,7 @@ function makeImports() {
   return {
     iface: {
       f: x => x + 1,
-      r: R,
+      R,
       nested: { g: () => 5 },
     },
     "wasi:clocks/wall-clock@0.2.0": { now: () => 123n },
@@ -36,7 +36,7 @@ promise_test(async () => {
   assert_array_equals(log, [
     "get iface",
     "iface get f",
-    "iface get r",
+    "iface get R",
     "iface get nested",
     "nested get g",
     "get wasi:clocks/wall-clock@0.2.0",
@@ -68,7 +68,7 @@ promise_test(async () => {
   const imports = makeImports();
   imports.iface = () => {};
   imports.iface.f = x => x;
-  imports.iface.r = class { m() { return 1; } };
+  imports.iface.R = class { m() { return 1; } };
   imports.iface.nested = { g: () => 1 };
   const { callF } = await componentExports("imports/instances", imports);
   assert_equals(callF(3), 3);
@@ -78,10 +78,10 @@ test_instantiation_error(WebAssembly.LinkError, "imports/instances",
                          (() => { const i = makeImports(); delete i.iface.nested.g; return i; })(), undefined,
                          "a missing export in a nested instance is a LinkError");
 test_instantiation_error(WebAssembly.LinkError, "imports/instances",
-                         (() => { const i = makeImports(); i.iface.r = {}; return i; })(), undefined,
+                         (() => { const i = makeImports(); i.iface.R = {}; return i; })(), undefined,
                          "a non-callable resource type inside an instance is a LinkError");
 test_instantiation_error(WebAssembly.LinkError, "imports/instances",
-                         (() => { const i = makeImports(); i.iface.r = class {}; return i; })(), undefined,
+                         (() => { const i = makeImports(); i.iface.R = class {}; return i; })(), undefined,
                          "a resource inside an instance missing its method is a LinkError");
 test_instantiation_error(WebAssembly.LinkError, "imports/instances",
                          (() => { const i = makeImports(); delete i["wasi:clocks/wall-clock@0.2.0"]; return i; })(), undefined,

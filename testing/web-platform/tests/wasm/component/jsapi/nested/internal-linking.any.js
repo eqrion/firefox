@@ -11,11 +11,11 @@ class Host {
 }
 
 async function load() {
-  return componentExports("nested/internal-linking", { host: Host });
+  return componentExports("nested/internal-linking", { Host });
 }
 
 promise_test(async () => {
-  const instance = await instantiateComponent("nested/internal-linking", { host: Host });
+  const instance = await instantiateComponent("nested/internal-linking", { Host });
   assert_ComponentInstance(instance, ["Counter", "dropCount", "makeAndIncrement", "pingTwice"]);
 }, "the outer exports object exposes definitions from both inner instances");
 

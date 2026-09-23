@@ -16,7 +16,7 @@ function makeImports(log = []) {
   const imports = {
     get x() { log.push(["get x", this]); return imports._x ?? 3; },
     set x(v) { log.push(["set x", this, v]); imports._x = v; },
-    r: R,
+    R,
   };
   return { imports, R, log };
 }
@@ -70,7 +70,7 @@ promise_test(async () => {
   assert_array_equals(log.filter(e => !e.startsWith("getPrototypeOf")), [
     "getOwnPropertyDescriptor x",
     "getOwnPropertyDescriptor x",
-    "get r",
+    "get R",
   ]);
 }, "top-level accessor imports are found with [[GetOwnProperty]], not [[Get]]");
 
@@ -78,7 +78,7 @@ promise_test(async () => {
   const { imports, R } = makeImports();
   const base = { get x() { return 7; }, set x(v) { base._x = v; } };
   const derived = Object.create(base);
-  derived.r = R;
+  derived.R = R;
   const exports = await componentExports("imports/accessors", derived);
   assert_equals(exports.getX(), 7);
   exports.setX(8);
@@ -88,13 +88,13 @@ promise_test(async () => {
 promise_test(async () => {
   class Base { get p() { return 11; } set p(v) { this._p = v; } static get q() { return 12; } static set q(v) {} }
   class R extends Base {}
-  const exports = await componentExports("imports/accessors", withX({ r: R }));
+  const exports = await componentExports("imports/accessors", withX({ R }));
   assert_equals(exports.getP(new R()), 11);
   assert_equals(exports.getQ(), 12);
 }, "inherited class accessors are found");
 
 test_instantiation_error(WebAssembly.LinkError, "imports/accessors",
-                         (() => { const { R } = makeImports(); return { x: 5, r: R }; })(), undefined,
+                         (() => { const { R } = makeImports(); return { x: 5, R }; })(), undefined,
                          "a data property for [get]x is a LinkError");
 
 test_instantiation_error(WebAssembly.LinkError, "imports/accessors",
@@ -102,25 +102,25 @@ test_instantiation_error(WebAssembly.LinkError, "imports/accessors",
                            const { imports, R } = makeImports();
                            const shadowed = Object.create(imports);
                            Object.defineProperty(shadowed, "x", { value: 1 });
-                           shadowed.r = R;
+                           shadowed.R = R;
                            return shadowed;
                          })(), undefined,
                          "a data property shadowing an accessor further up the chain is a LinkError");
 
 test_instantiation_error(WebAssembly.LinkError, "imports/accessors",
-                         (() => { const { R } = makeImports(); return { get x() { return 1; }, r: R }; })(), undefined,
+                         (() => { const { R } = makeImports(); return { get x() { return 1; }, R }; })(), undefined,
                          "a getter-only accessor for a [set] import is a LinkError");
 
 test_instantiation_error(WebAssembly.LinkError, "imports/accessors",
-                         (() => { const { R } = makeImports(); return { set x(v) {}, r: R }; })(), undefined,
+                         (() => { const { R } = makeImports(); return { set x(v) {}, R }; })(), undefined,
                          "a setter-only accessor for a [get] import is a LinkError");
 
 test_instantiation_error(WebAssembly.LinkError, "imports/accessors",
-                         withX({ r: class { p = 1; static q = 2; } }), undefined,
+                         withX({ R: class { p = 1; static q = 2; } }), undefined,
                          "data properties for resource accessors are a LinkError");
 
 test_instantiation_error(WebAssembly.LinkError, "imports/accessors",
-                         withX({ r: class { get p() { return 1; } set p(v) {} static get q() { return 2; } } }),
+                         withX({ R: class { get p() { return 1; } set p(v) {} static get q() { return 2; } } }),
                          undefined,
                          "a missing static setter is a LinkError");
 
@@ -138,7 +138,7 @@ promise_test(async () => {
       return Reflect.getOwnPropertyDescriptor(t, key);
     },
   });
-  await componentExports("imports/accessors", withX({ r: ctor }));
+  await componentExports("imports/accessors", withX({ R: ctor }));
   assert_array_equals(log.filter(e => !e.includes("getPrototypeOf")), [
     "ctor get prototype", "proto getOwnPropertyDescriptor p",
     "ctor get prototype", "proto getOwnPropertyDescriptor p",
@@ -160,7 +160,7 @@ promise_test(async () => {
   const imports = {
     get x() { if (boom) throw new Error("boom"); return 1; },
     set x(v) {},
-    r: R,
+    R,
   };
   const exports = await componentExports("imports/accessors", imports);
   assert_equals(exports.getX(), 1);

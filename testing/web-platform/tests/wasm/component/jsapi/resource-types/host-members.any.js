@@ -33,7 +33,7 @@ function makeClass() {
 
 promise_test(async () => {
   const { C } = makeClass();
-  const { construct } = await componentExports(FIXTURE, { r: C });
+  const { construct } = await componentExports(FIXTURE, { R: C });
   const c = construct(5);
   assert_equals(Object.getPrototypeOf(c), C.prototype);
   assert_equals(c.x, 5);
@@ -43,14 +43,14 @@ promise_test(async () => {
 
 promise_test(async () => {
   const { C } = makeClass();
-  const { construct } = await componentExports(FIXTURE, { r: C });
+  const { construct } = await componentExports(FIXTURE, { R: C });
   assert_equals(construct("7").x, 7, "argument converted to u32 before the call");
   assert_throws_js(TypeError, () => construct(-1));
 }, "[constructor]: arguments are converted before construction");
 
 promise_test(async () => {
   const { C, observed } = makeClass();
-  const { callAdd } = await componentExports(FIXTURE, { r: C });
+  const { callAdd } = await componentExports(FIXTURE, { R: C });
   const c = new C(1);
   assert_equals(callAdd(c, 3), 4);
   assert_equals(c.x, 4, "mutation through this is visible");
@@ -60,7 +60,7 @@ promise_test(async () => {
 
 promise_test(async () => {
   const { C, observed } = makeClass();
-  const { callCreate } = await componentExports(FIXTURE, { r: C });
+  const { callCreate } = await componentExports(FIXTURE, { R: C });
   const c = callCreate(1);
   assert_equals(c.x, 101);
   assert_equals(observed.staticThis, C, "this is the constructor");
@@ -69,14 +69,14 @@ promise_test(async () => {
 promise_test(async () => {
   const { C } = makeClass();
   const log = [];
-  const imports = loggingProxy({ r: C }, log);
+  const imports = loggingProxy({ R: C }, log);
   await componentExports(FIXTURE, imports);
-  assert_array_equals(log, ["get r"]);
+  assert_array_equals(log, ["get R"]);
 }, "member imports are not looked up on the imports object");
 
 promise_test(async () => {
   const { C } = makeClass();
-  const { callAdd, callCreate } = await componentExports(FIXTURE, { r: C });
+  const { callAdd, callCreate } = await componentExports(FIXTURE, { R: C });
   const originalAdd = C.prototype.add;
   C.prototype.add = function() { return -1; };
   C.create = () => { throw new Error("replaced"); };
@@ -94,14 +94,14 @@ promise_test(async () => {
   function F() {}
   F.prototype = loggingProxy({ add() {} }, log, "proto ");
   F.create = () => {};
-  await componentExports(FIXTURE, { r: F });
+  await componentExports(FIXTURE, { R: F });
   assert_array_equals(log.filter(e => e.startsWith("proto get")), ["proto get add"]);
 }, "[method]: looked up with Get on the prototype");
 
-test_instantiation_error(WebAssembly.LinkError, FIXTURE, { r: class { static create() {} } }, undefined,
+test_instantiation_error(WebAssembly.LinkError, FIXTURE, { R: class { static create() {} } }, undefined,
                          "[method]: a missing method is a LinkError");
 
-test_instantiation_error(WebAssembly.LinkError, FIXTURE, { r: class { add() {} } }, undefined,
+test_instantiation_error(WebAssembly.LinkError, FIXTURE, { R: class { add() {} } }, undefined,
                          "[static]: a missing static is a LinkError");
 
 function withPrototype(prototype) {
@@ -111,30 +111,30 @@ function withPrototype(prototype) {
   return F;
 }
 
-test_instantiation_error(WebAssembly.LinkError, FIXTURE, { r: withPrototype({ add: 42 }) }, undefined,
+test_instantiation_error(WebAssembly.LinkError, FIXTURE, { R: withPrototype({ add: 42 }) }, undefined,
                          "[method]: a non-callable method is a LinkError");
 
-test_instantiation_error(WebAssembly.LinkError, FIXTURE, { r: withPrototype(5) }, undefined,
+test_instantiation_error(WebAssembly.LinkError, FIXTURE, { R: withPrototype(5) }, undefined,
                          "[method]: a constructor whose prototype is not an object is a LinkError");
 
-test_instantiation_error(WebAssembly.LinkError, FIXTURE, { r: withPrototype(null) }, undefined,
+test_instantiation_error(WebAssembly.LinkError, FIXTURE, { R: withPrototype(null) }, undefined,
                          "[method]: a constructor whose prototype is null is a LinkError");
 
 test_instantiation_error(WebAssembly.LinkError, FIXTURE,
-                         { r: Object.assign(() => {}, { create() {} }) }, undefined,
+                         { R: Object.assign(() => {}, { create() {} }) }, undefined,
                          "[constructor]: a callable that is not a constructor is a LinkError");
 
 promise_test(async () => {
   class Base { add() { return 1; } static create(x) { return new Derived(x); } }
   class Derived extends Base {}
-  const { callAdd, callCreate } = await componentExports(FIXTURE, { r: Derived });
+  const { callAdd, callCreate } = await componentExports(FIXTURE, { R: Derived });
   assert_equals(callAdd(new Derived(), 0), 1, "inherited method");
   assert_equals(Object.getPrototypeOf(callCreate(1)), Derived.prototype, "inherited static");
 }, "members inherited through the prototype chain are found");
 
 promise_test(async () => {
   const { C } = makeClass();
-  const { callAdd } = await componentExports(FIXTURE, { r: C });
+  const { callAdd } = await componentExports(FIXTURE, { R: C });
   assert_throws_js(TypeError, () => callAdd({}, 1));
   assert_throws_js(TypeError, () => callAdd(undefined, 1));
 }, "[method]: the self argument is brand checked");

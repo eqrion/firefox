@@ -3,7 +3,7 @@
 // META: script=/wasm/component/jsapi/harness/assertions.js
 
 class R {}
-const good = { plain: x => x, noresult: () => {}, r: R };
+const good = { plain: x => x, noresult: () => {}, R };
 
 promise_test(async () => {
   const { callPlain, callNoresult, make } = await componentExports("imports/functions", good);
@@ -43,13 +43,13 @@ promise_test(async () => {
   assert_traps(() => callPlain(1), "a Promise does not convert to u32");
 }, "an async function satisfies the import but its Promise result fails conversion");
 
-test_instantiation_error(WebAssembly.LinkError, "imports/functions", { ...good, r: () => ({}) }, undefined,
+test_instantiation_error(WebAssembly.LinkError, "imports/functions", { ...good, R: () => ({}) }, undefined,
                          "a non-constructor for a [constructor] import is a LinkError");
-test_instantiation_error(WebAssembly.LinkError, "imports/functions", { ...good, r: Math.abs }, undefined,
+test_instantiation_error(WebAssembly.LinkError, "imports/functions", { ...good, R: Math.abs }, undefined,
                          "a built-in non-constructor for a [constructor] import is a LinkError");
 
 promise_test(async () => {
-  const { make } = await componentExports("imports/functions", { ...good, r: R.bind(null) });
+  const { make } = await componentExports("imports/functions", { ...good, R: R.bind(null) });
   assert_true(make() instanceof R);
 }, "a bound constructor satisfies a [constructor] import");
 
@@ -101,5 +101,5 @@ promise_test(async () => {
   const log = [];
   const imports = loggingProxy(good, log);
   await componentExports("imports/functions", imports);
-  assert_array_equals(log, ["get plain", "get noresult", "get r"]);
+  assert_array_equals(log, ["get plain", "get noresult", "get R"]);
 }, "a [constructor] import is not read from the imports object");

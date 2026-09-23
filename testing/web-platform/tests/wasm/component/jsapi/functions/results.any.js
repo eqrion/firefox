@@ -5,9 +5,9 @@
 function makeImports(overrides = {}) {
   return {
     fallible: x => x,
-    "fallible-u32": () => 1,
-    "fallible-none": () => {},
-    "fallible-no-ok": () => {},
+    fallibleU32: () => 1,
+    fallibleNone: () => {},
+    fallibleNoOk: () => {},
     nested: () => 5,
     plain: () => 3,
     ...overrides,

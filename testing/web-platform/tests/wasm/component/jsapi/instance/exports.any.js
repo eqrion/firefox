@@ -96,7 +96,7 @@ promise_test(async () => {
 }, "exports: each instantiation gets fresh export objects");
 
 promise_test(async () => {
-  const { exports } = await instantiateComponent("instance/type-import", { counter: class {} });
+  const { exports } = await instantiateComponent("instance/type-import", { Counter: class {} });
   assert_exports_object(exports, ["answer"]);
 }, "exports: imported types do not appear in the exports object");
 

@@ -8,7 +8,7 @@
 
 async function link(overrides = {}) {
   const a = await componentExports("imports/through-js-a");
-  const imports = { add: a.add, counter: a.Counter, iface: a.iface, ...overrides };
+  const imports = { add: a.add, Counter: a.Counter, iface: a.iface, ...overrides };
   const b = await componentExports("imports/through-js-b", imports);
   return { a, b };
 }
@@ -23,7 +23,7 @@ promise_test(async () => {
   const a = await componentExports("imports/through-js-a");
   const b = await componentExports("imports/through-js-b", {
     add: (x, y) => { seen.push([x, y]); return 0; },
-    counter: a.Counter,
+    Counter: a.Counter,
     iface: a.iface,
   });
   b.run(2);
@@ -36,7 +36,7 @@ promise_test(async () => {
   class Spy extends a.Counter {
     constructor(start) { super(start); constructed = this; }
   }
-  const b = await componentExports("imports/through-js-b", { add: a.add, counter: Spy, iface: a.iface });
+  const b = await componentExports("imports/through-js-b", { add: a.add, Counter: Spy, iface: a.iface });
   assert_equals(b.run(4), 4 + 1 + 8 + 4);
   assert_true(constructed instanceof Spy, "B constructed the JS class via Construct");
 }, "a subclass of an exported resource class satisfies the type import");
@@ -44,7 +44,7 @@ promise_test(async () => {
 promise_test(async () => {
   const { a } = await link();
   const b = await componentExports("imports/through-js-b", {
-    add: a.add, counter: a.Counter,
+    add: a.add, Counter: a.Counter,
     iface: { mul: (x, y) => a.iface.mul(x, y) * 10 },
   });
   assert_equals(b.run(1), 1 + 1 + 20 + 1);
@@ -52,9 +52,9 @@ promise_test(async () => {
 
 promise_test(async () => {
   const { a } = await link();
-  const b = await componentExports("imports/through-js-b", { add: a.add, counter: a.Counter, iface: a.iface });
+  const b = await componentExports("imports/through-js-b", { add: a.add, Counter: a.Counter, iface: a.iface });
   const other = await componentExports("imports/through-js-a");
-  const c = await componentExports("imports/through-js-b", { add: other.add, counter: other.Counter, iface: other.iface });
+  const c = await componentExports("imports/through-js-b", { add: other.add, Counter: other.Counter, iface: other.iface });
   assert_equals(b.run(1), c.run(1));
 }, "two instances of the producer link independently");
 
@@ -62,12 +62,12 @@ promise_test(async t => {
   const a = await componentExports("imports/through-js-a");
   await promise_rejects_js(t, WebAssembly.LinkError, (async () =>
     new WebAssembly.ComponentInstance(await compileComponent("imports/through-js-b"),
-                                      { add: a.add, counter: a.Counter, iface: a.add }))());
+                                      { add: a.add, Counter: a.Counter, iface: a.add }))());
 }, "an exported function used as an instance import lacks the instance's exports and is a LinkError");
 
 promise_test(async t => {
   const a = await componentExports("imports/through-js-a");
   const bytes = await componentBytes("imports/through-js-b");
   await promise_rejects_js(t, WebAssembly.LinkError,
-                           WebAssembly.instantiate(bytes, { add: a.add, counter: a.iface, iface: a.iface }));
+                           WebAssembly.instantiate(bytes, { add: a.add, Counter: a.iface, iface: a.iface }));
 }, "an exports object does not satisfy a resource type import");

@@ -39,7 +39,7 @@ for_each_entry_point(async (t, instantiate) => {
   const calls = [];
   await promise_rejects_js(t, TypeError,
                            (async () => instantiate("instance/start-then-type-error",
-                                                    { recv(x) { calls.push(x); }, r: class {} }))());
+                                                    { recv(x) { calls.push(x); }, R: class {} }))());
   assert_array_equals(calls, [7], "start ran before the exports were checked");
 }, "start: runs before a public re-export of a host resource type fails instantiation with TypeError");
 
