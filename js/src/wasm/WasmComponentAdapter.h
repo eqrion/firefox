@@ -45,16 +45,30 @@ class Instance;
     const ComponentFuncType& funcType, const TypeDef& coreFuncType,
     HandleObject host, MutableHandleFunction result);
 
-// Converts a JS value to an integer of type `kind`, a ComponentTypeKind. On
-// success, returns 0 and puts the integer in the instance's scratch.
+// ToComponentValue for an integer of type `kind`, a ComponentTypeKind. On
+// success, returns 0 and puts the integer's bits in the instance's scratch.
 int32_t CmToInteger(Instance* instance, void* ctxRef, void* valueRef,
                     int32_t kind);
 
-// Returns the low 32 bits of the instance's scratch.
-int32_t CmScratchI32(Instance* instance, void* ctxRef);
+// ToComponentValue for f64 (and f32 before rounding). On success, returns 0
+// and puts the double's bits in the instance's scratch.
+int32_t CmToFloat(Instance* instance, void* ctxRef, void* valueRef);
 
-// Converts an integer of type `kind`, a ComponentTypeKind, to a JS value.
+// Read the instance's scratch.
+int32_t CmScratchI32(Instance* instance, void* ctxRef);
+int64_t CmScratchI64(Instance* instance, void* ctxRef);
+double CmScratchF64(Instance* instance, void* ctxRef);
+
+// ToComponentValue for bool and char.
+int32_t CmToBool(Instance* instance, void* valueRef);
+int32_t CmToChar(Instance* instance, void* valueRef);
+
+// ToJSValue for scalars. `kind` is the ComponentTypeKind of an integer.
+void* CmBoolToJS(Instance* instance, int32_t value);
 void* CmIntegerToJS(Instance* instance, int32_t value, int32_t kind);
+void* CmInt64ToJS(Instance* instance, int64_t value, int32_t kind);
+void* CmFloatToJS(Instance* instance, double value);
+void* CmCharToJS(Instance* instance, int32_t value);
 
 // Traps for the given AdapterTrap reason. Always fails.
 int32_t CmTrap(Instance* instance, int32_t reason);

@@ -515,6 +515,19 @@
   fail_mode: FailOnNegI32
   uses_memory: false
 
+- op: CmToFloat
+  symbolic_address:
+    name: CmToFloat
+    type: Args_Int32_GeneralGeneralGeneral
+    needs_thunk: true
+  entry: CmToFloat
+  export: cmToFloat
+  params:
+    - 'externref'
+    - 'externref'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
 - op: CmScratchI32
   symbolic_address:
     name: CmScratchI32
@@ -526,6 +539,111 @@
     - 'externref'
   result: 'i32'
   fail_mode: Infallible
+  uses_memory: false
+
+- op: CmScratchI64
+  symbolic_address:
+    name: CmScratchI64
+    type: Args_Int64_GeneralGeneral
+    needs_thunk: true
+  entry: CmScratchI64
+  export: cmScratchI64
+  params:
+    - 'externref'
+  result: 'i64'
+  fail_mode: Infallible
+  uses_memory: false
+
+- op: CmScratchF64
+  symbolic_address:
+    name: CmScratchF64
+    type: Args_Double_IntInt
+    needs_thunk: true
+  entry: CmScratchF64
+  export: cmScratchF64
+  params:
+    - 'externref'
+  result: 'f64'
+  fail_mode: Infallible
+  uses_memory: false
+
+- op: CmToBool
+  symbolic_address:
+    name: CmToBool
+    type: Args_Int32_GeneralGeneral
+    needs_thunk: true
+  entry: CmToBool
+  export: cmToBool
+  params:
+    - 'externref'
+  result: 'i32'
+  fail_mode: Infallible
+  uses_memory: false
+
+- op: CmToChar
+  symbolic_address:
+    name: CmToChar
+    type: Args_Int32_GeneralGeneral
+    needs_thunk: true
+  entry: CmToChar
+  export: cmToChar
+  params:
+    - 'externref'
+  result: 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmBoolToJS
+  symbolic_address:
+    name: CmBoolToJS
+    type: Args_General_GeneralInt32
+    needs_thunk: true
+  entry: CmBoolToJS
+  export: cmBoolToJS
+  params:
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: CmInt64ToJS
+  symbolic_address:
+    name: CmInt64ToJS
+    type: Args_General_GeneralInt64Int32
+    needs_thunk: true
+  entry: CmInt64ToJS
+  export: cmInt64ToJS
+  params:
+    - 'i64'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: CmFloatToJS
+  symbolic_address:
+    name: CmFloatToJS
+    type: Args_Int_IntDouble
+    needs_thunk: true
+  entry: CmFloatToJS
+  export: cmFloatToJS
+  params:
+    - 'f64'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: CmCharToJS
+  symbolic_address:
+    name: CmCharToJS
+    type: Args_General_GeneralInt32
+    needs_thunk: true
+  entry: CmCharToJS
+  export: cmCharToJS
+  params:
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
   uses_memory: false
 
 - op: CmIntegerToJS

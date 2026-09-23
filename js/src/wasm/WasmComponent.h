@@ -363,6 +363,11 @@ enum class CanonMode : uint8_t {
   Lower,
 };
 
+// The canonical ABI's limits on flattened function types. Parameters and
+// results beyond these are passed in memory.
+static constexpr uint32_t MaxFlatParams = 16;
+static constexpr uint32_t MaxFlatResults = 1;
+
 [[nodiscard]] bool FlattenTypes(const ComponentTypeVector& types,
                                 ValTypeVector* result, bool* hasStringsOrLists,
                                 bool* tooDeep, uint32_t depth);

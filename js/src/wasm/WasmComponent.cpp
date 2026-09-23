@@ -712,9 +712,6 @@ void wasm::PurgeComponentCanonicalTypes() {
 mozilla::Maybe<FuncType> wasm::FlattenFuncType(
     const ComponentFuncType& funcType, CanonMode mode, bool* memoryRequired,
     bool* reallocRequired, bool* tooDeep) {
-  const uint32_t MaxFlatParams = 16;
-  const uint32_t MaxFlatResults = 1;
-
   ValTypeVector params;
   ValTypeVector results;
 

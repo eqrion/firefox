@@ -497,6 +497,7 @@ MSG_DEF(JSMSG_WASM_BAD_CODEPOINT,       0, JSEXN_WASMRUNTIMEERROR,     "bad code
 MSG_DEF(JSMSG_WASM_COMPONENT_TRAPPED,   0, JSEXN_WASMRUNTIMEERROR,     "component instance is locked down after a trap")
 MSG_DEF(JSMSG_WASM_COMPONENT_UNCAUGHT_EXCEPTION, 0, JSEXN_WASMRUNTIMEERROR, "exception thrown out of a lifted component function")
 MSG_DEF(JSMSG_WASM_COMPONENT_IMPORT_EXCEPTION, 0, JSEXN_WASMRUNTIMEERROR, "exception thrown by a component function import")
+MSG_DEF(JSMSG_WASM_COMPONENT_BAD_CHAR, 0, JSEXN_TYPEERR,       "value is not a single Unicode scalar value")
 MSG_DEF(JSMSG_WASM_NO_TRANSFER,        0, JSEXN_TYPEERR,     "cannot transfer WebAssembly ArrayBuffer")
 MSG_DEF(JSMSG_WASM_TEXT_FAIL,          1, JSEXN_SYNTAXERR,   "wasm text error: {0}")
 MSG_DEF(JSMSG_WASM_MISSING_MAXIMUM,    0, JSEXN_TYPEERR,     "'shared' is true but maximum is not specified")
