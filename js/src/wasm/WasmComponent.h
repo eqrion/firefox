@@ -205,6 +205,9 @@ class ComponentType {
   ComponentTypeKind kind() const { return kind_; }
   RefPtr<ComponentTypeDef> typeDef() const { return typeDef_; }
 
+  // Whether a value of this type can contain a borrow.
+  bool containsBorrow() const;
+
   const ComponentRecordFieldVector& asRecord() const;
   const ComponentVariantCaseVector& asVariant() const;
   ComponentType asList() const;
@@ -498,12 +501,14 @@ using ComponentTypeSchema = mozilla::Variant<
 
 class ComponentTypeDef : public AtomicRefCounted<ComponentTypeDef> {
   ComponentTypeSchema schema_;
+  // See ComponentType::containsBorrow.
+  bool containsBorrow_;
 
  public:
-  explicit ComponentTypeDef(ComponentTypeSchema&& schema)
-      : schema_(std::move(schema)) {}
+  explicit ComponentTypeDef(ComponentTypeSchema&& schema);
 
   const ComponentTypeSchema& schema() const { return schema_; }
+  bool containsBorrow() const { return containsBorrow_; }
 
   // Checks two typedefs for structural equality. Note that this is NOT the same
   // as comparing two types for equality, because a) not all types even have
@@ -1207,6 +1212,11 @@ struct ComponentCallScope {
   uint32_t numBorrows = 0;
   // The handles lent by the instance to a call out of it.
   mozilla::Vector<uint32_t, 0, SystemAllocPolicy> lentHandles;
+  // The guest resource instances lent to a call into the instance, the
+  // JS-API's lender list.
+  GCVector<HeapPtr<JSObject*>, 0, SystemAllocPolicy> lentObjects;
+
+  void trace(JSTracer* trc) { lentObjects.trace(trc); }
 };
 
 // A handle to a resource in a component instance's handle table.
@@ -1308,6 +1318,14 @@ class ComponentInstance {
   // has none.
   ObjectVector hostResourceDisposers_;
 
+  // The JS-API's guest resource class of each exported resource type defined
+  // by the component, its prototype, and the function for its
+  // [constructor], if any. Indices correspond 1:1 with
+  // Component::resourceTypes(), and are null for other resource types.
+  ObjectVector guestResourceClasses_;
+  ObjectVector guestResourcePrototypes_;
+  ObjectVector guestResourceConstructors_;
+
   // The data of the ComponentError that a lifted function returning a
   // `result` error is about to throw.
   bool hasPendingError_ = false;
@@ -1336,9 +1354,16 @@ class ComponentInstance {
   [[nodiscard]] bool instantiateCoreModule(
       JSContext* cx, const CoreInstanceDescFromModule& desc,
       MutableHandleObject exportsObj) const;
+  // Creates the JS function for a lifted function, which, if `takesSelf`,
+  // takes its first parameter as its receiver.
   [[nodiscard]] bool createLiftedFunction(
       JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
-      uint32_t funcIndex, Handle<JSAtom*> name, MutableHandleFunction result);
+      uint32_t funcIndex, Handle<JSAtom*> name, bool takesSelf,
+      MutableHandleFunction result);
+  // The JS-API's "create guest resource classes", for the resource types the
+  // component exports.
+  [[nodiscard]] bool createGuestResourceClasses(
+      JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj);
   [[nodiscard]] bool createInlineExportsObject(
       JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
       const ComponentInlineExports& inlineExports,
@@ -1402,6 +1427,24 @@ class ComponentInstance {
     return hostResourceDisposers_[resourceType];
   }
 
+  // The guest resource class of a resource type, its prototype, and the
+  // function for its [constructor], or null.
+  JSObject* guestResourceClass(uint32_t resourceType) const {
+    return guestResourceClasses_[resourceType];
+  }
+  JSObject* guestResourcePrototype(uint32_t resourceType) const {
+    return guestResourcePrototypes_[resourceType];
+  }
+  JSObject* guestResourceConstructor(uint32_t resourceType) const {
+    return guestResourceConstructors_[resourceType];
+  }
+
+  // The JS-API's "drop a guest resource", which calls the resource type's
+  // destructor, if any.
+  [[nodiscard]] bool dropGuestResource(
+      JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+      uint32_t resourceType, int32_t rep);
+
   size_t callScopeDepth() const { return callScopes_.length(); }
   ComponentCallScope& callScope(size_t depth) { return callScopes_[depth]; }
   [[nodiscard]] bool pushCallScope() { return callScopes_.emplaceBack(); }
@@ -1434,6 +1477,9 @@ class ComponentInstance {
     return coreInstanceExports_[index];
   }
 };
+
+// Whether `obj` is a guest resource class.
+bool IsComponentGuestResourceClass(const JSObject* obj);
 
 UniqueChars ToString(ComponentItem item);
 UniqueChars ToString(ComponentSortIndex sortIndex);

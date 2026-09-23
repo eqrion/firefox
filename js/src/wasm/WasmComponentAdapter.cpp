@@ -441,47 +441,9 @@ static bool IsIntegerKind(ComponentTypeKind kind) {
 }
 #  endif
 
-// Whether a value of `type` can contain a borrow.
-static bool ContainsBorrow(const ComponentType& type) {
-  auto containsBorrow = [](const mozilla::Maybe<ComponentType>& t) {
-    return t && ContainsBorrow(*t);
-  };
-  switch (type.kind()) {
-    case ComponentTypeKind::Borrow:
-      return true;
-    case ComponentTypeKind::List:
-      return ContainsBorrow(type.asList());
-    case ComponentTypeKind::FixedList:
-      return ContainsBorrow(type.asFixedList().elemType);
-    case ComponentTypeKind::Map:
-      return ContainsBorrow(type.asMap().keyType) ||
-             ContainsBorrow(type.asMap().valueType);
-    case ComponentTypeKind::Tuple:
-      return std::any_of(
-          type.asTuple().begin(), type.asTuple().end(),
-          [](const ComponentType& t) { return ContainsBorrow(t); });
-    case ComponentTypeKind::Record:
-      return std::any_of(
-          type.asRecord().begin(), type.asRecord().end(),
-          [](const ComponentRecordField& f) { return ContainsBorrow(f.type); });
-    case ComponentTypeKind::Variant:
-      return std::any_of(type.asVariant().begin(), type.asVariant().end(),
-                         [&](const ComponentVariantCase& c) {
-                           return containsBorrow(c.type);
-                         });
-    case ComponentTypeKind::Option:
-      return ContainsBorrow(type.asOption());
-    case ComponentTypeKind::Result:
-      return containsBorrow(type.asResult().type) ||
-             containsBorrow(type.asResult().errorType);
-    default:
-      return false;
-  }
-}
-
 static bool ParamsContainBorrow(const ComponentFuncType& funcType) {
   return std::any_of(funcType.paramTypes.begin(), funcType.paramTypes.end(),
-                     [](const ComponentType& t) { return ContainsBorrow(t); });
+                     [](const ComponentType& t) { return t.containsBorrow(); });
 }
 
 // The index of the resource type of an own or borrow.
@@ -1908,7 +1870,8 @@ static MapEntryLayout GetMapEntryLayout(const ComponentMapType& map) {
       return f.ctx() && f.localGet(jsValue) &&
              f.i32Const(ResourceTypeIndex(a.component, type)) &&
              f.i32Const(kind == ComponentTypeKind::Borrow) &&
-             f.callBuiltin(Id::CmLowerResource) &&
+             f.callBuiltin(Id::CmLowerResource) && f.ctx() &&
+             f.callBuiltin(Id::CmScratchI32) &&
              EmitSetScalar(f, ComponentTypeKind::U32, loc);
     default:
       MOZ_ASSERT(IsIntegerKind(kind));
@@ -2260,7 +2223,9 @@ template <typename F, typename G>
 enum LiftedFunctionSlots {
   LiftedFunctionSlot_Adapter,
   LiftedFunctionSlot_Instance,
-  LiftedFunctionSlot_NumParams,
+  // The number of parameters, shifted left by one, and whether the function
+  // takes its first parameter as its receiver, in the low bit.
+  LiftedFunctionSlot_Params,
 };
 
 static bool IsPendingTrap(JSContext* cx) {
@@ -2300,8 +2265,10 @@ static bool CallLiftedFunction(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
   JSFunction& callee = args.callee().as<JSFunction>();
 
-  uint32_t numParams =
-      callee.getExtendedSlot(LiftedFunctionSlot_NumParams).toInt32();
+  uint32_t params = callee.getExtendedSlot(LiftedFunctionSlot_Params).toInt32();
+  uint32_t numParams = params >> 1;
+  bool takesSelf = params & 1;
+  uint32_t numArgs = numParams - takesSelf;
 
   ComponentInstance& instance =
       callee.getExtendedSlot(LiftedFunctionSlot_Instance)
@@ -2318,8 +2285,11 @@ static bool CallLiftedFunction(JSContext* cx, unsigned argc, Value* vp) {
   if (!adapterArgs.init(cx, numParams)) {
     return false;
   }
-  for (uint32_t i = 0; i < numParams; i++) {
-    adapterArgs[i].set(args.get(i));
+  if (takesSelf) {
+    adapterArgs[0].set(args.thisv());
+  }
+  for (uint32_t i = 0; i < numArgs; i++) {
+    adapterArgs[takesSelf + i].set(args.get(i));
   }
 
   // A call that fails after entering the guest locks down the instance, even
@@ -2357,7 +2327,7 @@ static bool CallLiftedFunction(JSContext* cx, unsigned argc, Value* vp) {
 bool wasm::CreateLiftedFunction(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     const ComponentFuncType& funcType, HandleFunction callee,
-    const CanonOptValues& opts, Handle<JSAtom*> name,
+    const CanonOptValues& opts, Handle<JSAtom*> name, bool takesSelf,
     MutableHandleFunction result) {
   RootedFunction adapter(cx);
   if (!GenerateLiftAdapter(cx, instanceObj, funcType, callee, opts, &adapter)) {
@@ -2365,16 +2335,17 @@ bool wasm::CreateLiftedFunction(
   }
 
   uint32_t numParams = funcType.paramTypes.length();
-  result.set(NewNativeFunction(cx, CallLiftedFunction, numParams, name,
-                               gc::AllocKind::FUNCTION_EXTENDED));
+  MOZ_ASSERT_IF(takesSelf, numParams > 0);
+  result.set(NewNativeFunction(cx, CallLiftedFunction, numParams - takesSelf,
+                               name, gc::AllocKind::FUNCTION_EXTENDED));
   if (!result) {
     return false;
   }
   result->initExtendedSlot(LiftedFunctionSlot_Adapter, ObjectValue(*adapter));
   result->initExtendedSlot(LiftedFunctionSlot_Instance,
                            ObjectValue(*instanceObj));
-  result->initExtendedSlot(LiftedFunctionSlot_NumParams,
-                           Int32Value(int32_t(numParams)));
+  result->initExtendedSlot(LiftedFunctionSlot_Params,
+                           Int32Value(int32_t(numParams << 1 | takesSelf)));
   return true;
 }
 
@@ -3789,6 +3760,50 @@ int32_t wasm::CmResourceDrop(Instance* instance, void* ctxRef, int32_t handle,
   return 1;
 }
 
+// The JS-API's brand check of a host resource value against the constructor of
+// its resource type.
+static bool HostResourceBrandCheck(JSContext* cx, HandleObject ctor,
+                                   HandleValue value, bool* isInstance) {
+  if (IsComponentGuestResourceClass(ctor)) {
+    *isInstance =
+        value.isObject() &&
+        value.toObject().is<WasmComponentResourceObject>() &&
+        &value.toObject().as<WasmComponentResourceObject>().resourceClass() ==
+            ctor;
+    return true;
+  }
+  return InstanceofOperator(cx, ctor, value, isInstance);
+}
+
+// Adds an owned handle, or a handle borrowed for the current call, to the
+// instance's table, putting its index in the instance's scratch.
+static bool AddResourceHandle(JSContext* cx, ComponentInstance& instance,
+                              ComponentResourceHandle&& handle) {
+  bool borrow = !handle.own;
+  size_t depth = instance.callScopeDepth();
+  if (borrow) {
+    MOZ_ASSERT(depth > 0);
+    handle.borrowScope = depth - 1;
+  }
+  uint32_t index;
+  if (!instance.handles().add(std::move(handle), &index)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  if (index == 0) {
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_TABLE_FULL);
+    return false;
+  }
+  if (borrow) {
+    instance.callScope(depth - 1).numBorrows++;
+  }
+
+  // Modifying the handle table enters the guest.
+  instance.setEnteredGuest(true);
+  instance.setScratch(index);
+  return true;
+}
+
 int32_t wasm::CmLowerResource(Instance* instance, void* ctxRef, void* valueRef,
                               int32_t resourceType, int32_t borrow) {
   MOZ_ASSERT(SASigCmLowerResource.failureMode == FailureMode::FailOnNegI32);
@@ -3797,46 +3812,70 @@ int32_t wasm::CmLowerResource(Instance* instance, void* ctxRef, void* valueRef,
   RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
   ComponentInstance& componentInstance = InstanceFromCtx(ctx);
 
+  ComponentResourceHandle handle;
+  handle.resourceType = uint32_t(resourceType);
+  handle.own = !borrow;
+
+  // A resource of an imported resource type is a JS object that passes the
+  // brand check of its constructor, and is not consumed.
   RootedObject ctor(cx, componentInstance.hostResourceCtor(resourceType));
-  if (!ctor) {
-    JS_ReportErrorASCII(cx, "guest resources are not supported yet");
-    return -1;
+  if (ctor) {
+    bool isInstance;
+    if (!HostResourceBrandCheck(cx, ctor, value, &isInstance)) {
+      return -1;
+    }
+    if (!isInstance) {
+      JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
+                               JSMSG_WASM_COMPONENT_BAD_RESOURCE);
+      return -1;
+    }
+    handle.hostValue = value;
+    return AddResourceHandle(cx, componentInstance, std::move(handle)) ? 0 : -1;
   }
-  bool isInstance;
-  if (!InstanceofOperator(cx, ctor, value, &isInstance)) {
-    return -1;
-  }
-  if (!isInstance) {
+
+  // A resource of a resource type defined by the component is a guest resource
+  // instance of its class.
+  JSObject* resourceClass = componentInstance.guestResourceClass(resourceType);
+  if (!value.isObject() ||
+      !value.toObject().is<WasmComponentResourceObject>() ||
+      &value.toObject().as<WasmComponentResourceObject>().resourceClass() !=
+          resourceClass) {
     JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
                              JSMSG_WASM_COMPONENT_BAD_RESOURCE);
     return -1;
   }
+  Rooted<WasmComponentResourceObject*> resource(
+      cx, &value.toObject().as<WasmComponentResourceObject>());
+  if (!resource->hasRep()) {
+    JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
+                             JSMSG_WASM_COMPONENT_RESOURCE_DROPPED);
+    return -1;
+  }
 
-  ComponentResourceHandle handle;
-  handle.resourceType = uint32_t(resourceType);
-  handle.own = !borrow;
-  handle.hostValue = value;
+  // A borrow of a resource type defined by the component is its rep, and the
+  // instance is lent to the current call.
   if (borrow) {
     MOZ_ASSERT(componentInstance.callScopeDepth() > 0);
-    handle.borrowScope = componentInstance.callScopeDepth() - 1;
-  }
-  uint32_t index;
-  if (!componentInstance.handles().add(std::move(handle), &index)) {
-    ReportOutOfMemory(cx);
-    return -1;
-  }
-  if (index == 0) {
-    ReportTrapError(cx, JSMSG_WASM_COMPONENT_TABLE_FULL);
-    return -1;
-  }
-  if (borrow) {
-    componentInstance.callScope(componentInstance.callScopeDepth() - 1)
-        .numBorrows++;
+    ComponentCallScope& scope =
+        componentInstance.callScope(componentInstance.callScopeDepth() - 1);
+    if (!scope.lentObjects.append(resource)) {
+      ReportOutOfMemory(cx);
+      return -1;
+    }
+    resource->setLendCount(resource->lendCount() + 1);
+    componentInstance.setScratch(uint32_t(resource->rep()));
+    return 0;
   }
 
-  // Modifying the handle table enters the guest.
-  componentInstance.setEnteredGuest(true);
-  return int32_t(index);
+  // An own takes the rep.
+  if (resource->lendCount() != 0) {
+    JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
+                             JSMSG_WASM_COMPONENT_RESOURCE_LENT);
+    return -1;
+  }
+  handle.rep = resource->rep();
+  resource->clearRep();
+  return AddResourceHandle(cx, componentInstance, std::move(handle)) ? 0 : -1;
 }
 
 void* wasm::CmLiftResource(Instance* instance, void* ctxRef, int32_t handle,
@@ -3845,16 +3884,18 @@ void* wasm::CmLiftResource(Instance* instance, void* ctxRef, int32_t handle,
   JSContext* cx = instance->cx();
   RootedObject ctx(cx, &AnyRef::fromCompiledCode(ctxRef).toJSObject());
   ComponentInstance& componentInstance = InstanceFromCtx(ctx);
-  if (!componentInstance.hostResourceCtor(resourceType)) {
-    JS_ReportErrorASCII(cx, "guest resources are not supported yet");
-    return AnyRef::invalid().forCompiledCode();
-  }
 
   ComponentResourceHandle* h =
       GetResourceHandle(cx, componentInstance, handle, resourceType);
   if (!h) {
     return AnyRef::invalid().forCompiledCode();
   }
+
+  // An imported function can't take a borrow of a resource type defined by the
+  // component, and an exported function can't return one.
+  bool isHost = componentInstance.hostResourceCtor(resourceType);
+  MOZ_RELEASE_ASSERT(isHost || !borrow);
+
   RootedValue value(cx, h->hostValue);
   if (borrow) {
     MOZ_ASSERT(componentInstance.callScopeDepth() > 0);
@@ -3865,17 +3906,40 @@ void* wasm::CmLiftResource(Instance* instance, void* ctxRef, int32_t handle,
       return AnyRef::invalid().forCompiledCode();
     }
     h->numLends++;
-  } else {
-    if (h->numLends != 0) {
-      ReportTrapError(cx, JSMSG_WASM_COMPONENT_HANDLE_LENT);
+    return ExternRefForCompiledCode(cx, value);
+  }
+
+  if (h->numLends != 0) {
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_HANDLE_LENT);
+    return AnyRef::invalid().forCompiledCode();
+  }
+  if (!h->own) {
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_NOT_OWNED);
+    return AnyRef::invalid().forCompiledCode();
+  }
+  ComponentResourceHandle removed;
+  componentInstance.handles().remove(uint32_t(handle), &removed);
+
+  // An own of a resource type defined by the component is a new guest resource
+  // instance of its class.
+  if (!isHost) {
+    RootedObject resourceClass(
+        cx, componentInstance.guestResourceClass(resourceType));
+    if (!resourceClass) {
+      JS_ReportErrorASCII(
+          cx,
+          "resources of resource types that are not exported are not "
+          "supported yet");
       return AnyRef::invalid().forCompiledCode();
     }
-    if (!h->own) {
-      ReportTrapError(cx, JSMSG_WASM_COMPONENT_NOT_OWNED);
+    RootedObject proto(cx,
+                       componentInstance.guestResourcePrototype(resourceType));
+    JSObject* resource = WasmComponentResourceObject::create(
+        cx, resourceClass, proto, removed.rep);
+    if (!resource) {
       return AnyRef::invalid().forCompiledCode();
     }
-    ComponentResourceHandle removed;
-    componentInstance.handles().remove(uint32_t(handle), &removed);
+    value.setObject(*resource);
   }
   return ExternRefForCompiledCode(cx, value);
 }

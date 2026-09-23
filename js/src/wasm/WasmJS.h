@@ -590,6 +590,43 @@ class WasmComponentInstanceObject : public NativeObject {
 
   wasm::ComponentInstance& instance() const;
 };
+
+// The JS-API's guest resource instance: the JS object for an owned resource of
+// a resource type that a component defines and exports as a guest resource
+// class. Its rep is taken when the resource is passed back to the component as
+// an own, or dropped.
+class WasmComponentResourceObject : public NativeObject {
+  static const unsigned CLASS_SLOT = 0;
+  static const unsigned REP_SLOT = 1;
+  static const unsigned LEND_COUNT_SLOT = 2;
+
+ public:
+  static const unsigned RESERVED_SLOTS = 3;
+  static const JSClass class_;
+
+  static WasmComponentResourceObject* create(JSContext* cx,
+                                             HandleObject resourceClass,
+                                             HandleObject proto, int32_t rep);
+
+  // The JS-API's [[ResourceClass]].
+  JSObject& resourceClass() const {
+    return getReservedSlot(CLASS_SLOT).toObject();
+  }
+
+  // The JS-API's [[Rep]], which is empty once the resource is taken or
+  // dropped.
+  bool hasRep() const { return getReservedSlot(REP_SLOT).isInt32(); }
+  int32_t rep() const { return getReservedSlot(REP_SLOT).toInt32(); }
+  void clearRep() { setReservedSlot(REP_SLOT, UndefinedValue()); }
+
+  // The JS-API's [[LendCount]], the number of calls it is lent to.
+  uint32_t lendCount() const {
+    return uint32_t(getReservedSlot(LEND_COUNT_SLOT).toInt32());
+  }
+  void setLendCount(uint32_t count) {
+    setReservedSlot(LEND_COUNT_SLOT, Int32Value(int32_t(count)));
+  }
+};
 #endif  // ENABLE_WASM_COMPONENTS
 
 }  // namespace js

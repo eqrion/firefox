@@ -42,11 +42,12 @@ struct MOZ_STACK_CLASS CanonOptValues {
       : memory(cx), realloc(cx), postReturn(cx) {}
 };
 
-// Creates the JS function for a component function lifted from `callee`.
+// Creates the JS function for a component function lifted from `callee`. If
+// `takesSelf`, the function's receiver is its first parameter.
 [[nodiscard]] bool CreateLiftedFunction(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     const ComponentFuncType& funcType, HandleFunction callee,
-    const CanonOptValues& opts, Handle<JSAtom*> name,
+    const CanonOptValues& opts, Handle<JSAtom*> name, bool takesSelf,
     MutableHandleFunction result);
 
 // Creates the core function for a component function lowered from `host`, a
@@ -223,8 +224,9 @@ int32_t CmResourceDrop(Instance* instance, void* ctxRef, int32_t handle,
                        int32_t resourceType);
 
 // ToComponentValue for an own or borrow of the resource type at index
-// `resourceType` of Component::resourceTypes(), returning its handle in the
-// instance's table.
+// `resourceType` of Component::resourceTypes(). On success, returns 0 and puts
+// its handle in the instance's table in the instance's scratch, or for a borrow
+// of a resource type defined by the component, its rep.
 int32_t CmLowerResource(Instance* instance, void* ctxRef, void* valueRef,
                         int32_t resourceType, int32_t borrow);
 // ToJSValue for an own or borrow of the resource type at index `resourceType`,

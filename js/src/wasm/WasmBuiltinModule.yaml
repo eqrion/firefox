@@ -1235,7 +1235,6 @@
     - 'externref'
     - 'i32'
     - 'i32'
-  result: 'i32'
   fail_mode: FailOnNegI32
   uses_memory: false
 

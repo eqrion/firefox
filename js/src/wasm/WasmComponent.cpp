@@ -535,6 +535,61 @@ const ComponentInstanceType& ComponentType::asInstance() const {
   return typeDef_->schema().as<ComponentInstanceType>();
 }
 
+bool ComponentType::containsBorrow() const {
+  return kind_ == ComponentTypeKind::Borrow ||
+         (typeDef_ && typeDef_->containsBorrow());
+}
+
+// Whether a value type defined by `schema` can contain a borrow, given its
+// component types. Other types never contain one.
+static bool SchemaContainsBorrow(const ComponentTypeSchema& schema) {
+  auto maybeContainsBorrow = [](const mozilla::Maybe<ComponentType>& t) {
+    return t && t->containsBorrow();
+  };
+  return schema.match(
+      [](const mozilla::Nothing&) { return false; },
+      [](const ComponentType& inner) {
+        // Own and borrow wrap a resource type, which contains no borrow, so
+        // this is a list or option.
+        return inner.containsBorrow();
+      },
+      [](const ComponentRecordFieldVector& fields) {
+        return std::any_of(fields.begin(), fields.end(),
+                           [](const ComponentRecordField& field) {
+                             return field.type.containsBorrow();
+                           });
+      },
+      [&](const ComponentVariantCaseVector& cases) {
+        return std::any_of(cases.begin(), cases.end(),
+                           [&](const ComponentVariantCase& c) {
+                             return maybeContainsBorrow(c.type);
+                           });
+      },
+      [](const ComponentTypeVector& items) {
+        return std::any_of(
+            items.begin(), items.end(),
+            [](const ComponentType& item) { return item.containsBorrow(); });
+      },
+      [](const CacheableNameVector&) { return false; },
+      [&](const ComponentResultType& result) {
+        return maybeContainsBorrow(result.type) ||
+               maybeContainsBorrow(result.errorType);
+      },
+      [](const ComponentFixedListType& fixedList) {
+        return fixedList.elemType.containsBorrow();
+      },
+      [](const ComponentMapType& map) {
+        return map.keyType.containsBorrow() || map.valueType.containsBorrow();
+      },
+      [](const ComponentFuncType&) { return false; },
+      [](const ComponentResourceType&) { return false; },
+      [](const ComponentInstanceType&) { return false; });
+}
+
+ComponentTypeDef::ComponentTypeDef(ComponentTypeSchema&& schema)
+    : schema_(std::move(schema)),
+      containsBorrow_(SchemaContainsBorrow(schema_)) {}
+
 bool ComponentType::structurallyEqual(const ComponentType& a,
                                       const ComponentType& b) {
   return a.kind() == b.kind() &&
@@ -1737,6 +1792,12 @@ void ComponentInstance::tracePrivate(JSTracer* trc) {
   handles_.trace(trc);
   hostResourceCtors_.trace(trc);
   hostResourceDisposers_.trace(trc);
+  guestResourceClasses_.trace(trc);
+  guestResourcePrototypes_.trace(trc);
+  guestResourceConstructors_.trace(trc);
+  for (ComponentCallScope& scope : callScopes_) {
+    scope.trace(trc);
+  }
 }
 
 void ComponentInstance::popCallScope() {
@@ -1744,6 +1805,11 @@ void ComponentInstance::popCallScope() {
     ComponentResourceHandle* handle = handles_.get(index);
     MOZ_ASSERT(handle && handle->numLends > 0);
     handle->numLends--;
+  }
+  for (JSObject* obj : callScopes_.back().lentObjects) {
+    auto& resource = obj->as<WasmComponentResourceObject>();
+    MOZ_ASSERT(resource.lendCount() > 0);
+    resource.setLendCount(resource.lendCount() - 1);
   }
   callScopes_.popBack();
 }
@@ -1914,7 +1980,10 @@ bool ComponentInstance::readImports(JSContext* cx, HandleObject importObj) {
   size_t numResourceTypes = component_->resourceTypes().length();
   if (!importValues_.resize(component_->numImportedItems()) ||
       !hostResourceCtors_.resize(numResourceTypes) ||
-      !hostResourceDisposers_.resize(numResourceTypes)) {
+      !hostResourceDisposers_.resize(numResourceTypes) ||
+      !guestResourceClasses_.resize(numResourceTypes) ||
+      !guestResourcePrototypes_.resize(numResourceTypes) ||
+      !guestResourceConstructors_.resize(numResourceTypes)) {
     ReportOutOfMemory(cx);
     return false;
   }
@@ -2462,7 +2531,8 @@ bool ComponentInstance::init(JSContext* cx,
 
 bool ComponentInstance::createLiftedFunction(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
-    uint32_t funcIndex, Handle<JSAtom*> name, MutableHandleFunction result) {
+    uint32_t funcIndex, Handle<JSAtom*> name, bool takesSelf,
+    MutableHandleFunction result) {
   const ComponentLiftedFuncDesc* lifted = component_->getLiftedFunc(funcIndex);
   if (!lifted) {
     JS_ReportErrorASCII(cx,
@@ -2482,13 +2552,328 @@ bool ComponentInstance::createLiftedFunction(
   return getCanonOptValues(cx, instanceObj, lifted->canonOpts(), &opts) &&
          CreateLiftedFunction(cx, instanceObj,
                               component_->getType(lifted->typeIndex()).asFunc(),
-                              calleeFunc, opts, name, result);
+                              calleeFunc, opts, name, takesSelf, result);
+}
+
+enum GuestResourceClassSlots {
+  GuestResourceClassSlot_Instance,
+  GuestResourceClassSlot_ResourceType,
+};
+
+static WasmComponentInstanceObject& GuestResourceClassInstance(
+    const JSFunction& resourceClass) {
+  return resourceClass.getExtendedSlot(GuestResourceClassSlot_Instance)
+      .toObject()
+      .as<WasmComponentInstanceObject>();
+}
+
+static uint32_t GuestResourceClassType(const JSFunction& resourceClass) {
+  return uint32_t(
+      resourceClass.getExtendedSlot(GuestResourceClassSlot_ResourceType)
+          .toInt32());
+}
+
+// The [[Construct]] of a guest resource class, which calls its [constructor]
+// export. Its [[Call]] throws.
+static bool GuestResourceClassConstruct(JSContext* cx, unsigned argc,
+                                        Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.isConstructing()) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_CANT_CALL_CLASS_CONSTRUCTOR);
+    return false;
+  }
+  RootedFunction resourceClass(cx, &args.callee().as<JSFunction>());
+  ComponentInstance& instance =
+      GuestResourceClassInstance(*resourceClass).instance();
+  RootedObject ctor(cx, instance.guestResourceConstructor(
+                            GuestResourceClassType(*resourceClass)));
+  if (!ctor) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_WASM_COMPONENT_NO_CONSTRUCTOR);
+    return false;
+  }
+
+  InvokeArgs ctorArgs(cx);
+  if (!ctorArgs.init(cx, args.length())) {
+    return false;
+  }
+  for (size_t i = 0; i < args.length(); i++) {
+    ctorArgs[i].set(args[i]);
+  }
+  RootedValue ctorValue(cx, ObjectValue(*ctor));
+  RootedValue result(cx);
+  if (!Call(cx, ctorValue, UndefinedHandleValue, ctorArgs, &result)) {
+    return false;
+  }
+
+  // A subclass's instances get its prototype.
+  RootedObject obj(cx, &result.toObject());
+  RootedObject newTarget(cx, &args.newTarget().toObject());
+  if (newTarget != resourceClass) {
+    RootedValue proto(cx);
+    if (!GetProperty(cx, newTarget, newTarget, cx->names().prototype, &proto)) {
+      return false;
+    }
+    if (proto.isObject()) {
+      RootedObject protoObj(cx, &proto.toObject());
+      if (!SetPrototype(cx, obj, protoObj)) {
+        return false;
+      }
+    }
+  }
+  args.rval().setObject(*obj);
+  return true;
+}
+
+bool wasm::IsComponentGuestResourceClass(const JSObject* obj) {
+  return obj->is<JSFunction>() &&
+         obj->as<JSFunction>().maybeNative() == GuestResourceClassConstruct;
+}
+
+// The %Symbol.dispose% method of a guest resource class's prototype, which
+// performs the JS-API's "drop a guest resource instance" on its receiver.
+static bool GuestResourceDispose(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  RootedFunction resourceClass(cx, &args.callee()
+                                        .as<JSFunction>()
+                                        .getExtendedSlot(0)
+                                        .toObject()
+                                        .as<JSFunction>());
+  if (!args.thisv().isObject() ||
+      !args.thisv().toObject().is<WasmComponentResourceObject>() ||
+      &args.thisv()
+              .toObject()
+              .as<WasmComponentResourceObject>()
+              .resourceClass() != resourceClass) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_WASM_COMPONENT_BAD_RESOURCE);
+    return false;
+  }
+  auto& resource = args.thisv().toObject().as<WasmComponentResourceObject>();
+  args.rval().setUndefined();
+  if (!resource.hasRep()) {
+    return true;
+  }
+  if (resource.lendCount() != 0) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_WASM_COMPONENT_RESOURCE_LENT);
+    return false;
+  }
+  int32_t rep = resource.rep();
+  resource.clearRep();
+  Rooted<WasmComponentInstanceObject*> instanceObj(
+      cx, &GuestResourceClassInstance(*resourceClass));
+  return instanceObj->instance().dropGuestResource(
+      cx, instanceObj, GuestResourceClassType(*resourceClass), rep);
+}
+
+bool ComponentInstance::dropGuestResource(
+    JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+    uint32_t resourceType, int32_t rep) {
+  if (trapped_) {
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_TRAPPED);
+    return false;
+  }
+  mozilla::Maybe<uint32_t> dtorIndex =
+      component_->resourceTypes()[resourceType].asResource().dtorIndex();
+  if (!dtorIndex) {
+    return true;
+  }
+  RootedValue dtor(cx);
+  if (!getCoreItemValue(
+          cx, instanceObj,
+          ComponentSortIndex(ComponentSort::CoreFunction, *dtorIndex), &dtor)) {
+    return false;
+  }
+  RootedValue arg(cx, Int32Value(rep));
+  RootedValue rval(cx);
+  if (!Call(cx, dtor, UndefinedHandleValue, arg, &rval)) {
+    trapped_ = true;
+    return false;
+  }
+  return true;
+}
+
+// Creates a guest resource class for the resource type at `resourceType`,
+// named `name`, whose constructor takes `arity` arguments.
+static JSFunction* CreateGuestResourceClass(
+    JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+    uint32_t resourceType, Handle<JSAtom*> name, uint32_t arity,
+    MutableHandleObject proto) {
+  RootedFunction resourceClass(
+      cx, NewNativeConstructor(cx, GuestResourceClassConstruct, arity, name,
+                               gc::AllocKind::FUNCTION_EXTENDED));
+  if (!resourceClass) {
+    return nullptr;
+  }
+  resourceClass->initExtendedSlot(GuestResourceClassSlot_Instance,
+                                  ObjectValue(*instanceObj));
+  resourceClass->initExtendedSlot(GuestResourceClassSlot_ResourceType,
+                                  Int32Value(int32_t(resourceType)));
+
+  proto.set(NewPlainObject(cx));
+  if (!proto) {
+    return nullptr;
+  }
+  Rooted<JSAtom*> disposeName(
+      cx, Atomize(cx, "[Symbol.dispose]", strlen("[Symbol.dispose]")));
+  if (!disposeName) {
+    return nullptr;
+  }
+  RootedFunction dispose(
+      cx, NewNativeFunction(cx, GuestResourceDispose, 0, disposeName,
+                            gc::AllocKind::FUNCTION_EXTENDED));
+  if (!dispose) {
+    return nullptr;
+  }
+  dispose->initExtendedSlot(0, ObjectValue(*resourceClass));
+
+  RootedValue protoValue(cx, ObjectValue(*proto));
+  RootedValue classValue(cx, ObjectValue(*resourceClass));
+  RootedValue disposeValue(cx, ObjectValue(*dispose));
+  RootedValue nameValue(cx, StringValue(name));
+  RootedId disposeId(cx, PropertyKey::Symbol(cx->wellKnownSymbols().dispose));
+  RootedId toStringTagId(
+      cx, PropertyKey::Symbol(cx->wellKnownSymbols().toStringTag));
+  if (!DefineDataProperty(cx, resourceClass, cx->names().prototype, protoValue,
+                          JSPROP_PERMANENT | JSPROP_READONLY) ||
+      !DefineDataProperty(cx, proto, cx->names().constructor, classValue, 0) ||
+      !DefineDataProperty(cx, proto, disposeId, disposeValue, 0) ||
+      !DefineDataProperty(cx, proto, toStringTagId, nameValue,
+                          JSPROP_READONLY)) {
+    return nullptr;
+  }
+  return resourceClass;
+}
+
+bool ComponentInstance::createGuestResourceClasses(
+    JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj) {
+  using Attr = ComponentNameAttribute;
+
+  // The resource types exported so far, by name.
+  mozilla::Vector<std::pair<mozilla::Span<const char>, uint32_t>, 4,
+                  SystemAllocPolicy>
+      resourceTypes;
+  auto resourceTypeNamed = [&](mozilla::Span<const char> label) {
+    for (const auto& [name, resourceType] : resourceTypes) {
+      if (name == label) {
+        return resourceType;
+      }
+    }
+    MOZ_CRASH("validation requires a preceding resource type export");
+  };
+
+  // The number of parameters of the [constructor] of the resource type named
+  // `label`, or 0 if there is none.
+  auto constructorArity = [&](mozilla::Span<const char> label) -> uint32_t {
+    for (const ComponentExport& exp : component_->exports()) {
+      if (exp.name().attributes.contains(Attr::Constructor) &&
+          ComponentResourceLabelOf(exp.name()) == label) {
+        return exp.externDesc().asFunc().asFunc().paramTypes.length();
+      }
+    }
+    return 0;
+  };
+
+  for (const ComponentExport& exp : component_->exports()) {
+    ComponentNameAttributes attrs = exp.name().attributes;
+    if (exp.externDesc().sort() == ComponentSort::Type) {
+      ComponentType type = component_->getType(exp.item().index);
+      if (type.kind() != ComponentTypeKind::Resource &&
+          type.kind() != ComponentTypeKind::SubResource) {
+        continue;
+      }
+      uint32_t resourceType = component_->resourceTypeIndex(type);
+      if (component_->resourceTypes()[resourceType].kind() !=
+          ComponentTypeKind::Resource) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                                  JSMSG_WASM_COMPONENT_REEXPORTED_RESOURCE);
+        return false;
+      }
+      if (!resourceTypes.emplaceBack(exp.name().name.utf8Bytes(),
+                                     resourceType)) {
+        ReportOutOfMemory(cx);
+        return false;
+      }
+      if (guestResourceClasses_[resourceType]) {
+        continue;
+      }
+      Rooted<JSAtom*> name(cx,
+                           ComponentJSName(cx, exp.name(), /*isType=*/true));
+      if (!name) {
+        return false;
+      }
+      RootedObject proto(cx);
+      JSFunction* resourceClass = CreateGuestResourceClass(
+          cx, instanceObj, resourceType, name,
+          constructorArity(exp.name().name.utf8Bytes()), &proto);
+      if (!resourceClass) {
+        return false;
+      }
+      guestResourceClasses_[resourceType] = resourceClass;
+      guestResourcePrototypes_[resourceType] = proto;
+      continue;
+    }
+
+    if (!attrs.contains(Attr::Constructor) && !attrs.contains(Attr::Method) &&
+        !attrs.contains(Attr::Static)) {
+      continue;
+    }
+    if (attrs.contains(Attr::Get) || attrs.contains(Attr::Set)) {
+      JS_ReportErrorASCII(cx,
+                          "resource accessor exports are not supported yet");
+      return false;
+    }
+
+    uint32_t resourceType =
+        resourceTypeNamed(ComponentResourceLabelOf(exp.name()));
+    Rooted<JSAtom*> name(cx, ComponentJSName(cx, exp.name(), /*isType=*/false));
+    if (!name) {
+      return false;
+    }
+    RootedFunction func(cx);
+    if (!createLiftedFunction(cx, instanceObj, exp.item().index, name,
+                              attrs.contains(Attr::Method), &func)) {
+      return false;
+    }
+    if (attrs.contains(Attr::Constructor)) {
+      guestResourceConstructors_[resourceType] = func;
+      continue;
+    }
+
+    // Methods are on the prototype, and statics on the class, where they can't
+    // replace its own properties.
+    bool isMethod = attrs.contains(Attr::Method);
+    RootedObject target(cx, isMethod ? guestResourcePrototypes_[resourceType]
+                                     : guestResourceClasses_[resourceType]);
+    // TODO(wasm-cm): The JS-API exports members with these names on the
+    // exports object instead, once it gives them a JS name there.
+    if (name == cx->names().proto_ || name == cx->names().constructor ||
+        name == cx->names().prototype || name == cx->names().arguments ||
+        name == cx->names().caller || name == cx->names().name ||
+        name == cx->names().length) {
+      JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                                JSMSG_WASM_COMPONENT_RESERVED_MEMBER);
+      return false;
+    }
+    RootedValue funcValue(cx, ObjectValue(*func));
+    RootedId nameId(cx, AtomToId(name));
+    if (!DefineDataProperty(cx, target, nameId, funcValue, 0)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool ComponentInstance::createExportsObject(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     MutableHandleObject exportsObj) {
   using Attr = ComponentNameAttribute;
+
+  if (!createGuestResourceClasses(cx, instanceObj)) {
+    return false;
+  }
 
   exportsObj.set(NewPlainObjectWithProto(cx, nullptr));
   if (!exportsObj) {
@@ -2499,7 +2884,6 @@ bool ComponentInstance::createExportsObject(
     ComponentNameAttributes attrs = exp.name().attributes;
     if (attrs.contains(Attr::Constructor) || attrs.contains(Attr::Method) ||
         attrs.contains(Attr::Static)) {
-      // TODO(wasm-cm): These belong on guest resource classes.
       continue;
     }
     if (attrs.contains(Attr::Get) || attrs.contains(Attr::Set)) {
@@ -2531,18 +2915,18 @@ bool ComponentInstance::createExportsObject(
         value.setObject(*moduleObj);
       } break;
       case ComponentSort::Type: {
-        ComponentTypeKind kind = exp.externDesc().asType().kind();
-        if (kind != ComponentTypeKind::Resource &&
-            kind != ComponentTypeKind::SubResource) {
+        ComponentType type = component_->getType(exp.item().index);
+        if (type.kind() != ComponentTypeKind::Resource &&
+            type.kind() != ComponentTypeKind::SubResource) {
           continue;
         }
-        JS_ReportErrorASCII(cx, "resource type exports are not supported yet");
-        return false;
-      }
+        value.setObject(
+            *guestResourceClasses_[component_->resourceTypeIndex(type)]);
+      } break;
       case ComponentSort::Func: {
         RootedFunction func(cx);
         if (!createLiftedFunction(cx, instanceObj, exp.item().index, key,
-                                  &func)) {
+                                  /*takesSelf=*/false, &func)) {
           return false;
         }
         value.setObject(*func);
