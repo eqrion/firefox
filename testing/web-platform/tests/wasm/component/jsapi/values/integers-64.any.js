@@ -30,7 +30,7 @@ function assert_bigint_equals(actual, expected, description) {
 }
 
 for (const [type, { min, max }] of Object.entries(types)) {
-  for (const value of [min, max, 0n, 1n, min + 1n, max - 1n, 2n ** 53n, 2n ** 53n + 1n]) {
+  for (const value of new Set([min, max, 0n, 1n, min + 1n, max - 1n, 2n ** 53n, 2n ** 53n + 1n])) {
     promise_test(async () => {
       assert_bigint_equals(roundtrip(type, value), value, "result");
       assert_bigint_equals(received[type], value, "value seen by echo");
