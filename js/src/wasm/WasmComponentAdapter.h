@@ -105,6 +105,18 @@ void* CmNewArray(Instance* instance, int32_t length);
 int32_t CmArraySet(Instance* instance, void* arrayRef, int32_t index,
                    void* valueRef);
 
+// ToComponentValueRecord: CmCheckObject throws unless the value is an object,
+// and CmGetField gets a field, throwing if it is undefined unless
+// `allowUndefined`. `nameRef` is an atom.
+int32_t CmCheckObject(Instance* instance, void* valueRef);
+void* CmGetField(Instance* instance, void* objectRef, void* nameRef,
+                 int32_t allowUndefined);
+
+// ToJSValueRecord: creates a null-prototype object, and defines its fields.
+void* CmNewRecord(Instance* instance);
+int32_t CmDefineField(Instance* instance, void* objectRef, void* nameRef,
+                      void* valueRef);
+
 // ToJSValue for a list<u8>, as a Uint8Array.
 void* CmBytesToJS(Instance* instance, int32_t ptr, int32_t length);
 
