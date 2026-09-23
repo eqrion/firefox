@@ -1278,6 +1278,42 @@ wasmFailValidateText(`
 `, /memory for canonical ABI must be 32-bit/);
 
 // ----------------------------------------------------------------------------
+// Unshared memory requirement
+//
+// For now, we do not support shared memories in our implementation of the
+// canonical ABI. These tests should be deleted when we add support.
+
+if (wasmThreadsEnabled()) {
+  wasmFailValidateText(`
+  (component
+    (type (tuple s32 s32))
+    (type (func (result 0)))
+    (core module
+      (memory (export "m") 1 1 shared)
+      (func (export "f") (result i32) (i32.const 0))
+    )
+    (core instance (instantiate 0))
+    (alias core export 0 "m" (core memory))
+    (alias core export 0 "f" (core func))
+    (func (type 1) (canon lift (core func 0) (memory 0)))
+  )
+  `, /memory for canonical ABI must not be shared/);
+  wasmFailValidateText(`
+  (component
+    (type (tuple s32 s32))
+    (type (func (param "a" 0)))
+    (import "f" (func (type 1)))
+    (core module
+      (memory (export "m") 1 1 shared)
+    )
+    (core instance (instantiate 0))
+    (alias core export 0 "m" (core memory))
+    (core func (canon lower (func 0) (memory 0)))
+  )
+  `, /memory for canonical ABI must not be shared/);
+}
+
+// ----------------------------------------------------------------------------
 // Flattening depth limit
 
 function depthinate(depth, body) {
