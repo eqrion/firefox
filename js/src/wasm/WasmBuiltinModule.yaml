@@ -846,6 +846,47 @@
   fail_mode: FailOnNegI32
   uses_memory: false
 
+- op: CmNewMap
+  symbolic_address:
+    name: CmNewMap
+    type: Args_General1
+    needs_thunk: true
+  entry: CmNewMap
+  export: cmNewMap
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: CmMapSet
+  symbolic_address:
+    name: CmMapSet
+    type: Args_Int32_GeneralGeneralGeneralGeneral
+    needs_thunk: true
+  entry: CmMapSet
+  export: cmMapSet
+  params:
+    - 'externref'
+    - 'externref'
+    - 'externref'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmMapEntries
+  symbolic_address:
+    name: CmMapEntries
+    type: Args_General_GeneralGeneralGeneralInt32Int32
+    needs_thunk: true
+  entry: CmMapEntries
+  export: cmMapEntries
+  params:
+    - 'externref'
+    - 'externref'
+    - 'i32'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
 - op: CmNewVariant
   symbolic_address:
     name: CmNewVariant
@@ -957,6 +998,34 @@
     - 'i32'
     - 'i32'
   fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmScalarListToArray
+  symbolic_address:
+    name: CmScalarListToArray
+    type: Args_General_GeneralGeneralInt32
+    needs_thunk: true
+  entry: CmScalarListToArray
+  export: cmScalarListToArray
+  params:
+    - 'externref'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: CmArrayToScalarList
+  symbolic_address:
+    name: CmArrayToScalarList
+    type: Args_General_GeneralGeneralInt32
+    needs_thunk: true
+  entry: CmArrayToScalarList
+  export: cmArrayToScalarList
+  params:
+    - 'externref'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
   uses_memory: false
 
 - op: CmToString

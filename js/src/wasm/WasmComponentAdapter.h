@@ -123,6 +123,20 @@ void* CmNewRecord(Instance* instance);
 int32_t CmDefineField(Instance* instance, void* objectRef, void* nameRef,
                       void* valueRef);
 
+// ToJSValueMap: creates a Map and sets its entries.
+void* CmNewMap(Instance* instance);
+int32_t CmMapSet(Instance* instance, void* mapRef, void* keyRef,
+                 void* valueRef);
+
+// The first part of ToComponentValueMap: gets the entries of a map as an
+// array. An iterable's entries are iterated, and are then converted like a
+// tuple of the key and value. Otherwise, if the keys are strings, the entries
+// are the object's own enumerable string-keyed properties, and the instance's
+// scratch is set to 1. Throws if the entries would be larger than 32-bit
+// memory, given the size of an entry.
+void* CmMapEntries(Instance* instance, void* ctxRef, void* valueRef,
+                   int32_t entrySize, int32_t keyIsString);
+
 // ToJSValueVariant: creates a null-prototype object with the `kind` and, if
 // `hasValue`, the `value`.
 void* CmNewVariant(Instance* instance, void* kindRef, void* valueRef,
@@ -148,6 +162,13 @@ int32_t CmIsScalarArray(Instance* instance, void* valueRef, int32_t kind);
 int32_t CmScalarArrayLength(Instance* instance, void* valueRef, int32_t kind);
 int32_t CmCopyScalars(Instance* instance, void* valueRef, int32_t ptr,
                       int32_t length);
+
+// For a list<T, N> of scalars of type `kind`: CmScalarListToArray gets the
+// elements of a typed array of type `kind` as an array, and otherwise iterates
+// the value like CmIterableToArray. CmArrayToScalarList creates the typed array
+// for an array of the elements.
+void* CmScalarListToArray(Instance* instance, void* valueRef, int32_t kind);
+void* CmArrayToScalarList(Instance* instance, void* arrayRef, int32_t kind);
 
 // The steps of storing a JS string with the canonical ABI's store_string.
 // CmToString converts a JS value to a string, and the rest take that string.
