@@ -4,8 +4,10 @@
   (import "r" (type $r (sub resource)))
   (import "recv" (func $recv (param "x" (borrow $r))))
   (core func $recv' (canon lower (func $recv)))
+  (core func $drop-r (canon resource.drop $r))
   (core module $M
     (import "" "recv" (func $recv (param i32)))
+    (import "" "drop-r" (func $drop-r (param i32)))
     (memory (export "mem") 1)
     (global $next (mut i32) (i32.const 64))
     (global $stored (mut i32) (i32.const 0))
@@ -29,7 +31,7 @@
       (i32.store (i32.const 0) (local.get $a))
       (i32.store (i32.const 4) (local.get $b))
       (i32.const 0))
-    (func (export "send") (param i32) (call $recv (local.get 0)))
+    (func (export "send") (param i32) (call $recv (local.get 0)) (call $drop-r (local.get 0)))
     (func (export "store") (param i32) (global.set $stored (local.get 0)))
     (func (export "load") (result i32) (global.get $stored))
     (func (export "roundtrip-list") (param i32 i32) (result i32) (call $ret2 (local.get 0) (local.get 1)))
@@ -38,7 +40,9 @@
     (func (export "roundtrip-variant") (param i32 i32) (result i32) (call $ret2 (local.get 0) (local.get 1)))
     (func (export "roundtrip-map") (param i32 i32) (result i32) (call $ret2 (local.get 0) (local.get 1)))
     (func (export "fail") (param i32) (result i32) (call $ret2 (i32.const 1) (local.get 0))))
-  (core instance $m (instantiate $M (with "" (instance (export "recv" (func $recv'))))))
+  (core instance $m (instantiate $M (with "" (instance
+    (export "recv" (func $recv'))
+    (export "drop-r" (func $drop-r))))))
 
   (type $rec' (record (field "a" (own $r)) (field "b" u32)))
   (type $var' (variant (case "none") (case "some" (own $r))))
