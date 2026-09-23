@@ -5680,6 +5680,9 @@ enum class ComponentTypeKindRaw : uint8_t {
         if (!DecodeComponentValType(d, scope, &resultType)) {
           return false;
         }
+        if (resultType.containsBorrow()) {
+          return d.fail("function results cannot contain borrows");
+        }
         ft.resultType = mozilla::Some(resultType);
       }
 

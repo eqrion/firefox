@@ -191,13 +191,21 @@ wasmFailValidateText(`(component
 // Imports cannot refer to resource types defined in the component.
 for (const type of [
   `(func (param "x" (own $r)))`,
-  `(func (result (list (borrow $r))))`,
+  `(func (param "x" (list (borrow $r))))`,
   `(instance (export "f" (func (param "x" (own $r)))))`,
 ]) {
   wasmFailValidateText(`(component
     (type $r (resource (rep i32)))
     (import "i" ${type})
   )`, /an import cannot refer to a resource type defined in the component/);
+}
+
+// Function results cannot contain borrows.
+for (const result of ["(borrow $r)", "(list (borrow $r))", "(option (borrow $r))"]) {
+  wasmFailValidateText(`(component
+    (import "r" (type $r (sub resource)))
+    (type (func (result ${result})))
+  )`, /function results cannot contain borrows/);
 }
 
 // ----------------------------------------------------------------------------
@@ -258,7 +266,6 @@ wasmValidateText(`(component
 for (const func of [
   `(func)`,
   `(func (result u32))`,
-  `(func (result (borrow $r)))`,
   `(func (result (own $s)))`,
   `(func (result (result (error (own $r)))))`,
 ]) {
