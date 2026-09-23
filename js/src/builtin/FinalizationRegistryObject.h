@@ -173,6 +173,16 @@ class FinalizationRegistryObject : public NativeObject {
 
   static bool unregisterRecord(FinalizationRecordObject* record);
 
+  // The effects of FinalizationRegistry.prototype.register and unregister,
+  // for arguments that have been checked. `unregisterToken` may be undefined
+  // for register. unregisterTarget returns whether any registrations were
+  // removed.
+  [[nodiscard]] static bool registerTarget(
+      JSContext* cx, HandleFinalizationRegistryObject registry,
+      HandleValue target, HandleValue heldValue, HandleValue unregisterToken);
+  static bool unregisterTarget(HandleFinalizationRegistryObject registry,
+                               HandleValue unregisterToken);
+
  private:
   static const JSClassOps classOps_;
   static const ClassSpec classSpec_;
