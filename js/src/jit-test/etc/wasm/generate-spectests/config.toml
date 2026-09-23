@@ -257,6 +257,7 @@ excluded_tests = [
   # Failing: needs nested components
   "^abi.wast.js",
   "^alignment.wast.js",
+  "^annotated-names.wast.js",
   "^async-calls-sync.wast.js",
   "^borrows.wast.js",
   "^cancel-and-exclusive-lock.wast.js",
@@ -279,13 +280,19 @@ excluded_tests = [
   "^during-sync-call-no-sibling-resume.wast.js",
   "^empty-wait.wast.js",
   "^futures-must-write.wast.js",
+  "^handle-table.wast.js",
   "^indicies.wast.js",
+  "^instantiation.wast.js",
+  "^kebab.wast.js",
+  "^link-time-virtualization.wast.js",
   "^multiple-resources.wast.js",
+  "^numerics.wast.js",
   "^partial-stream-copies.wast.js",
   "^passing-resources.wast.js",
   "^realloc.wast.js",
   "^reentrance.wast.js",
   "^resources.wast.js",
+  "^shared-everything-dynamic-linking.wast.js",
   "^switch-to-ready-callback.wast.js",
   "^sync-barges-in.wast.js",
   "^sync-streams.wast.js",
@@ -297,30 +304,29 @@ excluded_tests = [
   "^variants.wast.js",
   "^zero-length.wast.js",
 
-  # Failing
-  "^attributes.wast.js",
+  # Failing: needs core type definitions
+  "^core-modules.wast.js",
+  "^during-sync-scheduling-candidates.wast.js",
+  "^outer-alias.wast.js",
+
+  # Failing: needs async
   "^builtin-trap-poisons-instance.wast.js",
   "^dont-block-start.wast.js",
   "^during-sync-call-exclusive-resume.wast.js",
-  "^during-sync-scheduling-candidates.wast.js",
-  "^external-visibility.wast.js",
   "^future-completion-order.wast.js",
   "^idle-drop.wast.js",
+  "^max-value-size.wast.js",
   "^same-component-stream-future.wast.js",
   "^self-switch-traps.wast.js",
-  "^wait-during-callback.wast.js",
   "^trap-if-transfer-in-waitable-set.wast.js",
+  "^wait-during-callback.wast.js",
+
+  # Failing: needs version suffixes
+  "^attributes.wast.js",
+
+  # Failing: missing validation
   "^binary.wast.js",
-  "^link-time-virtualization.wast.js",
-  "^shared-everything-dynamic-linking.wast.js",
-  "^handle-table.wast.js",
-  "^annotated-names.wast.js",
-  "^core-modules.wast.js",
-  "^instantiation.wast.js",
-  "^kebab.wast.js",
-  "^max-value-size.wast.js",
-  "^outer-alias.wast.js",
-  "^numerics.wast.js",
+  "^external-visibility.wast.js",
 ]
 directive = "; skip-if: !wasmComponentsEnabled(); test-also=-P wasm_components; test-also=--wasm-compiler=baseline -P wasm_components; test-also=--wasm-compiler=optimizing -P wasm_components"
 
