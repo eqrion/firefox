@@ -10,14 +10,18 @@
 
 #  include "mozilla/Casting.h"
 
+#  include <cmath>
+
 #  include "builtin/String.h"
 #  include "js/CallAndConstruct.h"
 #  include "js/Conversions.h"
+#  include "js/experimental/TypedData.h"
 #  include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #  include "util/Unicode.h"
 #  include "vm/BigIntType.h"
 #  include "vm/ErrorObject.h"
 #  include "vm/JSFunction.h"
+#  include "vm/TypedArrayObject.h"
 #  include "wasm/WasmBinary.h"
 #  include "wasm/WasmBuiltinModule.h"
 #  include "wasm/WasmBuiltins.h"
@@ -302,6 +306,9 @@ class AdapterFuncEncoder {
   [[nodiscard]] bool br(uint32_t depth) {
     return encoder_.writeOp(Op::Br) && encoder_.writeVarU32(depth);
   }
+  [[nodiscard]] bool brIf(uint32_t depth) {
+    return encoder_.writeOp(Op::BrIf) && encoder_.writeVarU32(depth);
+  }
 
   // Loads and stores from memory 0.
   [[nodiscard]] bool memoryAccess(Op op, uint32_t alignLog2, uint32_t offset) {
@@ -357,6 +364,15 @@ static bool IsSupportedAdapterType(const ComponentType& type) {
     case ComponentTypeKind::F64:
     case ComponentTypeKind::Char:
     case ComponentTypeKind::String:
+      return true;
+    case ComponentTypeKind::List:
+      return IsSupportedAdapterType(type.asList());
+    case ComponentTypeKind::Tuple:
+      for (const ComponentType& item : type.asTuple()) {
+        if (!IsSupportedAdapterType(item)) {
+          return false;
+        }
+      }
       return true;
     default:
       return IsIntegerKind(type.kind());
@@ -467,6 +483,40 @@ static ScalarLayout GetScalarLayout(ComponentTypeKind kind) {
       MOZ_CRASH("not a scalar type");
   }
 }
+
+// The class of the typed array that a list of scalars of type `kind` is
+// represented by, if it is represented by one.
+static mozilla::Maybe<Scalar::Type> ScalarListArrayType(
+    ComponentTypeKind kind) {
+  switch (kind) {
+    case ComponentTypeKind::S8:
+      return mozilla::Some(Scalar::Int8);
+    case ComponentTypeKind::U8:
+      return mozilla::Some(Scalar::Uint8);
+    case ComponentTypeKind::S16:
+      return mozilla::Some(Scalar::Int16);
+    case ComponentTypeKind::U16:
+      return mozilla::Some(Scalar::Uint16);
+    case ComponentTypeKind::S32:
+      return mozilla::Some(Scalar::Int32);
+    case ComponentTypeKind::U32:
+      return mozilla::Some(Scalar::Uint32);
+    case ComponentTypeKind::S64:
+      return mozilla::Some(Scalar::BigInt64);
+    case ComponentTypeKind::U64:
+      return mozilla::Some(Scalar::BigUint64);
+    case ComponentTypeKind::F32:
+      return mozilla::Some(Scalar::Float32);
+    case ComponentTypeKind::F64:
+      return mozilla::Some(Scalar::Float64);
+    default:
+      return mozilla::Nothing();
+  }
+}
+
+// The canonical ABI's canonical NaNs.
+static constexpr uint32_t CanonicalFloat32NaN = 0x7fc00000;
+static constexpr uint64_t CanonicalFloat64NaN = 0x7ff8000000000000;
 
 // State shared by the code converting the values of one adapter.
 struct AdapterContext {
@@ -599,8 +649,9 @@ template <typename F>
           !f.op(Op::I32GtU) || !f.block(Op::If, mozilla::Nothing()) ||
           !EmitReallocate(a, worstCase, 1, byteLength, ptr) ||
           !f.localGet(ptr) || !f.localGet(byteLength) || !f.i32Const(1) ||
-          !f.callBuiltin(Id::CmCheckRange) || !f.op(Op::End) ||
-          !f.localGet(byteLength) || !f.localSet(length) || !f.op(Op::End)) {
+          !f.i32Const(1) || !f.callBuiltin(Id::CmCheckRange) ||
+          !f.op(Op::End) || !f.localGet(byteLength) || !f.localSet(length) ||
+          !f.op(Op::End)) {
         return false;
       }
       break;
@@ -640,6 +691,210 @@ template <typename F>
   return EmitSetI32(f, loc, 0, ptr) && EmitSetI32(f, loc, 1, length);
 }
 
+[[nodiscard]] static bool EmitToComponentValue(AdapterContext& a,
+                                               const ComponentType& type,
+                                               uint32_t jsValue,
+                                               const ValueLoc& loc);
+[[nodiscard]] static bool EmitToJSValue(AdapterContext& a,
+                                        const ComponentType& type,
+                                        const ValueLoc& loc);
+
+// Computes the location of each field of a tuple or record at `loc`.
+[[nodiscard]] static bool GetFieldLocs(
+    const ComponentTypeVector& fieldTypes, const ValueLoc& loc,
+    Vector<ValueLoc, 8, SystemAllocPolicy>* fieldLocs) {
+  uint32_t offset = 0;
+  size_t flatIndex = 0;
+  for (const ComponentType& fieldType : fieldTypes) {
+    if (loc.inMemory()) {
+      offset = CanonAlignTo(offset, CanonAlignment(fieldType));
+      if (!fieldLocs->append(
+              ValueLoc::memory(loc.ptrLocal(), loc.offset() + offset))) {
+        return false;
+      }
+      offset += CanonElemSize(fieldType);
+    } else {
+      ValTypeVector flatTypes;
+      if (!FlatTypes(fieldType, &flatTypes) ||
+          !fieldLocs->append(ValueLoc::flat(
+              loc.flatLocals().Subspan(flatIndex, flatTypes.length())))) {
+        return false;
+      }
+      flatIndex += flatTypes.length();
+    }
+  }
+  return true;
+}
+
+// Emits a loop over `i` from 0 to `count`, where `elemPtr` is `ptr` plus
+// `i * elemSize`, with `emitBody` emitting the body.
+template <typename F>
+[[nodiscard]] static bool EmitListLoop(AdapterFuncEncoder& f, uint32_t ptr,
+                                       uint32_t count, uint32_t elemSize,
+                                       uint32_t i, uint32_t elemPtr,
+                                       F emitBody) {
+  return f.i32Const(0) && f.localSet(i) && f.localGet(ptr) &&
+         f.localSet(elemPtr) && f.block(Op::Block, mozilla::Nothing()) &&
+         f.block(Op::Loop, mozilla::Nothing()) && f.localGet(i) &&
+         f.localGet(count) && f.op(Op::I32GeU) && f.brIf(1) && emitBody() &&
+         f.localGet(elemPtr) && f.i32Const(int32_t(elemSize)) &&
+         f.op(Op::I32Add) && f.localSet(elemPtr) && f.localGet(i) &&
+         f.i32Const(1) && f.op(Op::I32Add) && f.localSet(i) && f.br(0) &&
+         f.op(Op::End) && f.op(Op::End);
+}
+
+// ToComponentValue for a tuple: as for a list, which must have exactly as many
+// elements as the tuple.
+[[nodiscard]] static bool EmitToComponentValueTuple(AdapterContext& a,
+                                                    const ComponentType& type,
+                                                    uint32_t jsValue,
+                                                    const ValueLoc& loc) {
+  using Id = BuiltinModuleFuncId;
+  AdapterFuncEncoder& f = a.f;
+  const ComponentTypeVector& itemTypes = type.asTuple();
+  Vector<ValueLoc, 8, SystemAllocPolicy> itemLocs;
+  uint32_t array;
+  if (!GetFieldLocs(itemTypes, loc, &itemLocs) ||
+      !f.addLocal(ValType(RefType::extern_()), &array) ||
+      !f.localGet(jsValue) || !f.i32Const(0) ||
+      !f.callBuiltin(Id::CmIterableToArray) || !f.localSet(array) ||
+      !f.localGet(array) || !f.i32Const(int32_t(itemTypes.length())) ||
+      !f.callBuiltin(Id::CmCheckArrayLength)) {
+    return false;
+  }
+  for (size_t i = 0; i < itemTypes.length(); i++) {
+    uint32_t item;
+    if (!f.addLocal(ValType(RefType::extern_()), &item) || !f.localGet(array) ||
+        !f.i32Const(int32_t(i)) || !f.callBuiltin(Id::CmArrayGet) ||
+        !f.localSet(item) ||
+        !EmitToComponentValue(a, itemTypes[i], item, itemLocs[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+[[nodiscard]] static bool EmitToJSValueTuple(AdapterContext& a,
+                                             const ComponentType& type,
+                                             const ValueLoc& loc) {
+  using Id = BuiltinModuleFuncId;
+  AdapterFuncEncoder& f = a.f;
+  const ComponentTypeVector& itemTypes = type.asTuple();
+  Vector<ValueLoc, 8, SystemAllocPolicy> itemLocs;
+  uint32_t array;
+  if (!GetFieldLocs(itemTypes, loc, &itemLocs) ||
+      !f.addLocal(ValType(RefType::extern_()), &array) ||
+      !f.i32Const(int32_t(itemTypes.length())) ||
+      !f.callBuiltin(Id::CmNewArray) || !f.localSet(array)) {
+    return false;
+  }
+  for (size_t i = 0; i < itemTypes.length(); i++) {
+    if (!f.localGet(array) || !f.i32Const(int32_t(i)) ||
+        !EmitToJSValue(a, itemTypes[i], itemLocs[i]) ||
+        !f.callBuiltin(Id::CmArraySet)) {
+      return false;
+    }
+  }
+  return f.localGet(array);
+}
+
+// ToComponentValue for a list, with the canonical ABI's store_list.
+[[nodiscard]] static bool EmitToComponentValueList(AdapterContext& a,
+                                                   const ComponentType& type,
+                                                   uint32_t jsValue,
+                                                   const ValueLoc& loc) {
+  using Id = BuiltinModuleFuncId;
+  AdapterFuncEncoder& f = a.f;
+  ComponentType elemType = type.asList();
+  uint32_t elemSize = CanonElemSize(elemType);
+  uint32_t alignment = CanonAlignment(elemType);
+  uint32_t ptr, length, byteLength;
+  if (!f.addLocal(ValType::I32, &ptr) || !f.addLocal(ValType::I32, &length) ||
+      !f.addLocal(ValType::I32, &byteLength) ||
+      !f.block(Op::Block, mozilla::Nothing())) {
+    return false;
+  }
+
+  // A typed array of the list's scalar type is copied directly.
+  int32_t kind = int32_t(elemType.kind());
+  if (ScalarListArrayType(elemType.kind()) &&
+      (!f.localGet(jsValue) || !f.i32Const(kind) ||
+       !f.callBuiltin(Id::CmIsScalarArray) ||
+       !f.block(Op::If, mozilla::Nothing()) || !f.localGet(jsValue) ||
+       !f.i32Const(kind) || !f.callBuiltin(Id::CmScalarArrayLength) ||
+       !f.localSet(length) || !f.localGet(length) ||
+       !f.i32Const(int32_t(elemSize)) || !f.op(Op::I32Mul) ||
+       !f.localSet(byteLength) ||
+       !EmitAllocate(a, int32_t(alignment), byteLength, ptr) ||
+       !f.localGet(jsValue) || !f.localGet(ptr) || !f.localGet(length) ||
+       !f.callBuiltin(Id::CmCopyScalars) || !f.br(1) || !f.op(Op::End))) {
+    return false;
+  }
+
+  uint32_t array, i, elemPtr, elem;
+  if (!f.addLocal(ValType(RefType::extern_()), &array) ||
+      !f.addLocal(ValType::I32, &i) || !f.addLocal(ValType::I32, &elemPtr) ||
+      !f.addLocal(ValType(RefType::extern_()), &elem) || !f.localGet(jsValue) ||
+      !f.i32Const(int32_t(elemSize)) || !f.callBuiltin(Id::CmIterableToArray) ||
+      !f.localSet(array) || !f.localGet(array) ||
+      !f.callBuiltin(Id::CmArrayLength) || !f.localSet(length) ||
+      !f.localGet(length) || !f.i32Const(int32_t(elemSize)) ||
+      !f.op(Op::I32Mul) || !f.localSet(byteLength) ||
+      !EmitAllocate(a, int32_t(alignment), byteLength, ptr) ||
+      !f.localGet(ptr) || !f.localGet(length) ||
+      !f.i32Const(int32_t(elemSize)) || !f.i32Const(int32_t(alignment)) ||
+      !f.callBuiltin(Id::CmCheckRange)) {
+    return false;
+  }
+  if (!EmitListLoop(f, ptr, length, elemSize, i, elemPtr, [&]() {
+        return f.localGet(array) && f.localGet(i) &&
+               f.callBuiltin(Id::CmArrayGet) && f.localSet(elem) &&
+               EmitToComponentValue(a, elemType, elem,
+                                    ValueLoc::memory(elemPtr, 0));
+      })) {
+    return false;
+  }
+
+  return f.op(Op::End) && EmitSetI32(f, loc, 0, ptr) &&
+         EmitSetI32(f, loc, 1, length);
+}
+
+// ToJSValue for a list, with the canonical ABI's load_list.
+[[nodiscard]] static bool EmitToJSValueList(AdapterContext& a,
+                                            const ComponentType& type,
+                                            const ValueLoc& loc) {
+  using Id = BuiltinModuleFuncId;
+  AdapterFuncEncoder& f = a.f;
+  ComponentType elemType = type.asList();
+
+  // A list of scalars becomes a typed array.
+  if (ScalarListArrayType(elemType.kind())) {
+    return EmitGetI32(f, loc, 0) && EmitGetI32(f, loc, 1) &&
+           f.i32Const(int32_t(elemType.kind())) &&
+           f.callBuiltin(Id::CmScalarListToJS);
+  }
+
+  uint32_t elemSize = CanonElemSize(elemType);
+  uint32_t ptr, length, array, i, elemPtr;
+  return f.addLocal(ValType::I32, &ptr) && f.addLocal(ValType::I32, &length) &&
+         f.addLocal(ValType(RefType::extern_()), &array) &&
+         f.addLocal(ValType::I32, &i) && f.addLocal(ValType::I32, &elemPtr) &&
+         EmitGetI32(f, loc, 0) && f.localSet(ptr) && EmitGetI32(f, loc, 1) &&
+         f.localSet(length) && f.localGet(ptr) && f.localGet(length) &&
+         f.i32Const(int32_t(elemSize)) &&
+         f.i32Const(int32_t(CanonAlignment(elemType))) &&
+         f.callBuiltin(Id::CmCheckRange) && f.localGet(length) &&
+         f.callBuiltin(Id::CmNewArray) && f.localSet(array) &&
+         EmitListLoop(f, ptr, length, elemSize, i, elemPtr,
+                      [&]() {
+                        return f.localGet(array) && f.localGet(i) &&
+                               EmitToJSValue(a, elemType,
+                                             ValueLoc::memory(elemPtr, 0)) &&
+                               f.callBuiltin(Id::CmArraySet);
+                      }) &&
+         f.localGet(array);
+}
+
 // Emits ToComponentValue for the JS value in local `jsValue`, storing the
 // component value to `loc`.
 [[nodiscard]] static bool EmitToComponentValue(AdapterContext& a,
@@ -669,6 +924,10 @@ template <typename F>
              EmitSetScalar(f, kind, loc);
     case ComponentTypeKind::String:
       return EmitStoreString(a, jsValue, loc);
+    case ComponentTypeKind::List:
+      return EmitToComponentValueList(a, type, jsValue, loc);
+    case ComponentTypeKind::Tuple:
+      return EmitToComponentValueTuple(a, type, jsValue, loc);
     default:
       MOZ_ASSERT(IsIntegerKind(kind));
       return f.ctx() && f.localGet(jsValue) && f.i32Const(int32_t(kind)) &&
@@ -703,6 +962,10 @@ template <typename F>
       return EmitGetI32(f, loc, 0) && EmitGetI32(f, loc, 1) &&
              f.i32Const(int32_t(a.stringEncoding)) &&
              f.callBuiltin(Id::CmStringToJS);
+    case ComponentTypeKind::List:
+      return EmitToJSValueList(a, type, loc);
+    case ComponentTypeKind::Tuple:
+      return EmitToJSValueTuple(a, type, loc);
     default:
       MOZ_ASSERT(IsIntegerKind(kind));
       return EmitGetScalar(f, kind, loc) && f.i32Const(int32_t(kind)) &&
@@ -714,7 +977,8 @@ template <typename F>
 [[nodiscard]] static bool EmitCheckPointer(AdapterFuncEncoder& f,
                                            const ComponentType& type,
                                            uint32_t ptr) {
-  return f.localGet(ptr) && f.i32Const(int32_t(CanonElemSize(type))) &&
+  return f.localGet(ptr) && f.i32Const(1) &&
+         f.i32Const(int32_t(CanonElemSize(type))) &&
          f.i32Const(int32_t(CanonAlignment(type))) &&
          f.callBuiltin(BuiltinModuleFuncId::CmCheckRange);
 }
@@ -1288,13 +1552,232 @@ static bool CheckAlignment(Instance* instance, uint32_t ptr,
   return true;
 }
 
-int32_t wasm::CmCheckRange(Instance* instance, int32_t ptr, int32_t length,
-                           int32_t alignment) {
+int32_t wasm::CmCheckRange(Instance* instance, int32_t ptr, int32_t count,
+                           int32_t elemSize, int32_t alignment) {
   MOZ_ASSERT(SASigCmCheckRange.failureMode == FailureMode::FailOnNegI32);
   if (!CheckAlignment(instance, uint32_t(ptr), uint32_t(alignment)) ||
-      !GetMemoryRange(instance, uint32_t(ptr), uint32_t(length))) {
+      !GetMemoryRange(instance, uint32_t(ptr),
+                      uint64_t(uint32_t(count)) * uint32_t(elemSize))) {
     return -1;
   }
+  return 0;
+}
+
+void* wasm::CmIterableToArray(Instance* instance, void* valueRef,
+                              int32_t elemSize) {
+  MOZ_ASSERT(SASigCmIterableToArray.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  if (!value.isObject()) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_NOT_ITERABLE,
+                              "value");
+    return AnyRef::invalid().forCompiledCode();
+  }
+  Rooted<ArrayObject*> array(cx, IterableToArray(cx, value));
+  if (!array) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  // The list's size in bytes must fit in a 32-bit memory.
+  if (uint64_t(array->length()) * uint32_t(elemSize) > UINT32_MAX) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_WASM_COMPONENT_LIST_TOO_LONG);
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue arrayValue(cx, ObjectValue(*array));
+  return ExternRefForCompiledCode(cx, arrayValue);
+}
+
+static ArrayObject& ArrayFromRef(void* arrayRef) {
+  return AnyRef::fromCompiledCode(arrayRef).toJSObject().as<ArrayObject>();
+}
+
+int32_t wasm::CmArrayLength(Instance* instance, void* arrayRef) {
+  MOZ_ASSERT(SASigCmArrayLength.failureMode == FailureMode::Infallible);
+  return int32_t(ArrayFromRef(arrayRef).length());
+}
+
+int32_t wasm::CmCheckArrayLength(Instance* instance, void* arrayRef,
+                                 int32_t length) {
+  MOZ_ASSERT(SASigCmCheckArrayLength.failureMode == FailureMode::FailOnNegI32);
+  if (ArrayFromRef(arrayRef).length() != uint32_t(length)) {
+    JS_ReportErrorNumberASCII(instance->cx(), GetErrorMessage, nullptr,
+                              JSMSG_WASM_COMPONENT_BAD_LENGTH);
+    return -1;
+  }
+  return 0;
+}
+
+void* wasm::CmArrayGet(Instance* instance, void* arrayRef, int32_t index) {
+  MOZ_ASSERT(SASigCmArrayGet.failureMode == FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  // The array is from CmIterableToArray, so its elements are dense.
+  RootedValue value(cx,
+                    ArrayFromRef(arrayRef).getDenseElement(uint32_t(index)));
+  return ExternRefForCompiledCode(cx, value);
+}
+
+void* wasm::CmNewArray(Instance* instance, int32_t length) {
+  MOZ_ASSERT(SASigCmNewArray.failureMode == FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  ArrayObject* array = NewDenseFullyAllocatedArray(cx, uint32_t(length));
+  if (!array) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue value(cx, ObjectValue(*array));
+  return ExternRefForCompiledCode(cx, value);
+}
+
+int32_t wasm::CmArraySet(Instance* instance, void* arrayRef, int32_t index,
+                         void* valueRef) {
+  MOZ_ASSERT(SASigCmArraySet.failureMode == FailureMode::FailOnNegI32);
+  JSContext* cx = instance->cx();
+  Rooted<ArrayObject*> array(cx, &ArrayFromRef(arrayRef));
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  if (!DefineDataElement(cx, array, uint32_t(index), value)) {
+    return -1;
+  }
+  return 0;
+}
+
+static JSObject* NewScalarArray(JSContext* cx, Scalar::Type type,
+                                size_t length) {
+  switch (type) {
+#  define NEW_ARRAY(ExternalType, NativeType, Name) \
+    case Scalar::Name:                              \
+      return JS_New##Name##Array(cx, length);
+    JS_FOR_EACH_TYPED_ARRAY(NEW_ARRAY)
+#  undef NEW_ARRAY
+    default:
+      MOZ_CRASH("not a typed array type");
+  }
+}
+
+// Replaces NaNs with the canonical NaN, as the canonical ABI does when it
+// loads a float.
+template <typename T, typename Bits>
+static void CanonicalizeNaNs(T* elems, size_t length, Bits canonicalNaN) {
+  for (size_t i = 0; i < length; i++) {
+    if (std::isnan(elems[i])) {
+      elems[i] = mozilla::BitwiseCast<T>(canonicalNaN);
+    }
+  }
+}
+
+void* wasm::CmScalarListToJS(Instance* instance, int32_t ptr, int32_t length,
+                             int32_t kind) {
+  MOZ_ASSERT(SASigCmScalarListToJS.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  Scalar::Type type = *ScalarListArrayType(ComponentTypeKind(kind));
+  size_t elemSize = Scalar::byteSize(type);
+  uint64_t byteLength = uint64_t(uint32_t(length)) * elemSize;
+  if (!CheckAlignment(instance, uint32_t(ptr), elemSize)) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  const uint8_t* src = GetMemoryRange(instance, uint32_t(ptr), byteLength);
+  if (!src) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  // Memory is not moved by GC, so `src` stays valid while allocating.
+  JSObject* obj = NewScalarArray(cx, type, uint32_t(length));
+  if (!obj) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  TypedArrayObject& array = obj->as<TypedArrayObject>();
+  void* dst = array.dataPointerUnshared();
+  memcpy(dst, src, byteLength);
+  if (type == Scalar::Float32) {
+    CanonicalizeNaNs(static_cast<float*>(dst), uint32_t(length),
+                     CanonicalFloat32NaN);
+  } else if (type == Scalar::Float64) {
+    CanonicalizeNaNs(static_cast<double*>(dst), uint32_t(length),
+                     CanonicalFloat64NaN);
+  }
+  RootedValue value(cx, ObjectValue(array));
+  return ExternRefForCompiledCode(cx, value);
+}
+
+// Gets a value as a typed array of the given type, or null.
+static TypedArrayObject* AsScalarArray(const Value& value, int32_t kind) {
+  if (!value.isObject() || !value.toObject().is<TypedArrayObject>()) {
+    return nullptr;
+  }
+  TypedArrayObject& array = value.toObject().as<TypedArrayObject>();
+  return array.type() == *ScalarListArrayType(ComponentTypeKind(kind))
+             ? &array
+             : nullptr;
+}
+
+int32_t wasm::CmIsScalarArray(Instance* instance, void* valueRef,
+                              int32_t kind) {
+  MOZ_ASSERT(SASigCmIsScalarArray.failureMode == FailureMode::Infallible);
+  return !!AsScalarArray(AnyRef::fromCompiledCode(valueRef).toJSValue(), kind);
+}
+
+// Gets the length of a typed array, or throws if its buffer is detached, it is
+// out of bounds, or its elements wouldn't fit in a 32-bit memory.
+static bool GetScalarArrayLength(JSContext* cx, TypedArrayObject* array,
+                                 uint32_t* length) {
+  mozilla::Maybe<size_t> maybeLength = array->length();
+  if (!maybeLength) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_TYPED_ARRAY_DETACHED);
+    return false;
+  }
+  if (*maybeLength > INT32_MAX ||
+      uint64_t(*maybeLength) * array->bytesPerElement() > UINT32_MAX) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_WASM_COMPONENT_LIST_TOO_LONG);
+    return false;
+  }
+  *length = *maybeLength;
+  return true;
+}
+
+int32_t wasm::CmScalarArrayLength(Instance* instance, void* valueRef,
+                                  int32_t kind) {
+  MOZ_ASSERT(SASigCmScalarArrayLength.failureMode == FailureMode::FailOnNegI32);
+  uint32_t length;
+  if (!GetScalarArrayLength(
+          instance->cx(),
+          AsScalarArray(AnyRef::fromCompiledCode(valueRef).toJSValue(), kind),
+          &length)) {
+    return -1;
+  }
+  return int32_t(length);
+}
+
+int32_t wasm::CmCopyScalars(Instance* instance, void* valueRef, int32_t ptr,
+                            int32_t length) {
+  MOZ_ASSERT(SASigCmCopyScalars.failureMode == FailureMode::FailOnNegI32);
+  JSContext* cx = instance->cx();
+  TypedArrayObject& array = AnyRef::fromCompiledCode(valueRef)
+                                .toJSValue()
+                                .toObject()
+                                .as<TypedArrayObject>();
+
+  // realloc can run JS that changes the array after its length was read.
+  uint32_t currentLength;
+  if (!GetScalarArrayLength(cx, &array, &currentLength)) {
+    return -1;
+  }
+  if (currentLength != uint32_t(length)) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_WASM_COMPONENT_BAD_LENGTH);
+    return -1;
+  }
+  size_t elemSize = array.bytesPerElement();
+  uint64_t byteLength = uint64_t(uint32_t(length)) * elemSize;
+  if (!CheckAlignment(instance, uint32_t(ptr), elemSize)) {
+    return -1;
+  }
+  uint8_t* dst = GetMemoryRange(instance, uint32_t(ptr), byteLength);
+  if (!dst) {
+    return -1;
+  }
+  // The array could be a view of the memory itself.
+  memmove(dst, array.dataPointerEither().unwrap(), byteLength);
   return 0;
 }
 

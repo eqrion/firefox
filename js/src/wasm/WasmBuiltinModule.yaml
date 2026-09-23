@@ -675,12 +675,151 @@
 - op: CmCheckRange
   symbolic_address:
     name: CmCheckRange
-    type: Args_Int32_GeneralInt32Int32Int32
+    type: Args_Int32_GeneralInt32Int32Int32Int32
     needs_thunk: true
   entry: CmCheckRange
   export: cmCheckRange
   params:
     - 'i32'
+    - 'i32'
+    - 'i32'
+    - 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmIterableToArray
+  symbolic_address:
+    name: CmIterableToArray
+    type: Args_General_GeneralGeneralInt32
+    needs_thunk: true
+  entry: CmIterableToArray
+  export: cmIterableToArray
+  params:
+    - 'externref'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: CmArrayLength
+  symbolic_address:
+    name: CmArrayLength
+    type: Args_Int32_GeneralGeneral
+    needs_thunk: true
+  entry: CmArrayLength
+  export: cmArrayLength
+  params:
+    - 'externref'
+  result: 'i32'
+  fail_mode: Infallible
+  uses_memory: false
+
+- op: CmCheckArrayLength
+  symbolic_address:
+    name: CmCheckArrayLength
+    type: Args_Int32_GeneralGeneralInt32
+    needs_thunk: true
+  entry: CmCheckArrayLength
+  export: cmCheckArrayLength
+  params:
+    - 'externref'
+    - 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmArrayGet
+  symbolic_address:
+    name: CmArrayGet
+    type: Args_General_GeneralGeneralInt32
+    needs_thunk: true
+  entry: CmArrayGet
+  export: cmArrayGet
+  params:
+    - 'externref'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: CmNewArray
+  symbolic_address:
+    name: CmNewArray
+    type: Args_General_GeneralInt32
+    needs_thunk: true
+  entry: CmNewArray
+  export: cmNewArray
+  params:
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: CmArraySet
+  symbolic_address:
+    name: CmArraySet
+    type: Args_Int32_GeneralGeneralInt32General
+    needs_thunk: true
+  entry: CmArraySet
+  export: cmArraySet
+  params:
+    - 'externref'
+    - 'i32'
+    - 'externref'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmScalarListToJS
+  symbolic_address:
+    name: CmScalarListToJS
+    type: Args_General_GeneralInt32Int32Int32
+    needs_thunk: true
+  entry: CmScalarListToJS
+  export: cmScalarListToJS
+  params:
+    - 'i32'
+    - 'i32'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: CmIsScalarArray
+  symbolic_address:
+    name: CmIsScalarArray
+    type: Args_Int32_GeneralGeneralInt32
+    needs_thunk: true
+  entry: CmIsScalarArray
+  export: cmIsScalarArray
+  params:
+    - 'externref'
+    - 'i32'
+  result: 'i32'
+  fail_mode: Infallible
+  uses_memory: false
+
+- op: CmScalarArrayLength
+  symbolic_address:
+    name: CmScalarArrayLength
+    type: Args_Int32_GeneralGeneralInt32
+    needs_thunk: true
+  entry: CmScalarArrayLength
+  export: cmScalarArrayLength
+  params:
+    - 'externref'
+    - 'i32'
+  result: 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmCopyScalars
+  symbolic_address:
+    name: CmCopyScalars
+    type: Args_Int32_GeneralGeneralInt32Int32
+    needs_thunk: true
+  entry: CmCopyScalars
+  export: cmCopyScalars
+  params:
+    - 'externref'
     - 'i32'
     - 'i32'
   fail_mode: FailOnNegI32
