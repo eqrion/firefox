@@ -552,24 +552,87 @@ function instantiateComponent(source) {
   return instantiateFromComponent(component(source));
 }
 
-// TODO: Pass registered instances as imports once component instances support
-// imports.
+// TODO: Pass registered instances as imports.
 function instantiateFromComponent(component) {
   return new WebAssembly.ComponentInstance(component);
 }
 
-function invokeComponent(instance, field, params) {
-  let func = instance.exports[field];
-  assertEq(func instanceof Function, true, "expected a function");
-  return func(...params);
+// The JS-API's CamelCase and PascalCase of a label.
+function componentLabelToJS(label, pascal) {
+  return label.split("-").map((fragment, i) => {
+    if (fragment === fragment.toUpperCase()) {
+      return fragment;
+    }
+    if (i === 0 && !pascal) {
+      return fragment;
+    }
+    return fragment[0].toUpperCase() + fragment.slice(1);
+  }).join("");
 }
 
-// Constructors for component model values. There is no JS API for components
-// yet, so this is a provisional representation: primitives map to the
-// corresponding JS values (with BigInt for 64-bit integers), lists and tuples
-// map to arrays, records map to objects, flags map to an object with a `true`
-// property for each set flag, and variants, options, and results map to
-// `{ tag, val }` objects.
+// The JS-API's JSName of a function export.
+function componentJSName(name) {
+  return name.includes(":") ? name : componentLabelToJS(name, false);
+}
+
+// A `result` value, which is unwrapped in return position and is otherwise a
+// variant.
+class ComponentResult {
+  constructor(isOk, value) {
+    this.isOk = isOk;
+    this.value = value;
+  }
+}
+
+// A `flags` value, as the set of labels that are set.
+class ComponentFlags {
+  constructor(labels) {
+    this.labels = labels;
+  }
+}
+
+function componentVariant(kind, value) {
+  let variant = Object.create(null);
+  variant.kind = componentLabelToJS(kind, true);
+  if (value !== undefined) {
+    variant.value = value;
+  }
+  return variant;
+}
+
+// Converts the provisional values below, other than a result in return
+// position, to the JS values of the JS-API.
+function toComponentJSValue(value) {
+  if (value instanceof ComponentResult) {
+    return componentVariant(value.isOk ? "ok" : "error",
+                            toComponentJSValue(value.value));
+  }
+  if (value instanceof ComponentFlags) {
+    return Object.fromEntries(value.labels.map((label) => [componentLabelToJS(label, false), true]));
+  }
+  if (Array.isArray(value)) {
+    return value.map(toComponentJSValue);
+  }
+  if (typeof value === "object" && value !== null) {
+    let result = Object.create(Object.getPrototypeOf(value));
+    for (let key of Object.keys(value)) {
+      result[key] = toComponentJSValue(value[key]);
+    }
+    return result;
+  }
+  return value;
+}
+
+function invokeComponent(instance, field, params) {
+  let func = instance.exports[componentJSName(field)];
+  assertEq(func instanceof Function, true, "expected a function");
+  return func(...params.map(toComponentJSValue));
+}
+
+// Constructors for component model values. Since the types of values are not
+// known, these are an approximation of the JS-API's values: an option is null
+// or its payload even when nested, flags are compared by the flags that are
+// set, and a list<u8> is compared as a list.
 const cv = {
   bool: (x) => x,
   u8: (x) => x,
@@ -586,39 +649,69 @@ const cv = {
   string: (x) => x,
   list: (vals) => vals,
   tuple: (vals) => vals,
-  record: (fields) => Object.fromEntries(fields),
-  variant: (tag, val) => (val === undefined ? { tag } : { tag, val }),
-  enum: (tag) => tag,
-  none: () => ({ tag: "none" }),
-  some: (val) => ({ tag: "some", val }),
-  ok: (val) => (val === undefined ? { tag: "ok" } : { tag: "ok", val }),
-  err: (val) => (val === undefined ? { tag: "err" } : { tag: "err", val }),
-  flags: (names) => Object.fromEntries(names.map((name) => [name, true])),
+  record: (fields) => Object.fromEntries(fields.map(([name, val]) => [componentLabelToJS(name, false), val])),
+  variant: (kind, val) => componentVariant(kind, val),
+  enum: (label) => label,
+  none: () => null,
+  some: (val) => val,
+  ok: (val) => new ComponentResult(true, val),
+  err: (val) => new ComponentResult(false, val),
+  flags: (labels) => new ComponentFlags(labels),
 };
 
-function componentValuesEqual(a, b) {
-  if (typeof a !== "object" || a === null || typeof b !== "object" || b === null) {
-    return Object.is(a, b);
+function componentValuesEqual(actual, expected) {
+  if (expected instanceof ComponentFlags) {
+    if (typeof actual !== "object" || actual === null) {
+      return false;
+    }
+    let set = Object.keys(actual).filter((key) => actual[key] === true);
+    let wanted = expected.labels.map((label) => componentLabelToJS(label, false));
+    return set.length === wanted.length && wanted.every((key) => set.includes(key));
   }
-  if (Array.isArray(a) !== Array.isArray(b)) {
+  expected = expected instanceof ComponentResult ? toComponentJSValue(expected) : expected;
+  if (actual instanceof Uint8Array) {
+    actual = Array.from(actual);
+  }
+  if (typeof actual !== "object" || actual === null || typeof expected !== "object" || expected === null) {
+    return Object.is(actual, expected);
+  }
+  if (Array.isArray(actual) !== Array.isArray(expected)) {
     return false;
   }
-  let aKeys = Object.keys(a);
-  let bKeys = Object.keys(b);
-  return aKeys.length === bKeys.length &&
-    aKeys.every((key) => Object.hasOwn(b, key) && componentValuesEqual(a[key], b[key]));
+  let actualKeys = Object.keys(actual);
+  let expectedKeys = Object.keys(expected);
+  return actualKeys.length === expectedKeys.length &&
+    expectedKeys.every((key) => Object.hasOwn(actual, key) && componentValuesEqual(actual[key], expected[key]));
 }
 
-// Component functions have at most one result.
+function formatComponentValue(value) {
+  return JSON.stringify(value, (_, v) => typeof v === "bigint" ? `${v}n` : v);
+}
+
+// Component functions have at most one result. A `result` is unwrapped into
+// the return value, or a thrown ComponentError whose data is the error.
 function assert_return_component(thunk, expected) {
   assertEq(expected.length <= 1, true, "expected at most one result");
-  let result = thunk();
   let wanted = expected.length === 0 ? undefined : expected[0];
+  let result;
+  if (wanted instanceof ComponentResult && !wanted.isOk) {
+    let error = null;
+    try {
+      thunk();
+    } catch (e) {
+      error = e;
+    }
+    assertEq(error instanceof WebAssembly.ComponentError, true, "expected a ComponentError");
+    result = error.data;
+    wanted = wanted.value;
+  } else {
+    result = thunk();
+    if (wanted instanceof ComponentResult) {
+      wanted = wanted.value;
+    }
+  }
   if (!componentValuesEqual(result, wanted)) {
-    assertEq(
-      JSON.stringify(result, (_, v) => typeof v === "bigint" ? `${v}n` : v),
-      JSON.stringify(wanted, (_, v) => typeof v === "bigint" ? `${v}n` : v),
-    );
+    assertEq(formatComponentValue(result), formatComponentValue(wanted));
     assertEq(true, false, "component values are not equal");
   }
 }
