@@ -55,6 +55,52 @@ function instantiate() {
   assertEq(count(), 2 * 5, "empty strings are allocated too");
 }
 
+// A latin1+utf16 string is allocated as Latin-1, and only grown to UTF-16 if
+// it isn't Latin-1, in which case its length is tagged.
+{
+  const { take, count, lastLength } = new WebAssembly.ComponentInstance(
+    new WebAssembly.Component(wasmTextToBinary(`(component
+      (core module $m
+        (memory (export "mem") 1)
+        (global $bump (mut i32) (i32.const 16))
+        (global $count (mut i32) (i32.const 0))
+        (global $length (mut i32) (i32.const 0))
+        (func (export "realloc") (param $old i32) (param $oldSize i32)
+                                 (param $align i32) (param $newSize i32) (result i32)
+          (local $ptr i32)
+          (global.set $count (i32.add (global.get $count) (i32.const 1)))
+          (local.set $ptr
+            (i32.and (i32.add (global.get $bump) (i32.sub (local.get $align) (i32.const 1)))
+                     (i32.sub (i32.const 0) (local.get $align))))
+          (global.set $bump (i32.add (local.get $ptr) (local.get $newSize)))
+          (memory.copy (local.get $ptr) (local.get $old) (local.get $oldSize))
+          (local.get $ptr))
+        (func (export "take") (param i32 i32) (result i32)
+          (global.set $length (local.get 1))
+          (i32.store (i32.const 0) (local.get 0))
+          (i32.store (i32.const 4) (local.get 1))
+          (i32.const 0))
+        (func (export "count") (result i32) (global.get $count))
+        (func (export "last-length") (result i32) (global.get $length)))
+      (core instance $i (instantiate $m))
+      (func $take (param "s" string) (result string)
+        (canon lift (core func $i "take") (memory (core memory $i "mem"))
+                    (realloc (core func $i "realloc")) string-encoding=latin1+utf16))
+      (export "take" (func $take))
+      (func $count (result u32) (canon lift (core func $i "count")))
+      (export "count" (func $count))
+      (func $last-length (result u32) (canon lift (core func $i "last-length")))
+      (export "last-length" (func $last-length))
+    )`))).exports;
+  assertEq(take("héllo ÿ"), "héllo ÿ");
+  assertEq(count(), 1);
+  assertEq(lastLength(), 7);
+  assertEq(take("héllo Ā"), "héllo Ā");
+  assertEq(count(), 3);
+  assertEq(lastLength(), (7 | 0x80000000) >>> 0);
+  assertEq(take("a\ud800"), "a�");
+}
+
 // Lone surrogates become U+FFFD.
 {
   const { take } = instantiate();

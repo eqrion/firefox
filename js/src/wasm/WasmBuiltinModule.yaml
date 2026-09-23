@@ -756,6 +756,35 @@
   fail_mode: FailOnNegI32
   uses_memory: false
 
+- op: CmStoreLatin1
+  symbolic_address:
+    name: CmStoreLatin1
+    type: Args_Int32_GeneralGeneralInt32Int32
+    needs_thunk: true
+  entry: CmStoreLatin1
+  export: cmStoreLatin1
+  params:
+    - 'externref'
+    - 'i32'
+    - 'i32'
+  result: 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmStoreLatin1ToUTF16
+  symbolic_address:
+    name: CmStoreLatin1ToUTF16
+    type: Args_Int32_GeneralGeneralInt32Int32
+    needs_thunk: true
+  entry: CmStoreLatin1ToUTF16
+  export: cmStoreLatin1ToUTF16
+  params:
+    - 'externref'
+    - 'i32'
+    - 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
 - op: CmStringToJS
   symbolic_address:
     name: CmStringToJS
