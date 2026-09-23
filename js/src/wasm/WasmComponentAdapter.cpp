@@ -8,11 +8,16 @@
 
 #ifdef ENABLE_WASM_COMPONENTS
 
+#  include "mozilla/Casting.h"
+
 #  include <cmath>
 
+#  include "builtin/String.h"
 #  include "js/CallAndConstruct.h"
 #  include "js/Conversions.h"
 #  include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
+#  include "util/Unicode.h"
+#  include "vm/BigIntType.h"
 #  include "vm/ErrorObject.h"
 #  include "vm/JSFunction.h"
 #  include "wasm/WasmBinary.h"
@@ -302,28 +307,76 @@ static bool IsIntegerKind(ComponentTypeKind kind) {
 }
 
 static bool IsSupportedAdapterType(const ComponentType& type) {
-  return IsIntegerKind(type.kind());
+  switch (type.kind()) {
+    case ComponentTypeKind::Bool:
+    case ComponentTypeKind::S64:
+    case ComponentTypeKind::U64:
+    case ComponentTypeKind::F32:
+    case ComponentTypeKind::F64:
+    case ComponentTypeKind::Char:
+      return true;
+    default:
+      return IsIntegerKind(type.kind());
+  }
 }
 
-static bool IsSupportedAdapterFuncType(const ComponentFuncType& funcType) {
+[[nodiscard]] static bool CheckSupportedAdapterFuncType(
+    JSContext* cx, const ComponentFuncType& funcType) {
+  bool supported = funcType.resultType.isNothing() ||
+                   IsSupportedAdapterType(*funcType.resultType);
   for (const ComponentType& type : funcType.paramTypes) {
-    if (!IsSupportedAdapterType(type)) {
-      return false;
-    }
+    supported = supported && IsSupportedAdapterType(type);
   }
-  return funcType.resultType.isNothing() ||
-         IsSupportedAdapterType(*funcType.resultType);
+
+  ValTypeVector flatParams;
+  bool hasStringsOrLists, tooDeep;
+  if (!FlattenTypes(funcType.paramTypes, &flatParams, &hasStringsOrLists,
+                    &tooDeep, 0)) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
+  if (!supported || flatParams.length() > MaxFlatParams) {
+    JS_ReportErrorASCII(cx, "component function type is not supported yet");
+    return false;
+  }
+  return true;
 }
 
 // The core wasm types a component value is flattened to, stored in locals.
 using FlatLocals = Vector<uint32_t, 1, SystemAllocPolicy>;
 
+[[nodiscard]] static bool FlatTypes(const ComponentType& type,
+                                    ValTypeVector* flat) {
+  bool hasStringsOrLists, tooDeep;
+  return FlattenType(type, flat, &hasStringsOrLists, &tooDeep, 0);
+}
+
+// Gets the type of the single flat value that a result is returned as.
+[[nodiscard]] static bool FlatResultType(const ComponentType& type,
+                                         mozilla::Maybe<ValType>* result) {
+  ValTypeVector flat;
+  if (!FlatTypes(type, &flat)) {
+    return false;
+  }
+  MOZ_RELEASE_ASSERT(flat.length() == 1);
+  result->emplace(flat[0]);
+  return true;
+}
+
 [[nodiscard]] static bool AddFlatLocals(AdapterFuncEncoder& f,
                                         const ComponentType& type,
                                         FlatLocals* locals) {
-  MOZ_ASSERT(IsIntegerKind(type.kind()));
-  uint32_t index;
-  return f.addLocal(ValType::I32, &index) && locals->append(index);
+  ValTypeVector flat;
+  if (!FlatTypes(type, &flat)) {
+    return false;
+  }
+  for (ValType flatType : flat) {
+    uint32_t index;
+    if (!f.addLocal(flatType, &index) || !locals->append(index)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // Emits ToComponentValue for the JS value in local `jsValue`, storing the
@@ -332,11 +385,32 @@ using FlatLocals = Vector<uint32_t, 1, SystemAllocPolicy>;
                                                const ComponentType& type,
                                                uint32_t jsValue,
                                                const FlatLocals& dest) {
-  MOZ_ASSERT(IsIntegerKind(type.kind()));
-  return f.ctx() && f.localGet(jsValue) && f.i32Const(int32_t(type.kind())) &&
-         f.callBuiltin(BuiltinModuleFuncId::CmToInteger) && f.ctx() &&
-         f.callBuiltin(BuiltinModuleFuncId::CmScratchI32) &&
-         f.localSet(dest[0]);
+  using Id = BuiltinModuleFuncId;
+  ComponentTypeKind kind = type.kind();
+  switch (kind) {
+    case ComponentTypeKind::Bool:
+      return f.localGet(jsValue) && f.callBuiltin(Id::CmToBool) &&
+             f.localSet(dest[0]);
+    case ComponentTypeKind::S64:
+    case ComponentTypeKind::U64:
+      return f.ctx() && f.localGet(jsValue) && f.i32Const(int32_t(kind)) &&
+             f.callBuiltin(Id::CmToInteger) && f.ctx() &&
+             f.callBuiltin(Id::CmScratchI64) && f.localSet(dest[0]);
+    case ComponentTypeKind::F32:
+    case ComponentTypeKind::F64:
+      return f.ctx() && f.localGet(jsValue) && f.callBuiltin(Id::CmToFloat) &&
+             f.ctx() && f.callBuiltin(Id::CmScratchF64) &&
+             (kind == ComponentTypeKind::F64 || f.op(Op::F32DemoteF64)) &&
+             f.localSet(dest[0]);
+    case ComponentTypeKind::Char:
+      return f.localGet(jsValue) && f.callBuiltin(Id::CmToChar) &&
+             f.localSet(dest[0]);
+    default:
+      MOZ_ASSERT(IsIntegerKind(kind));
+      return f.ctx() && f.localGet(jsValue) && f.i32Const(int32_t(kind)) &&
+             f.callBuiltin(Id::CmToInteger) && f.ctx() &&
+             f.callBuiltin(Id::CmScratchI32) && f.localSet(dest[0]);
+  }
 }
 
 // Emits ToJSValue for the flattened component value in `src`, leaving the JS
@@ -344,9 +418,27 @@ using FlatLocals = Vector<uint32_t, 1, SystemAllocPolicy>;
 [[nodiscard]] static bool EmitToJSValue(AdapterFuncEncoder& f,
                                         const ComponentType& type,
                                         const FlatLocals& src) {
-  MOZ_ASSERT(IsIntegerKind(type.kind()));
-  return f.localGet(src[0]) && f.i32Const(int32_t(type.kind())) &&
-         f.callBuiltin(BuiltinModuleFuncId::CmIntegerToJS);
+  using Id = BuiltinModuleFuncId;
+  ComponentTypeKind kind = type.kind();
+  switch (kind) {
+    case ComponentTypeKind::Bool:
+      return f.localGet(src[0]) && f.callBuiltin(Id::CmBoolToJS);
+    case ComponentTypeKind::S64:
+    case ComponentTypeKind::U64:
+      return f.localGet(src[0]) && f.i32Const(int32_t(kind)) &&
+             f.callBuiltin(Id::CmInt64ToJS);
+    case ComponentTypeKind::F32:
+      return f.localGet(src[0]) && f.op(Op::F64PromoteF32) &&
+             f.callBuiltin(Id::CmFloatToJS);
+    case ComponentTypeKind::F64:
+      return f.localGet(src[0]) && f.callBuiltin(Id::CmFloatToJS);
+    case ComponentTypeKind::Char:
+      return f.localGet(src[0]) && f.callBuiltin(Id::CmCharToJS);
+    default:
+      MOZ_ASSERT(IsIntegerKind(kind));
+      return f.localGet(src[0]) && f.i32Const(int32_t(kind)) &&
+             f.callBuiltin(Id::CmIntegerToJS);
+  }
 }
 
 // Generates the adapter for a lifted function, which takes one externref for
@@ -404,12 +496,11 @@ using FlatLocals = Vector<uint32_t, 1, SystemAllocPolicy>;
 
   FlatLocals flatResult;
   mozilla::Maybe<ValType> flatResultType;
-  if (funcType.resultType) {
-    if (!AddFlatLocals(f, *funcType.resultType, &flatResult)) {
-      ReportOutOfMemory(cx);
-      return false;
-    }
-    flatResultType.emplace(ValType::I32);
+  if (funcType.resultType &&
+      (!AddFlatLocals(f, *funcType.resultType, &flatResult) ||
+       !FlatResultType(*funcType.resultType, &flatResultType))) {
+    ReportOutOfMemory(cx);
+    return false;
   }
 
   bool ok = f.block(Op::Block, mozilla::Nothing()) &&
@@ -493,8 +584,7 @@ bool wasm::CreateLiftedFunction(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     const ComponentFuncType& funcType, HandleFunction callee,
     Handle<JSAtom*> name, MutableHandleFunction result) {
-  if (!IsSupportedAdapterFuncType(funcType)) {
-    JS_ReportErrorASCII(cx, "component function type is not supported yet");
+  if (!CheckSupportedAdapterFuncType(cx, funcType)) {
     return false;
   }
 
@@ -538,8 +628,7 @@ bool wasm::CreateLoweredFunction(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     const ComponentFuncType& funcType, const TypeDef& coreFuncType,
     HandleObject host, MutableHandleFunction result) {
-  if (!IsSupportedAdapterFuncType(funcType)) {
-    JS_ReportErrorASCII(cx, "component function type is not supported yet");
+  if (!CheckSupportedAdapterFuncType(cx, funcType)) {
     return false;
   }
 
@@ -567,10 +656,20 @@ bool wasm::CreateLoweredFunction(
   uint32_t nextFlatParam = 0;
   Vector<uint32_t, 8, SystemAllocPolicy> jsParams;
   for (const ComponentType& type : funcType.paramTypes) {
+    ValTypeVector flatTypes;
     FlatLocals flat;
+    if (!FlatTypes(type, &flatTypes)) {
+      ReportOutOfMemory(cx);
+      return false;
+    }
+    for (size_t i = 0; i < flatTypes.length(); i++) {
+      if (!flat.append(nextFlatParam++)) {
+        ReportOutOfMemory(cx);
+        return false;
+      }
+    }
     uint32_t jsParam;
-    if (!flat.append(nextFlatParam++) ||
-        !f.addLocal(ValType(RefType::extern_()), &jsParam) ||
+    if (!f.addLocal(ValType(RefType::extern_()), &jsParam) ||
         !jsParams.append(jsParam) || !EmitToJSValue(f, type, flat) ||
         !f.localSet(jsParam)) {
       ReportOutOfMemory(cx);
@@ -581,13 +680,12 @@ bool wasm::CreateLoweredFunction(
   FlatLocals flatResult;
   mozilla::Maybe<ValType> flatResultType;
   uint32_t jsResult = 0;
-  if (funcType.resultType) {
-    if (!AddFlatLocals(f, *funcType.resultType, &flatResult) ||
-        !f.addLocal(ValType(RefType::extern_()), &jsResult)) {
-      ReportOutOfMemory(cx);
-      return false;
-    }
-    flatResultType.emplace(ValType::I32);
+  if (funcType.resultType &&
+      (!AddFlatLocals(f, *funcType.resultType, &flatResult) ||
+       !FlatResultType(*funcType.resultType, &flatResultType) ||
+       !f.addLocal(ValType(RefType::extern_()), &jsResult))) {
+    ReportOutOfMemory(cx);
+    return false;
   }
 
   bool ok = f.block(Op::Block, mozilla::Nothing()) &&
@@ -633,6 +731,10 @@ static const char* IntegerTypeName(ComponentTypeKind kind) {
       return "s32";
     case ComponentTypeKind::U32:
       return "u32";
+    case ComponentTypeKind::S64:
+      return "s64";
+    case ComponentTypeKind::U64:
+      return "u64";
     default:
       MOZ_CRASH("not an integer type");
   }
@@ -690,31 +792,102 @@ static double LiftFlatInteger(int32_t value, ComponentTypeKind kind) {
   }
 }
 
-// The JS-API's ToComponentValueInteger.
+// Returns a JS value as an externref for a builtin that fails with
+// FailOnInvalidRef.
+static void* ExternRefForCompiledCode(JSContext* cx, HandleValue value) {
+  Rooted<AnyRef> result(cx);
+  if (!AnyRef::fromJSValue(cx, value, &result)) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  return result.get().forCompiledCode();
+}
+
+static bool ReportBadInteger(JSContext* cx, ComponentTypeKind kind) {
+  JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                            JSMSG_WASM_COMPONENT_BAD_INTEGER,
+                            IntegerTypeName(kind));
+  return false;
+}
+
+// The JS-API's ToComponentValueInteger, for the bits of the integer.
+static bool ToComponentValueInteger(JSContext* cx, HandleValue value,
+                                    ComponentTypeKind kind, uint64_t* bits) {
+  bool is64 = kind == ComponentTypeKind::S64 || kind == ComponentTypeKind::U64;
+  if (is64 && value.isBigInt()) {
+    if (kind == ComponentTypeKind::S64) {
+      int64_t n;
+      if (!BigInt::isInt64(value.toBigInt(), &n)) {
+        return ReportBadInteger(cx, kind);
+      }
+      *bits = uint64_t(n);
+    } else {
+      if (!BigInt::isUint64(value.toBigInt(), bits)) {
+        return ReportBadInteger(cx, kind);
+      }
+    }
+    return true;
+  }
+
+  double number;
+  if (!ToNumber(cx, value, &number)) {
+    return false;
+  }
+  double truncated = std::trunc(number);
+  if (!std::isfinite(number)) {
+    return ReportBadInteger(cx, kind);
+  }
+
+  switch (kind) {
+    case ComponentTypeKind::S64:
+      // The range is [-2^63, 2^63), and both bounds are exact doubles.
+      if (truncated < -9223372036854775808.0 ||
+          truncated >= 9223372036854775808.0) {
+        return ReportBadInteger(cx, kind);
+      }
+      *bits = uint64_t(int64_t(truncated));
+      return true;
+    case ComponentTypeKind::U64:
+      if (truncated < 0 || truncated >= 18446744073709551616.0) {
+        return ReportBadInteger(cx, kind);
+      }
+      *bits = uint64_t(truncated);
+      return true;
+    default: {
+      double min, max;
+      IntegerRange(kind, &min, &max);
+      if (truncated < min || truncated > max) {
+        return ReportBadInteger(cx, kind);
+      }
+      *bits = uint64_t(int64_t(truncated));
+      return true;
+    }
+  }
+}
+
 int32_t wasm::CmToInteger(Instance* instance, void* ctxRef, void* valueRef,
                           int32_t kind) {
   MOZ_ASSERT(SASigCmToInteger.failureMode == FailureMode::FailOnNegI32);
   JSContext* cx = instance->cx();
   RootedObject ctx(cx, &AnyRef::fromCompiledCode(ctxRef).toJSObject());
   RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
-  ComponentTypeKind typeKind = ComponentTypeKind(kind);
+  uint64_t bits;
+  if (!ToComponentValueInteger(cx, value, ComponentTypeKind(kind), &bits)) {
+    return -1;
+  }
+  InstanceFromCtx(ctx).setScratch(bits);
+  return 0;
+}
 
+int32_t wasm::CmToFloat(Instance* instance, void* ctxRef, void* valueRef) {
+  MOZ_ASSERT(SASigCmToFloat.failureMode == FailureMode::FailOnNegI32);
+  JSContext* cx = instance->cx();
+  RootedObject ctx(cx, &AnyRef::fromCompiledCode(ctxRef).toJSObject());
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
   double number;
   if (!ToNumber(cx, value, &number)) {
     return -1;
   }
-
-  double min, max;
-  IntegerRange(typeKind, &min, &max);
-  double truncated = std::trunc(number);
-  if (!std::isfinite(number) || truncated < min || truncated > max) {
-    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
-                              JSMSG_WASM_COMPONENT_BAD_INTEGER,
-                              IntegerTypeName(typeKind));
-    return -1;
-  }
-
-  InstanceFromCtx(ctx).setScratch(uint64_t(int64_t(truncated)));
+  InstanceFromCtx(ctx).setScratch(mozilla::BitwiseCast<uint64_t>(number));
   return 0;
 }
 
@@ -725,16 +898,104 @@ int32_t wasm::CmScratchI32(Instance* instance, void* ctxRef) {
   return int32_t(uint32_t(InstanceFromCtx(ctx).scratch()));
 }
 
+int64_t wasm::CmScratchI64(Instance* instance, void* ctxRef) {
+  MOZ_ASSERT(SASigCmScratchI64.failureMode == FailureMode::Infallible);
+  JSContext* cx = instance->cx();
+  RootedObject ctx(cx, &AnyRef::fromCompiledCode(ctxRef).toJSObject());
+  return int64_t(InstanceFromCtx(ctx).scratch());
+}
+
+double wasm::CmScratchF64(Instance* instance, void* ctxRef) {
+  MOZ_ASSERT(SASigCmScratchF64.failureMode == FailureMode::Infallible);
+  JSContext* cx = instance->cx();
+  RootedObject ctx(cx, &AnyRef::fromCompiledCode(ctxRef).toJSObject());
+  return mozilla::BitwiseCast<double>(InstanceFromCtx(ctx).scratch());
+}
+
+int32_t wasm::CmToBool(Instance* instance, void* valueRef) {
+  MOZ_ASSERT(SASigCmToBool.failureMode == FailureMode::Infallible);
+  JSContext* cx = instance->cx();
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  return ToBoolean(value);
+}
+
+int32_t wasm::CmToChar(Instance* instance, void* valueRef) {
+  MOZ_ASSERT(SASigCmToChar.failureMode == FailureMode::FailOnNegI32);
+  JSContext* cx = instance->cx();
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  JSString* string = ToString(cx, value);
+  JSLinearString* str = string ? string->ensureLinear(cx) : nullptr;
+  if (!str) {
+    return -1;
+  }
+
+  // The string must be exactly one scalar value.
+  char32_t codePoint;
+  size_t length = str->length();
+  if (length == 1 && !unicode::IsSurrogate(str->latin1OrTwoByteChar(0))) {
+    codePoint = str->latin1OrTwoByteChar(0);
+  } else if (length == 2 &&
+             unicode::IsLeadSurrogate(str->latin1OrTwoByteChar(0)) &&
+             unicode::IsTrailSurrogate(str->latin1OrTwoByteChar(1))) {
+    codePoint = unicode::UTF16Decode(str->latin1OrTwoByteChar(0),
+                                     str->latin1OrTwoByteChar(1));
+  } else {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_WASM_COMPONENT_BAD_CHAR);
+    return -1;
+  }
+  return int32_t(codePoint);
+}
+
+void* wasm::CmBoolToJS(Instance* instance, int32_t value) {
+  MOZ_ASSERT(SASigCmBoolToJS.failureMode == FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedValue jsValue(cx, BooleanValue(value != 0));
+  return ExternRefForCompiledCode(cx, jsValue);
+}
+
 void* wasm::CmIntegerToJS(Instance* instance, int32_t value, int32_t kind) {
   MOZ_ASSERT(SASigCmIntegerToJS.failureMode == FailureMode::FailOnInvalidRef);
   JSContext* cx = instance->cx();
   RootedValue jsValue(
       cx, NumberValue(LiftFlatInteger(value, ComponentTypeKind(kind))));
-  Rooted<AnyRef> result(cx);
-  if (!AnyRef::fromJSValue(cx, jsValue, &result)) {
+  return ExternRefForCompiledCode(cx, jsValue);
+}
+
+void* wasm::CmInt64ToJS(Instance* instance, int64_t value, int32_t kind) {
+  MOZ_ASSERT(SASigCmInt64ToJS.failureMode == FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  BigInt* bigInt = ComponentTypeKind(kind) == ComponentTypeKind::S64
+                       ? BigInt::createFromInt64(cx, value)
+                       : BigInt::createFromUint64(cx, uint64_t(value));
+  if (!bigInt) {
     return AnyRef::invalid().forCompiledCode();
   }
-  return result.get().forCompiledCode();
+  RootedValue jsValue(cx, BigIntValue(bigInt));
+  return ExternRefForCompiledCode(cx, jsValue);
+}
+
+void* wasm::CmFloatToJS(Instance* instance, double value) {
+  MOZ_ASSERT(SASigCmFloatToJS.failureMode == FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedValue jsValue(cx, NumberValue(value));
+  return ExternRefForCompiledCode(cx, jsValue);
+}
+
+void* wasm::CmCharToJS(Instance* instance, int32_t value) {
+  MOZ_ASSERT(SASigCmCharToJS.failureMode == FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  uint32_t codePoint = uint32_t(value);
+  if (codePoint > unicode::NonBMPMax || unicode::IsSurrogate(codePoint)) {
+    ReportTrapError(cx, JSMSG_WASM_BAD_CODEPOINT);
+    return AnyRef::invalid().forCompiledCode();
+  }
+  JSLinearString* str = StringFromCodePoint(cx, char32_t(codePoint));
+  if (!str) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue jsValue(cx, StringValue(str));
+  return ExternRefForCompiledCode(cx, jsValue);
 }
 
 int32_t wasm::CmTrap(Instance* instance, int32_t reason) {

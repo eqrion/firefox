@@ -112,8 +112,11 @@ for (const [type, expected] of [
 
 // Unsupported types fail at instantiation.
 assertErrorMessage(() => instantiate(`(component
-  (core module $m (func (export "f") (param i32)))
+  (core module $m
+    (memory (export "mem") 1)
+    (func (export "f") (result i32) i32.const 0))
   (core instance $i (instantiate $m))
-  (func $f (param "x" bool) (canon lift (core func $i "f")))
+  (func $f (result string)
+    (canon lift (core func $i "f") (memory (core memory $i "mem"))))
   (export "f" (func $f))
 )`), Error, /not supported yet/);
