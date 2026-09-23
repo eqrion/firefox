@@ -361,6 +361,95 @@ class ComponentResourceType {
   mozilla::Maybe<uint32_t> dtorIndex() const { return dtorIndex_; }
 };
 
+enum class ComponentNameAttribute : uint8_t {
+  Constructor,
+  Method,
+  Static,
+  Get,
+  Set,
+};
+using ComponentNameAttributes = mozilla::EnumSet<ComponentNameAttribute>;
+
+// Takes a valid component-model name and creates a "canonical" version of it
+// that can be used to check strong uniqueness.
+[[nodiscard]] bool CanonicalizeName(mozilla::Span<const char> name,
+                                    CacheableName* result);
+
+// Augments a component-model name with any attributes present on the name. Note
+// that this is generally not necessary for e.g. field names; you can just use
+// CacheableName for that purpose.
+struct ComponentName {
+  CacheableName name;
+  ComponentNameAttributes attributes;
+
+  explicit ComponentName() = default;
+  explicit ComponentName(CacheableName&& name,
+                         ComponentNameAttributes attributes)
+      : name(std::move(name)), attributes(attributes) {}
+};
+
+// Describes an import or export from a wasm component.
+class ComponentExternDesc {
+  ComponentSort sort_;
+  ComponentType type_;
+
+  // TODO(wasm-cm): This is a total hack, but since we currently don't have a
+  // notion of core module types, we actually just store the index of the
+  // relevant core module within the component. This obviously will not work as
+  // soon as we do anything with multiple components.
+  uint32_t coreModuleIndex_;
+
+  explicit ComponentExternDesc(ComponentSort sort, ComponentType&& type)
+      : sort_(sort), type_(std::move(type)) {
+    MOZ_ASSERT(ComponentSortValidForExternDesc(sort));
+  }
+  explicit ComponentExternDesc(uint32_t coreModuleIndex)
+      : sort_(ComponentSort::CoreModule), coreModuleIndex_(coreModuleIndex) {}
+
+ public:
+  ComponentExternDesc() = default;
+
+  static ComponentExternDesc func(ComponentType&& funcType) {
+    MOZ_ASSERT(funcType.kind() == ComponentTypeKind::Func);
+    return ComponentExternDesc(ComponentSort::Func, std::move(funcType));
+  }
+  static ComponentExternDesc type(ComponentType&& type) {
+    return ComponentExternDesc(ComponentSort::Type, std::move(type));
+  }
+  static ComponentExternDesc coreModule(uint32_t coreModuleIndex) {
+    return ComponentExternDesc(coreModuleIndex);
+  }
+
+  bool isValid() const { return sort_ != ComponentSort::Invalid; }
+  ComponentSort sort() const { return sort_; }
+  ComponentType asFunc() const {
+    MOZ_RELEASE_ASSERT(sort() == ComponentSort::Func);
+    return type_;
+  }
+  ComponentType asType() const {
+    MOZ_RELEASE_ASSERT(sort() == ComponentSort::Type);
+    return type_;
+  }
+  uint32_t asCoreModule() const {
+    MOZ_RELEASE_ASSERT(sort() == ComponentSort::CoreModule);
+    // TODO(wasm-cm): This should obviously return a proper core module type,
+    // when we actually support that.
+    return coreModuleIndex_;
+  }
+
+  // Checks whether an item can be ascribed the given new externdesc, e.g. a
+  // defined resource type being ascribed the (sub resource) type bound.
+  // `isNewSubResource` should be true if attempting to ascribe `(sub resource)`
+  // _and_ the `(sub resource)` was part of the current definition (as opposed
+  // to an eq of a previously-defined `(sub resource)`); i.e. are we
+  // "generating" the resource type now or did we already generate it?
+  static bool compatible(const ComponentExternDesc& defined,
+                         const ComponentExternDesc& ascribed,
+                         bool isNewSubResource);
+};
+
+static_assert(std::is_default_constructible_v<ComponentExternDesc>);
+
 using ComponentTypeSchema = mozilla::Variant<
     mozilla::Nothing, ComponentType, ComponentRecordFieldVector,
     ComponentVariantCaseVector, ComponentTypeVector, CacheableNameVector,
@@ -425,33 +514,6 @@ uint32_t CanonDiscriminantSize(size_t numCases);
 // The offset of the payload in a variant-like type (variant, enum, option, or
 // result) in memory.
 uint32_t CanonVariantPayloadOffset(const ComponentType& type);
-
-enum class ComponentNameAttribute : uint8_t {
-  Constructor,
-  Method,
-  Static,
-  Get,
-  Set,
-};
-using ComponentNameAttributes = mozilla::EnumSet<ComponentNameAttribute>;
-
-// Takes a valid component-model name and creates a "canonical" version of it
-// that can be used to check strong uniqueness.
-[[nodiscard]] bool CanonicalizeName(mozilla::Span<const char> name,
-                                    CacheableName* result);
-
-// Augments a component-model name with any attributes present on the name. Note
-// that this is generally not necessary for e.g. field names; you can just use
-// CacheableName for that purpose.
-struct ComponentName {
-  CacheableName name;
-  ComponentNameAttributes attributes;
-
-  explicit ComponentName() = default;
-  explicit ComponentName(CacheableName&& name,
-                         ComponentNameAttributes attributes)
-      : name(std::move(name)), attributes(attributes) {}
-};
 
 // Converts a label to a JS identifier with the JS-API's PascalCase (for types)
 // or CamelCase (for everything else), or leaves it as is (for enum labels).
@@ -786,68 +848,6 @@ class CoreInstanceDesc {
   const CoreInstanceVariant& desc() const { return desc_; }
   const CoreInstanceType& type() const { return *type_; }
 };
-
-// Describes an import or export from a wasm component.
-class ComponentExternDesc {
-  ComponentSort sort_;
-  ComponentType type_;
-
-  // TODO(wasm-cm): This is a total hack, but since we currently don't have a
-  // notion of core module types, we actually just store the index of the
-  // relevant core module within the component. This obviously will not work as
-  // soon as we do anything with multiple components.
-  uint32_t coreModuleIndex_;
-
-  explicit ComponentExternDesc(ComponentSort sort, ComponentType&& type)
-      : sort_(sort), type_(std::move(type)) {
-    MOZ_ASSERT(ComponentSortValidForExternDesc(sort));
-  }
-  explicit ComponentExternDesc(uint32_t coreModuleIndex)
-      : sort_(ComponentSort::CoreModule), coreModuleIndex_(coreModuleIndex) {}
-
- public:
-  ComponentExternDesc() = default;
-
-  static ComponentExternDesc func(ComponentType&& funcType) {
-    MOZ_ASSERT(funcType.kind() == ComponentTypeKind::Func);
-    return ComponentExternDesc(ComponentSort::Func, std::move(funcType));
-  }
-  static ComponentExternDesc type(ComponentType&& type) {
-    return ComponentExternDesc(ComponentSort::Type, std::move(type));
-  }
-  static ComponentExternDesc coreModule(uint32_t coreModuleIndex) {
-    return ComponentExternDesc(coreModuleIndex);
-  }
-
-  bool isValid() const { return sort_ != ComponentSort::Invalid; }
-  ComponentSort sort() const { return sort_; }
-  ComponentType asFunc() const {
-    MOZ_RELEASE_ASSERT(sort() == ComponentSort::Func);
-    return type_;
-  }
-  ComponentType asType() const {
-    MOZ_RELEASE_ASSERT(sort() == ComponentSort::Type);
-    return type_;
-  }
-  uint32_t asCoreModule() const {
-    MOZ_RELEASE_ASSERT(sort() == ComponentSort::CoreModule);
-    // TODO(wasm-cm): This should obviously return a proper core module type,
-    // when we actually support that.
-    return coreModuleIndex_;
-  }
-
-  // Checks whether an item can be ascribed the given new externdesc, e.g. a
-  // defined resource type being ascribed the (sub resource) type bound.
-  // `isNewSubResource` should be true if attempting to ascribe `(sub resource)`
-  // _and_ the `(sub resource)` was part of the current definition (as opposed
-  // to an eq of a previously-defined `(sub resource)`); i.e. are we
-  // "generating" the resource type now or did we already generate it?
-  static bool compatible(const ComponentExternDesc& defined,
-                         const ComponentExternDesc& ascribed,
-                         bool isNewSubResource);
-};
-
-static_assert(std::is_default_constructible_v<ComponentExternDesc>);
 
 class ComponentImport {
   ComponentName name_;
