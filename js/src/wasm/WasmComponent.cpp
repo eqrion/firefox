@@ -13,6 +13,7 @@
 
 #ifdef ENABLE_WASM_COMPONENTS
 
+#  include "builtin/FinalizationRegistryObject.h"
 #  include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #  include "js/Printf.h"                // JS_smprintf
 #  include "js/PropertyAndElement.h"
@@ -1795,6 +1796,7 @@ void ComponentInstance::tracePrivate(JSTracer* trc) {
   guestResourceClasses_.trace(trc);
   guestResourcePrototypes_.trace(trc);
   guestResourceConstructors_.trace(trc);
+  guestResourceRegistries_.trace(trc);
   for (ComponentCallScope& scope : callScopes_) {
     scope.trace(trc);
   }
@@ -1983,7 +1985,8 @@ bool ComponentInstance::readImports(JSContext* cx, HandleObject importObj) {
       !hostResourceDisposers_.resize(numResourceTypes) ||
       !guestResourceClasses_.resize(numResourceTypes) ||
       !guestResourcePrototypes_.resize(numResourceTypes) ||
-      !guestResourceConstructors_.resize(numResourceTypes)) {
+      !guestResourceConstructors_.resize(numResourceTypes) ||
+      !guestResourceRegistries_.resize(numResourceTypes)) {
     ReportOutOfMemory(cx);
     return false;
   }
@@ -2660,12 +2663,54 @@ static bool GuestResourceDispose(JSContext* cx, unsigned argc, Value* vp) {
                               JSMSG_WASM_COMPONENT_RESOURCE_LENT);
     return false;
   }
-  int32_t rep = resource.rep();
-  resource.clearRep();
+  Rooted<WasmComponentResourceObject*> resourceObj(cx, &resource);
   Rooted<WasmComponentInstanceObject*> instanceObj(
       cx, &GuestResourceClassInstance(*resourceClass));
+  ComponentInstance& instance = instanceObj->instance();
+  uint32_t resourceType = GuestResourceClassType(*resourceClass);
+  int32_t rep = resource.rep();
+  resource.clearRep();
+  instance.unregisterGuestResource(cx, resourceType, resourceObj);
+  return instance.dropGuestResource(cx, instanceObj, resourceType, rep);
+}
+
+// The cleanup callback of a guest resource class's FinalizationRegistry, which
+// drops the resource of an unreachable guest resource instance, given its rep.
+static bool GuestResourceCleanup(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  JSFunction& resourceClass = args.callee()
+                                  .as<JSFunction>()
+                                  .getExtendedSlot(0)
+                                  .toObject()
+                                  .as<JSFunction>();
+  Rooted<WasmComponentInstanceObject*> instanceObj(
+      cx, &GuestResourceClassInstance(resourceClass));
+  args.rval().setUndefined();
   return instanceObj->instance().dropGuestResource(
-      cx, instanceObj, GuestResourceClassType(*resourceClass), rep);
+      cx, instanceObj, GuestResourceClassType(resourceClass),
+      args.get(0).toInt32());
+}
+
+bool ComponentInstance::registerGuestResource(
+    JSContext* cx, uint32_t resourceType,
+    Handle<WasmComponentResourceObject*> resource) {
+  Rooted<FinalizationRegistryObject*> registry(
+      cx, &guestResourceRegistries_[resourceType]
+               ->as<FinalizationRegistryObject>());
+  RootedValue target(cx, ObjectValue(*resource));
+  RootedValue heldValue(cx, Int32Value(resource->rep()));
+  return FinalizationRegistryObject::registerTarget(cx, registry, target,
+                                                    heldValue, target);
+}
+
+void ComponentInstance::unregisterGuestResource(
+    JSContext* cx, uint32_t resourceType,
+    Handle<WasmComponentResourceObject*> resource) {
+  Rooted<FinalizationRegistryObject*> registry(
+      cx, &guestResourceRegistries_[resourceType]
+               ->as<FinalizationRegistryObject>());
+  RootedValue target(cx, ObjectValue(*resource));
+  FinalizationRegistryObject::unregisterTarget(registry, target);
 }
 
 bool ComponentInstance::dropGuestResource(
@@ -2813,6 +2858,32 @@ bool ComponentInstance::createGuestResourceClasses(
       }
       guestResourceClasses_[resourceType] = resourceClass;
       guestResourcePrototypes_[resourceType] = proto;
+
+      // Unreachable instances that own their resource are dropped by a
+      // FinalizationRegistry.
+      RootedFunction cleanup(
+          cx, NewNativeFunction(cx, GuestResourceCleanup, 1, nullptr,
+                                gc::AllocKind::FUNCTION_EXTENDED));
+      if (!cleanup) {
+        return false;
+      }
+      cleanup->initExtendedSlot(0, ObjectValue(*resourceClass));
+      RootedValue registryCtor(
+          cx, ObjectOrNullValue(GlobalObject::getOrCreateConstructor(
+                  cx, JSProto_FinalizationRegistry)));
+      if (registryCtor.isNull()) {
+        return false;
+      }
+      ConstructArgs registryArgs(cx);
+      if (!registryArgs.init(cx, 1)) {
+        return false;
+      }
+      registryArgs[0].setObject(*cleanup);
+      RootedObject registry(cx);
+      if (!Construct(cx, registryCtor, registryArgs, registryCtor, &registry)) {
+        return false;
+      }
+      guestResourceRegistries_[resourceType] = registry;
       continue;
     }
 

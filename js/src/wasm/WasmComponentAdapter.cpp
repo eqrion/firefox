@@ -3875,6 +3875,7 @@ int32_t wasm::CmLowerResource(Instance* instance, void* ctxRef, void* valueRef,
   }
   handle.rep = resource->rep();
   resource->clearRep();
+  componentInstance.unregisterGuestResource(cx, resourceType, resource);
   return AddResourceHandle(cx, componentInstance, std::move(handle)) ? 0 : -1;
 }
 
@@ -3934,9 +3935,11 @@ void* wasm::CmLiftResource(Instance* instance, void* ctxRef, int32_t handle,
     }
     RootedObject proto(cx,
                        componentInstance.guestResourcePrototype(resourceType));
-    JSObject* resource = WasmComponentResourceObject::create(
-        cx, resourceClass, proto, removed.rep);
-    if (!resource) {
+    Rooted<WasmComponentResourceObject*> resource(
+        cx, WasmComponentResourceObject::create(cx, resourceClass, proto,
+                                                removed.rep));
+    if (!resource ||
+        !componentInstance.registerGuestResource(cx, resourceType, resource)) {
       return AnyRef::invalid().forCompiledCode();
     }
     value.setObject(*resource);

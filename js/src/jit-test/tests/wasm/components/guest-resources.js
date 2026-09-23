@@ -108,3 +108,19 @@ function instantiate({ dtorTraps = false, dropped = () => {} } = {}) {
   const { hidden } = instantiate();
   assertErrorMessage(() => hidden(), Error, /not exported/);
 }
+
+// Unreachable instances that own their resource are dropped, and ones whose
+// resource was passed to the component or disposed are not dropped again.
+{
+  const dropped = [];
+  const { R, take } = instantiate({ dropped: rep => dropped.push(rep) });
+  (() => {
+    new R(1);
+    take(new R(2));
+    new R(3)[Symbol.dispose]();
+  })();
+  assertEq(dropped.join(), "3");
+  gc();
+  drainJobQueue();
+  assertEq(dropped.sort().join(), "1,3");
+}

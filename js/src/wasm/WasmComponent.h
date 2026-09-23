@@ -1325,6 +1325,9 @@ class ComponentInstance {
   ObjectVector guestResourceClasses_;
   ObjectVector guestResourcePrototypes_;
   ObjectVector guestResourceConstructors_;
+  // The FinalizationRegistry that drops the guest resource instances of each
+  // class that become unreachable while they own their resource.
+  ObjectVector guestResourceRegistries_;
 
   // The data of the ComponentError that a lifted function returning a
   // `result` error is about to throw.
@@ -1438,6 +1441,14 @@ class ComponentInstance {
   JSObject* guestResourceConstructor(uint32_t resourceType) const {
     return guestResourceConstructors_[resourceType];
   }
+
+  // Registers a guest resource instance to be dropped once it's unreachable,
+  // or unregisters it once it no longer owns its resource.
+  [[nodiscard]] bool registerGuestResource(
+      JSContext* cx, uint32_t resourceType,
+      Handle<WasmComponentResourceObject*> resource);
+  void unregisterGuestResource(JSContext* cx, uint32_t resourceType,
+                               Handle<WasmComponentResourceObject*> resource);
 
   // The JS-API's "drop a guest resource", which calls the resource type's
   // destructor, if any.
