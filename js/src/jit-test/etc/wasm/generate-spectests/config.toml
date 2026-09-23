@@ -243,6 +243,89 @@ excluded_tests = [
 ]
 directive = "; skip-if: !wasmStackSwitchingEnabled(); test-also=--wasm-compiler=ion -P wasm_stack_switching;"
 
+[[repos]]
+name = "component-model"
+url = "https://github.com/WebAssembly/component-model"
+branch = "main"
+test_dir = "test"
+excluded_tests = [
+  # Uses text syntax that our version of wast cannot parse
+  "^async-calls-sync.wast.js",
+  "^big-interleaving-test.wast.js",
+  "^builtin-trap-poisons-instance.wast.js",
+  "^cancel-and-exclusive-lock.wast.js",
+  "^cancel-delivery.wast.js",
+  "^cancel-instance-wide-resume.wast.js",
+  "^cancel-not-delivered.wast.js",
+  "^cancel-stream.wast.js",
+  "^cancel-subtask.wast.js",
+  "^cancel-yield-loop.wast.js",
+  "^closed-stream.wast.js",
+  "^cross-abi-calls.wast.js",
+  "^cross-task-future.wast.js",
+  "^deadlock.wast.js",
+  "^dont-block-start.wast.js",
+  "^drop-cross-task-borrow.wast.js",
+  "^drop-stream.wast.js",
+  "^drop-subtask.wast.js",
+  "^drop-waitable-set.wast.js",
+  "^during-sync-call-exclusive-resume.wast.js",
+  "^during-sync-call-may-block-if-other-ready-threads.wast.js",
+  "^during-sync-call-no-sibling-resume.wast.js",
+  "^during-sync-scheduling-candidates.wast.js",
+  "^empty-wait.wast.js",
+  "^forward.wast.js",
+  "^future-completion-order.wast.js",
+  "^futures-must-write.wast.js",
+  "^idle-drop.wast.js",
+  "^partial-stream-copies.wast.js",
+  "^passing-resources.wast.js",
+  "^reentrance.wast.js",
+  "^same-component-stream-future.wast.js",
+  "^self-switch-traps.wast.js",
+  "^switch-to-ready-callback.wast.js",
+  "^sync-barges-in.wast.js",
+  "^sync-streams.wast.js",
+  "^trap-if-block-and-sync.wast.js",
+  "^trap-if-done.wast.js",
+  "^trap-if-sync-and-waitable-set.wast.js",
+  "^validate-no-async-abi-for-sync-type.wast.js",
+  "^wait-during-callback.wast.js",
+  "^zero-length.wast.js",
+  "^unit.wast.js",
+  "^borrows.wast.js",
+  "^multiple-resources.wast.js",
+  "^abi.wast.js",
+  "^attributes.wast.js",
+  "^external-visibility.wast.js",
+  "^indicies.wast.js",
+  "^resources.wast.js",
+  "^alignment.wast.js",
+  "^concat.wast.js",
+  "^post-return.wast.js",
+  "^realloc.wast.js",
+  "^strings.wast.js",
+  "^transcode.wast.js",
+  "^variants.wast.js",
+
+  # Failing
+  "^trap-if-transfer-in-waitable-set.wast.js",
+  "^binary.wast.js",
+  "^link-time-virtualization.wast.js",
+  "^shared-everything-dynamic-linking.wast.js",
+  "^tags.wast.js",
+  "^handle-table.wast.js",
+  "^annotated-names.wast.js",
+  "^core-modules.wast.js",
+  "^extern-names.wast.js",
+  "^instantiation.wast.js",
+  "^kebab.wast.js",
+  "^max-value-size.wast.js",
+  "^outer-alias.wast.js",
+  "^numerics.wast.js",
+]
+directive = "; skip-if: !wasmComponentsEnabled(); test-also=-P wasm_components; test-also=--wasm-compiler=baseline -P wasm_components; test-also=--wasm-compiler=optimizing -P wasm_components"
+
 # Example proposal config:
 #
 # [[repos]]

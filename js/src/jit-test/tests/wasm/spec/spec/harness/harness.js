@@ -540,3 +540,85 @@ class Thread {
     }
   }
 }
+
+// Component model support
+
+function component(source) {
+  let bytecode = wasmTextToBinary(source);
+  return new WebAssembly.Component(bytecode);
+}
+
+function instantiateComponent(source) {
+  return instantiateFromComponent(component(source));
+}
+
+// TODO: Pass registered instances as imports once component instances support
+// imports.
+function instantiateFromComponent(component) {
+  return new WebAssembly.ComponentInstance(component);
+}
+
+function invokeComponent(instance, field, params) {
+  let func = instance.exports[field];
+  assertEq(func instanceof Function, true, "expected a function");
+  return func(...params);
+}
+
+// Constructors for component model values. There is no JS API for components
+// yet, so this is a provisional representation: primitives map to the
+// corresponding JS values (with BigInt for 64-bit integers), lists and tuples
+// map to arrays, records map to objects, flags map to an object with a `true`
+// property for each set flag, and variants, options, and results map to
+// `{ tag, val }` objects.
+const cv = {
+  bool: (x) => x,
+  u8: (x) => x,
+  s8: (x) => x,
+  u16: (x) => x,
+  s16: (x) => x,
+  u32: (x) => x,
+  s32: (x) => x,
+  u64: (x) => x,
+  s64: (x) => x,
+  f32: (x) => Math.fround(x),
+  f64: (x) => x,
+  char: (x) => x,
+  string: (x) => x,
+  list: (vals) => vals,
+  tuple: (vals) => vals,
+  record: (fields) => Object.fromEntries(fields),
+  variant: (tag, val) => (val === undefined ? { tag } : { tag, val }),
+  enum: (tag) => tag,
+  none: () => ({ tag: "none" }),
+  some: (val) => ({ tag: "some", val }),
+  ok: (val) => (val === undefined ? { tag: "ok" } : { tag: "ok", val }),
+  err: (val) => (val === undefined ? { tag: "err" } : { tag: "err", val }),
+  flags: (names) => Object.fromEntries(names.map((name) => [name, true])),
+};
+
+function componentValuesEqual(a, b) {
+  if (typeof a !== "object" || a === null || typeof b !== "object" || b === null) {
+    return Object.is(a, b);
+  }
+  if (Array.isArray(a) !== Array.isArray(b)) {
+    return false;
+  }
+  let aKeys = Object.keys(a);
+  let bKeys = Object.keys(b);
+  return aKeys.length === bKeys.length &&
+    aKeys.every((key) => Object.hasOwn(b, key) && componentValuesEqual(a[key], b[key]));
+}
+
+// Component functions have at most one result.
+function assert_return_component(thunk, expected) {
+  assertEq(expected.length <= 1, true, "expected at most one result");
+  let result = thunk();
+  let wanted = expected.length === 0 ? undefined : expected[0];
+  if (!componentValuesEqual(result, wanted)) {
+    assertEq(
+      JSON.stringify(result, (_, v) => typeof v === "bigint" ? `${v}n` : v),
+      JSON.stringify(wanted, (_, v) => typeof v === "bigint" ? `${v}n` : v),
+    );
+    assertEq(true, false, "component values are not equal");
+  }
+}
