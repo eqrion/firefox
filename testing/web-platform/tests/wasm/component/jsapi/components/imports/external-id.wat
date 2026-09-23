@@ -26,7 +26,7 @@
       (if (i32.gt_s (local.get $pages) (i32.const 0))
         (then (drop (memory.grow (local.get $pages)))))
       (if (local.get $old)
-        (then (memory.copy (local.get $ptr) (local.get $old) (local.get $old-size))))
+        (then (memory.copy (local.get $ptr) (local.get $old) (select (local.get $old-size) (local.get $new-size) (i32.lt_u (local.get $old-size) (local.get $new-size))))))
       (local.get $ptr)))
   (core instance $memory (instantiate $Memory))
 

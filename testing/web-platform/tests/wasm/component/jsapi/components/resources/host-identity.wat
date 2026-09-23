@@ -23,7 +23,7 @@
       (if (i32.gt_s (local.get $pages) (i32.const 0))
         (then (drop (memory.grow (local.get $pages)))))
       (if (local.get $old)
-        (then (memory.copy (local.get $ptr) (local.get $old) (local.get $old-size))))
+        (then (memory.copy (local.get $ptr) (local.get $old) (select (local.get $old-size) (local.get $new-size) (i32.lt_u (local.get $old-size) (local.get $new-size))))))
       (local.get $ptr))
     (func $ret2 (param $a i32) (param $b i32) (result i32)
       (i32.store (i32.const 0) (local.get $a))

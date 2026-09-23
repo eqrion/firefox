@@ -40,7 +40,7 @@
       (local $ptr i32)
       (local.set $ptr (call $alloc (local.get $new-size) (local.get $align)))
       (if (local.get $old)
-        (then (memory.copy (local.get $ptr) (local.get $old) (local.get $old-size))))
+        (then (memory.copy (local.get $ptr) (local.get $old) (select (local.get $old-size) (local.get $new-size) (i32.lt_u (local.get $old-size) (local.get $new-size))))))
       (local.get $ptr))
 
     (func $new-counter (param $start i32) (result i32)
