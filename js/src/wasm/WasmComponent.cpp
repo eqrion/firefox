@@ -2075,7 +2075,9 @@ bool ComponentInstance::readImport(JSContext* cx, ComponentImportScope& scope,
   }
 
   Rooted<JSAtom*> jsName(
-      cx, ComponentJSName(cx, name, desc.sort() == ComponentSort::Type));
+      cx, name.externalID
+              ? name.externalID->toAtom(cx)
+              : ComponentJSName(cx, name, desc.sort() == ComponentSort::Type));
   if (!jsName) {
     return false;
   }
