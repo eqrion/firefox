@@ -367,14 +367,14 @@ class ComponentResourceType {
   mozilla::Maybe<uint32_t> dtorIndex() const { return dtorIndex_; }
 };
 
-enum class ComponentNameAttribute : uint8_t {
+enum class ComponentNameAnnotation : uint8_t {
   Constructor,
   Method,
   Static,
   Get,
   Set,
 };
-using ComponentNameAttributes = mozilla::EnumSet<ComponentNameAttribute>;
+using ComponentNameAnnotations = mozilla::EnumSet<ComponentNameAnnotation>;
 
 // Takes a valid component-model name and creates a "canonical" version of it
 // that can be used to check strong uniqueness.
@@ -386,12 +386,13 @@ using ComponentNameAttributes = mozilla::EnumSet<ComponentNameAttribute>;
 // CacheableName for that purpose.
 struct ComponentName {
   CacheableName name;
-  ComponentNameAttributes attributes;
+  mozilla::Maybe<CacheableName> externalID;
+  ComponentNameAnnotations annotations;
 
   explicit ComponentName() = default;
   explicit ComponentName(CacheableName&& name,
-                         ComponentNameAttributes attributes)
-      : name(std::move(name)), attributes(attributes) {}
+                         ComponentNameAnnotations annotations)
+      : name(std::move(name)), annotations(annotations) {}
 };
 
 // Describes an import or export from a wasm component.

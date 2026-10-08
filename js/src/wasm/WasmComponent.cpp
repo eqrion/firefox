@@ -184,8 +184,8 @@ static mozilla::Span<const char> ComponentLabelOf(const ComponentName& name) {
     }
     label = label.From(end + 1);
   }
-  if (name.attributes.contains(ComponentNameAttribute::Method) ||
-      name.attributes.contains(ComponentNameAttribute::Static)) {
+  if (name.annotations.contains(ComponentNameAnnotation::Method) ||
+      name.annotations.contains(ComponentNameAnnotation::Static)) {
     size_t dot = 0;
     while (label[dot] != '.') {
       dot++;
@@ -197,9 +197,9 @@ static mozilla::Span<const char> ComponentLabelOf(const ComponentName& name) {
 
 mozilla::Span<const char> wasm::ComponentResourceLabelOf(
     const ComponentName& name) {
-  MOZ_ASSERT(name.attributes.contains(ComponentNameAttribute::Constructor) ||
-             name.attributes.contains(ComponentNameAttribute::Method) ||
-             name.attributes.contains(ComponentNameAttribute::Static));
+  MOZ_ASSERT(name.annotations.contains(ComponentNameAnnotation::Constructor) ||
+             name.annotations.contains(ComponentNameAnnotation::Method) ||
+             name.annotations.contains(ComponentNameAnnotation::Static));
   mozilla::Span<const char> label = name.name.utf8Bytes();
   while (label[0] == '[') {
     size_t end = 0;
@@ -2008,7 +2008,8 @@ bool ComponentInstance::resolveBuiltin(JSContext* cx, const ComponentName& name,
                                        bool* isBuiltin,
                                        MutableHandleValue value) const {
   static constexpr std::string_view JSGlobal = "wasm:js/global";
-  mozilla::Span<const char> bytes = name.name.utf8Bytes();
+  mozilla::Span<const char> bytes =
+      name.externalID ? name.externalID->utf8Bytes() : name.name.utf8Bytes();
   std::string_view specifier(bytes.data(), bytes.size());
   *isBuiltin = false;
   if (!component_->jsGlobalBuiltin() || !specifier.starts_with(JSGlobal)) {
@@ -2052,8 +2053,8 @@ bool ComponentInstance::readImport(JSContext* cx, ComponentImportScope& scope,
                                    const ComponentName& name,
                                    const ComponentExternDesc& desc,
                                    uint32_t firstItem) {
-  using Attr = ComponentNameAttribute;
-  ComponentNameAttributes attrs = name.attributes;
+  using Annot = ComponentNameAnnotation;
+  ComponentNameAnnotations annots = name.annotations;
 
   // Type imports are only read if they declare a new resource type, which is
   // read from a constructor.
@@ -2075,7 +2076,9 @@ bool ComponentInstance::readImport(JSContext* cx, ComponentImportScope& scope,
   }
 
   Rooted<JSAtom*> jsName(
-      cx, ComponentJSName(cx, name, desc.sort() == ComponentSort::Type));
+      cx, name.externalID
+              ? name.externalID->toAtom(cx)
+              : ComponentJSName(cx, name, desc.sort() == ComponentSort::Type));
   if (!jsName) {
     return false;
   }
@@ -2094,20 +2097,20 @@ bool ComponentInstance::readImport(JSContext* cx, ComponentImportScope& scope,
   }
   if (isBuiltin) {
     lookupTarget = nullptr;
-  } else if (attrs.contains(Attr::Constructor) ||
-             attrs.contains(Attr::Method) || attrs.contains(Attr::Static)) {
+  } else if (annots.contains(Annot::Constructor) ||
+             annots.contains(Annot::Method) || annots.contains(Annot::Static)) {
     RootedObject ctor(
         cx,
         hostResourceCtors_[scope.resourceType(ComponentResourceLabelOf(name))]);
     MOZ_ASSERT(ctor);
-    if (attrs.contains(Attr::Constructor)) {
+    if (annots.contains(Annot::Constructor)) {
       if (!IsConstructor(ctor)) {
         return ReportBadImportType(cx, jsName, "constructor");
       }
       value.setObject(*ctor);
       callKind = CallKind::Construct;
       lookupTarget = nullptr;
-    } else if (attrs.contains(Attr::Static)) {
+    } else if (annots.contains(Annot::Static)) {
       lookupTarget = ctor;
       receiver.setObject(*ctor);
     } else {
@@ -2125,13 +2128,13 @@ bool ComponentInstance::readImport(JSContext* cx, ComponentImportScope& scope,
     JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
                              JSMSG_WASM_BAD_IMPORT_ARG);
     return false;
-  } else if (attrs.contains(Attr::Get) || attrs.contains(Attr::Set)) {
+  } else if (annots.contains(Annot::Get) || annots.contains(Annot::Set)) {
     receiver.setObject(*scope.object);
   }
 
   if (lookupTarget) {
-    if (attrs.contains(Attr::Get) || attrs.contains(Attr::Set)) {
-      if (!FindAccessor(cx, lookupTarget, nameId, attrs.contains(Attr::Get),
+    if (annots.contains(Annot::Get) || annots.contains(Annot::Set)) {
+      if (!FindAccessor(cx, lookupTarget, nameId, annots.contains(Annot::Get),
                         &value)) {
         return false;
       }
@@ -2825,7 +2828,7 @@ static JSFunction* CreateGuestResourceClass(
 
 bool ComponentInstance::createGuestResourceClasses(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj) {
-  using Attr = ComponentNameAttribute;
+  using Annot = ComponentNameAnnotation;
 
   // The resource types exported so far, by name.
   mozilla::Vector<std::pair<mozilla::Span<const char>, uint32_t>, 4,
@@ -2844,7 +2847,7 @@ bool ComponentInstance::createGuestResourceClasses(
   // `label`, or 0 if there is none.
   auto constructorArity = [&](mozilla::Span<const char> label) -> uint32_t {
     for (const ComponentExport& exp : component_->exports()) {
-      if (exp.name().attributes.contains(Attr::Constructor) &&
+      if (exp.name().annotations.contains(Annot::Constructor) &&
           ComponentResourceLabelOf(exp.name()) == label) {
         return exp.externDesc().asFunc().asFunc().paramTypes.length();
       }
@@ -2853,7 +2856,7 @@ bool ComponentInstance::createGuestResourceClasses(
   };
 
   for (const ComponentExport& exp : component_->exports()) {
-    ComponentNameAttributes attrs = exp.name().attributes;
+    ComponentNameAnnotations annots = exp.name().annotations;
     if (exp.externDesc().sort() == ComponentSort::Type) {
       ComponentType type = component_->getType(exp.item().index);
       if (type.kind() != ComponentTypeKind::Resource &&
@@ -2918,11 +2921,11 @@ bool ComponentInstance::createGuestResourceClasses(
       continue;
     }
 
-    if (!attrs.contains(Attr::Constructor) && !attrs.contains(Attr::Method) &&
-        !attrs.contains(Attr::Static)) {
+    if (!annots.contains(Annot::Constructor) &&
+        !annots.contains(Annot::Method) && !annots.contains(Annot::Static)) {
       continue;
     }
-    if (attrs.contains(Attr::Get) || attrs.contains(Attr::Set)) {
+    if (annots.contains(Annot::Get) || annots.contains(Annot::Set)) {
       JS_ReportErrorASCII(cx,
                           "resource accessor exports are not supported yet");
       return false;
@@ -2936,17 +2939,17 @@ bool ComponentInstance::createGuestResourceClasses(
     }
     RootedFunction func(cx);
     if (!createLiftedFunction(cx, instanceObj, exp.item().index, name,
-                              attrs.contains(Attr::Method), &func)) {
+                              annots.contains(Annot::Method), &func)) {
       return false;
     }
-    if (attrs.contains(Attr::Constructor)) {
+    if (annots.contains(Annot::Constructor)) {
       guestResourceConstructors_[resourceType] = func;
       continue;
     }
 
     // Methods are on the prototype, and statics on the class, where they can't
     // replace its own properties.
-    bool isMethod = attrs.contains(Attr::Method);
+    bool isMethod = annots.contains(Annot::Method);
     RootedObject target(cx, isMethod ? guestResourcePrototypes_[resourceType]
                                      : guestResourceClasses_[resourceType]);
     // TODO(wasm-cm): The JS-API exports members with these names on the
@@ -2971,7 +2974,7 @@ bool ComponentInstance::createGuestResourceClasses(
 bool ComponentInstance::createExportsObject(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     MutableHandleObject exportsObj) {
-  using Attr = ComponentNameAttribute;
+  using Annot = ComponentNameAnnotation;
 
   if (!createGuestResourceClasses(cx, instanceObj)) {
     return false;
@@ -2983,12 +2986,12 @@ bool ComponentInstance::createExportsObject(
   }
 
   for (const ComponentExport& exp : component_->exports()) {
-    ComponentNameAttributes attrs = exp.name().attributes;
-    if (attrs.contains(Attr::Constructor) || attrs.contains(Attr::Method) ||
-        attrs.contains(Attr::Static)) {
+    ComponentNameAnnotations annots = exp.name().annotations;
+    if (annots.contains(Annot::Constructor) || annots.contains(Annot::Method) ||
+        annots.contains(Annot::Static)) {
       continue;
     }
-    if (attrs.contains(Attr::Get) || attrs.contains(Attr::Set)) {
+    if (annots.contains(Annot::Get) || annots.contains(Annot::Set)) {
       JS_ReportErrorASCII(cx, "accessor exports are not supported yet");
       return false;
     }
