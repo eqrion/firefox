@@ -4953,13 +4953,11 @@ static bool IsSemverChar(uint8_t c, bool digitsOnly) {
   if (!d.readLiteral("/")) {
     return d.failf("expected projection in %s name", thing);
   }
-  if (!DecodeComponentLabel(d, thing, /*allowUppercase=*/true)) {
-    return false;
-  }
-  if (d.peekLiteral("/")) {
-    // TODO(wasm-cm): Support nested namespaces and packages.
-    return d.failf("nested projections in %s names are not supported", thing);
-  }
+  do {
+    if (!DecodeComponentLabel(d, thing, /*allowUppercase=*/true)) {
+      return false;
+    }
+  } while (d.readLiteral("/"));
   if (d.readLiteral("@") && !DecodeSemver(d, thing)) {
     return false;
   }
