@@ -45,7 +45,7 @@ promise_test(async () => {
   const { C } = makeClass();
   const { construct } = await componentExports(FIXTURE, { R: C });
   assert_equals(construct("7").x, 7, "argument converted to u32 before the call");
-  assert_throws_js(TypeError, () => construct(-1));
+  assert_throws_js(TypeError, () => construct(1n));
 }, "[constructor]: arguments are converted before construction");
 
 promise_test(async () => {
@@ -95,7 +95,8 @@ promise_test(async () => {
   F.prototype = loggingProxy({ add() {} }, log, "proto ");
   F.create = () => {};
   await componentExports(FIXTURE, { R: F });
-  assert_array_equals(log.filter(e => e.startsWith("proto get")), ["proto get add"]);
+  assert_array_equals(log.filter(e => e.startsWith("proto get")),
+                      ["proto get Symbol(Symbol.dispose)", "proto get add"]);
 }, "[method]: looked up with Get on the prototype");
 
 test_instantiation_error(WebAssembly.LinkError, FIXTURE, { R: class { static create() {} } }, undefined,

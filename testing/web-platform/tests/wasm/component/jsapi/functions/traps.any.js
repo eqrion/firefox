@@ -28,7 +28,7 @@ promise_test(async () => {
 }, "a locked-down instance does not run guest code or imports");
 
 promise_test(async () => {
-  const { callPlain, ok } = await componentExports("functions/traps", { plain: () => -1 });
+  const { callPlain, ok } = await componentExports("functions/traps", { plain: () => 1n });
   assert_traps(() => callPlain());
   assert_traps(() => ok(), "ok after conversion trap");
 }, "a failed import result conversion is a trap and locks the instance down");
@@ -65,8 +65,8 @@ promise_test(async () => {
 
 promise_test(async () => {
   const { flat, reallocs } = await componentExports("functions/lockdown-conversion");
-  assert_throws_js(TypeError, () => flat("abc"));
-  assert_throws_js(TypeError, () => flat(-1));
+  assert_throws_js(TypeError, () => flat(1n));
+  assert_throws_js(TypeError, () => flat(Symbol()));
   assert_equals(flat(3), 3, "the instance is still usable");
   assert_equals(reallocs(), 0, "no guest code ran");
 }, "a bad argument to a flat-only function does not lock the instance down");
@@ -82,7 +82,7 @@ promise_test(async () => {
 promise_test(async () => {
   const { takePoint, flat, reallocs } = await componentExports("functions/lockdown-conversion");
   assert_equals(reallocs(), 0);
-  assert_throws_js(TypeError, () => takePoint({ s: "ok", n: "bad" }), "the failure is still a TypeError");
+  assert_throws_js(TypeError, () => takePoint({ s: "ok", n: 1n }), "the failure is still a TypeError");
   assert_traps(() => flat(1), "flat after a failed conversion");
   assert_traps(() => reallocs(), "reallocs after a failed conversion");
   assert_traps(() => takePoint({ s: "ok", n: 1 }), "takePoint after a failed conversion");

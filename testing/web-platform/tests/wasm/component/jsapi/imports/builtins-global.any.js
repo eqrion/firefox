@@ -98,3 +98,34 @@ promise_test(async () => {
     globalThis.btoa = saved;
   }
 }, "wasm:js/global reads the current value of the global property at instantiation");
+
+promise_test(async t => {
+  const log = [];
+  globalThis["component-projection"] = {
+    value: () => 1,
+    get nested() { log.push("get nested"); return { value: () => 2 }; },
+  };
+  t.add_cleanup(() => { delete globalThis["component-projection"]; });
+  const { instanceValue, nestedValue } =
+    await componentExports("imports/builtins-global-projection", undefined, enabled);
+  assert_array_equals(log, ["get nested"], "each projection is read with Get at instantiation");
+  assert_equals(instanceValue(), 1, "wasm:js/global/component-projection");
+  assert_equals(nestedValue(), 2, "wasm:js/global/component-projection/nested/value");
+}, "a path below wasm:js/global projects properties off of the global object");
+
+promise_test(async t => {
+  globalThis["component-projection"] = { value: () => 1 };
+  t.add_cleanup(() => { delete globalThis["component-projection"]; });
+  await promise_rejects_js(t, TypeError,
+                           componentExports("imports/builtins-global-projection", undefined, enabled));
+}, "a projection through a missing property throws TypeError");
+
+promise_test(async () => {
+  const imports = {
+    "wasm:js/global/component-projection": { value: () => 3 },
+    "wasm:js/global/component-projection/nested/value": () => 4,
+  };
+  const { instanceValue, nestedValue } = await componentExports("imports/builtins-global-projection", imports);
+  assert_equals(instanceValue(), 3);
+  assert_equals(nestedValue(), 4);
+}, "when not enabled, paths below wasm:js/global are ordinary imports keyed by the interface name");

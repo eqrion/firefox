@@ -40,8 +40,8 @@ promise_test(async () => {
 
 promise_test(async () => {
   const { callPlain } = await componentExports("imports/functions", { ...good, plain: async x => x });
-  assert_traps(() => callPlain(1), "a Promise does not convert to u32");
-}, "an async function satisfies the import but its Promise result fails conversion");
+  assert_equals(callPlain(1), 0, "a Promise converts to u32 like any other object");
+}, "an async function satisfies the import and its Promise result converts like an object");
 
 test_instantiation_error(WebAssembly.LinkError, "imports/functions", { ...good, R: () => ({}) }, undefined,
                          "a non-constructor for a [constructor] import is a LinkError");

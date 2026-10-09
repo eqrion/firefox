@@ -2,7 +2,8 @@
 // META: script=/wasm/component/jsapi/harness/component-helpers.js
 // META: script=/wasm/component/jsapi/harness/assertions.js
 
-// list<T, N> converts like list<T> and then requires exactly N elements.
+// list<T, N> converts like list<T> and then requires exactly N elements. Like
+// list<u32>, list<u32, N> is a Uint32Array.
 
 let exports;
 const received = {};
@@ -16,13 +17,19 @@ promise_setup(async () => {
 
 promise_test(async () => {
   const result = exports.roundtripU32s([1, 2, 3]);
-  assert_true(Array.isArray(result));
-  assert_equals(Object.getPrototypeOf(result), Array.prototype);
-  assert_equals(result.length, 3);
-  assert_value_equals(result, [1, 2, 3], "result");
-  assert_value_equals(received.u32s, [1, 2, 3], "value seen by echo");
-  assert_equals(received.u32s.length, 3);
-}, "list<u32, 3>: an Array of exactly 3 elements roundtrips as an Array of length 3");
+  assert_equals(Object.getPrototypeOf(result), Uint32Array.prototype);
+  assert_value_equals(result, new Uint32Array([1, 2, 3]), "result");
+  assert_value_equals(received.u32s, new Uint32Array([1, 2, 3]), "value seen by echo");
+}, "list<u32, 3>: an Array of exactly 3 elements roundtrips as a Uint32Array of length 3");
+
+promise_test(async () => {
+  const input = new Uint32Array([4, 5, 0xffffffff]);
+  input[Symbol.iterator] = () => { throw new Error("must not iterate"); };
+  const result = exports.roundtripU32s(input);
+  assert_value_equals(result, new Uint32Array([4, 5, 0xffffffff]), "result");
+  assert_not_equals(result, input, "result is a fresh Uint32Array");
+  assert_throws_js(TypeError, () => exports.roundtripU32s(new Uint32Array(2)), "wrong length");
+}, "list<u32, 3>: a Uint32Array is copied directly, not iterated");
 
 promise_test(async () => {
   assert_value_equals(exports.roundtripStrings(["a", "b"]), ["a", "b"], "result");
@@ -30,10 +37,13 @@ promise_test(async () => {
 }, "list<string, 2>: roundtrips");
 
 promise_test(async () => {
-  assert_value_equals(exports.roundtripU32s(new Set([1, 2, 3])), [1, 2, 3], "Set");
-  assert_value_equals(exports.roundtripU32s((function* () { yield 1; yield 2; yield 3; })()), [1, 2, 3],
-                      "generator");
-  assert_value_equals(exports.roundtripU32s(["1", true, null]), [1, 1, 0], "coercible elements");
+  assert_value_equals(exports.roundtripU32s(new Set([1, 2, 3])), new Uint32Array([1, 2, 3]), "Set");
+  assert_value_equals(exports.roundtripU32s((function* () { yield 1; yield 2; yield 3; })()),
+                      new Uint32Array([1, 2, 3]), "generator");
+  assert_value_equals(exports.roundtripU32s(["1", true, -1]), new Uint32Array([1, 1, 0xffffffff]),
+                      "coercible elements");
+  assert_value_equals(exports.roundtripU32s(new Int8Array([1, 2, -1])), new Uint32Array([1, 2, 0xffffffff]),
+                      "another typed array");
 }, "list<u32, 3>: any iterable of the right length converts");
 
 for (const [input, description] of [
@@ -55,7 +65,7 @@ promise_test(async () => {
 }, "list<string, 2>: wrong lengths throw TypeError");
 
 promise_test(async () => {
-  assert_throws_js(TypeError, () => exports.roundtripU32s([1, -1, 3]));
+  assert_throws_js(TypeError, () => exports.roundtripU32s([1, 1n, 3]));
   assert_throws_js(TypeError, () => exports.roundtripU32s("abc"));
   assert_throws_js(TypeError, () => exports.roundtripU32s({ length: 3 }));
 }, "list<u32, 3>: element and iterability errors apply as for list<u32>");
@@ -76,7 +86,7 @@ promise_test(async () => {
 
 promise_test(async () => {
   const e = await componentExports("values/fixed-list", { ...imports, echoU32s: () => new Set([4, 5, 6]) });
-  assert_value_equals(e.roundtripU32s([1, 2, 3]), [4, 5, 6], "result");
+  assert_value_equals(e.roundtripU32s([1, 2, 3]), new Uint32Array([4, 5, 6]), "result");
 }, "list<u32, 3>: an import returning an iterable of the right length is converted");
 
 for (const [value, description] of [

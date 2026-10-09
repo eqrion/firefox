@@ -33,9 +33,9 @@ promise_test(async () => {
 }, "the this value is ignored");
 
 promise_test(async () => {
-  assert_throws_js(TypeError, () => exports.addOne());
-  assert_throws_js(TypeError, () => exports.sum3(1, 2));
-}, "too few arguments throws a TypeError");
+  assert_equals(exports.addOne(), 1);
+  assert_equals(exports.sum3(1, 2), 3);
+}, "missing arguments are undefined");
 
 promise_test(async () => {
   assert_equals(exports.nullary(1, 2, 3), undefined);

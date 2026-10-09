@@ -13,7 +13,7 @@ promise_setup(async () => {
 });
 
 const full = {
-  firstName: "Ada", age: 36, nickName: "ada", url: "https://example.com", maybe: variant("Some", 3),
+  firstName: "Ada", age: 36, nickName: "ada", url: "https://example.com", maybe: variant("some", 3),
 };
 const fullExpected = record(full);
 
@@ -37,24 +37,37 @@ promise_test(async () => {
 }, "record: fields are read with Get in declaration order");
 
 promise_test(async () => {
-  const result = roundtrip({ ...full, nickName: null, maybe: variant("None") });
-  assert_equals(result.nickName, null, "none is null");
-  assert_value_equals(result.maybe, variant("None"));
+  const result = roundtrip({ ...full, nickName: null, maybe: null });
+  assert_true(Object.hasOwn(result, "nickName"), "nickName is present");
+  assert_equals(result.nickName, undefined, "none is undefined");
+  assert_true(Object.hasOwn(result, "maybe"), "maybe is present");
+  assert_equals(result.maybe, undefined, "none is undefined");
 }, "record: none payloads");
 
 promise_test(async () => {
-  const result = roundtrip({ ...full, maybe: variant("Some", null) });
-  assert_value_equals(result.maybe, variant("Some", null));
-}, "record: option<option<T>> some(none) keeps the variant form outside and null inside");
+  const result = roundtrip({ ...full, maybe: variant("none") });
+  assert_value_equals(result.maybe, variant("none"));
+}, "record: option<option<T>> some(none) is undefined outside and the variant form inside");
+
+for (const [fields, expected, description] of [
+  [{ age: 1, nickName: null, url: "", maybe: undefined },
+   record({ firstName: "undefined", age: 1, nickName: undefined, url: "", maybe: undefined }), "missing firstName"],
+  [{ ...full, age: undefined }, record({ ...full, age: 0 }), "age explicitly undefined"],
+  [{ firstName: "a", age: 1, nickName: "n", url: "" },
+   record({ firstName: "a", age: 1, nickName: "n", url: "", maybe: undefined }), "missing option<option<T>> field"],
+  [{ ...full, age: -1 }, record({ ...full, age: 0xffffffff }), "out-of-range age"],
+]) {
+  promise_test(async () => {
+    const result = roundtrip(fields);
+    assert_value_equals(received, expected, "value seen by echo");
+    assert_value_equals(result, expected);
+  }, `record: ${description} is converted like undefined`);
+}
 
 for (const [fields, description] of [
-  [{ age: 1, nickName: null, url: "", maybe: variant("None") }, "missing firstName"],
-  [{ ...full, firstName: undefined }, "firstName explicitly undefined"],
-  [{ ...full, age: undefined }, "age explicitly undefined"],
-  [{ firstName: "a", age: 1, nickName: null, url: "" }, "missing option<option<T>> field"],
-  [{ ...full, maybe: null }, "null for an option<option<T>> field"],
-  [{ ...full, age: -1 }, "out-of-range age"],
   [{ ...full, firstName: Symbol() }, "Symbol for a string field"],
+  [{ ...full, age: 1n }, "BigInt for a u32 field"],
+  [{ ...full, maybe: 1 }, "a bare payload for an option<option<T>> field"],
 ]) {
   // A failure after first-name is stored has entered the guest to allocate the
   // string, which locks down the instance, so each case uses a fresh one.
@@ -75,10 +88,10 @@ promise_test(async () => {
 }, "record: null is a value, not a missing field");
 
 promise_test(async () => {
-  const result = roundtrip({ firstName: "a", age: 1, url: "", maybe: variant("None") });
-  assert_equals(result.nickName, null);
+  const result = roundtrip({ firstName: "a", age: 1, url: "", maybe: undefined });
+  assert_equals(result.nickName, undefined);
   const result2 = roundtrip({ ...full, nickName: undefined });
-  assert_equals(result2.nickName, null);
+  assert_equals(result2.nickName, undefined);
 }, "record: a missing or undefined option field is none");
 
 promise_test(async () => {
@@ -116,13 +129,13 @@ promise_test(async () => {
 }, "record: a throwing getter propagates its exception");
 
 promise_test(async () => {
-  const { roundtrip } = await componentExports("values/record", { echo: () => ({ ...full, age: undefined }) });
+  const { roundtrip } = await componentExports("values/record", { echo: () => ({ ...full, age: 1n }) });
   assert_traps(() => roundtrip(full));
-}, "record: an import returning a record with a missing field traps");
+}, "record: an import returning a record with an unconvertible field traps");
 
 promise_test(async () => {
-  const { roundtrip } = await componentExports("values/record", { echo: () => ({ firstName: 1, age: "2", url: "u", maybe: variant("None") }) });
-  assert_value_equals(roundtrip(full), record({ firstName: "1", age: 2, nickName: null, url: "u", maybe: variant("None") }));
+  const { roundtrip } = await componentExports("values/record", { echo: () => ({ firstName: 1, age: "2", url: "u", maybe: variant("none") }) });
+  assert_value_equals(roundtrip(full), record({ firstName: "1", age: 2, nickName: undefined, url: "u", maybe: variant("none") }));
 }, "record: an import return value is converted field by field");
 
 promise_test(async () => {

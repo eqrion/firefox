@@ -57,8 +57,8 @@ promise_test(async () => {
 promise_test(async () => {
   const c = new C();
   assert_equals(exports.roundtripOption(c), c, "some");
-  assert_equals(exports.roundtripOption(null), null, "none from null");
-  assert_equals(exports.roundtripOption(undefined), null, "none from undefined");
+  assert_equals(exports.roundtripOption(null), undefined, "none from null");
+  assert_equals(exports.roundtripOption(undefined), undefined, "none from undefined");
 }, "option<own<r>>");
 
 promise_test(async () => {
@@ -70,10 +70,10 @@ promise_test(async () => {
 
 promise_test(async () => {
   const c = new C();
-  const some = exports.roundtripVariant({ kind: "Some", value: c });
-  assert_value_equals(some, variant("Some", c));
+  const some = exports.roundtripVariant({ kind: "some", value: c });
+  assert_value_equals(some, variant("some", c));
   assert_equals(some.value, c);
-  assert_value_equals(exports.roundtripVariant({ kind: "None" }), variant("None"));
+  assert_value_equals(exports.roundtripVariant({ kind: "none" }), variant("none"));
 }, "variant payload of type own<r>");
 
 promise_test(async () => {

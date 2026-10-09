@@ -12,7 +12,7 @@ function describe(value) {
   if (typeof value === "bigint") return `${value}n`;
   if (typeof value !== "object" || value === null) return String(value);
   if (value instanceof Map) return `Map(${[...value].map(([k, v]) => `${describe(k)} => ${describe(v)}`).join(", ")})`;
-  if (value instanceof Uint8Array) return `Uint8Array[${[...value].join(", ")}]`;
+  if (ArrayBuffer.isView(value)) return `${value.constructor.name}[${[...value].join(", ")}]`;
   if (Array.isArray(value)) return `[${value.map(describe).join(", ")}]`;
   return `{${Reflect.ownKeys(value).map(k => `${String(k)}: ${describe(value[k])}`).join(", ")}}`;
 }

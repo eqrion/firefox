@@ -28,11 +28,14 @@ promise_test(async () => {
 }, "a function without a result returns undefined");
 
 promise_test(async () => {
-  assert_throws_js(TypeError, () => exports.one());
-  assert_throws_js(TypeError, () => exports.three());
-  assert_throws_js(TypeError, () => exports.three(1));
-  assert_throws_js(TypeError, () => exports.three(1, 2));
-}, "passing too few arguments throws a TypeError");
+  assert_equals(exports.one(), 0);
+  exports.three();
+  assert_array_equals(received, [0, 0, 0]);
+  exports.three(1);
+  assert_array_equals(received, [1, 0, 0]);
+  exports.three(1, 2);
+  assert_array_equals(received, [1, 2, 0]);
+}, "missing arguments are undefined, and are converted");
 
 promise_test(async () => {
   assert_equals(exports.one(5, "ignored", Symbol()), 5);
@@ -41,11 +44,10 @@ promise_test(async () => {
 }, "extra arguments are ignored and never converted");
 
 promise_test(async () => {
-  assert_throws_js(TypeError, () => exports.one(undefined));
-  received = undefined;
-  assert_throws_js(TypeError, () => exports.three(1, 2, undefined));
-  assert_equals(received, undefined, "recv must not be called");
-}, "an explicit undefined counts as an argument and is converted");
+  assert_equals(exports.one(undefined), 0);
+  exports.three(1, undefined, 3);
+  assert_array_equals(received, [1, 0, 3]);
+}, "an explicit undefined is converted like a missing argument");
 
 promise_test(async () => {
   exports.three(7, 8, 9);
@@ -56,12 +58,12 @@ promise_test(async () => {
 promise_test(async () => {
   const counter = new exports.Counter(10);
   assert_equals(counter.add(1, 2), 13);
-  assert_throws_js(TypeError, () => counter.add(1));
+  assert_equals(counter.add(1), 11, "a missing method argument is undefined");
   assert_equals(counter.add(1, 2, 3), 13, "extra method arguments are ignored");
-  assert_throws_js(TypeError, () => new exports.Counter());
+  assert_equals(new exports.Counter().add(1, 2), 3, "a missing constructor argument is undefined");
   assert_equals(exports.Counter.twice(4), 8);
-  assert_throws_js(TypeError, () => exports.Counter.twice());
-}, "arity checks apply to constructors, methods and statics");
+  assert_equals(exports.Counter.twice(), 0, "a missing static argument is undefined");
+}, "missing arguments are undefined for constructors, methods and statics");
 
 promise_test(async () => {
   const log = [];
@@ -75,7 +77,7 @@ promise_test(async () => {
   received = undefined;
   assert_throws_js(TypeError, () => exports.three(
     { valueOf() { log.push(1); return 1; } },
-    { valueOf() { log.push(2); return NaN; } },
+    { valueOf() { log.push(2); return 1n; } },
     { valueOf() { log.push(3); return 3; } }));
   assert_array_equals(log, [1, 2], "conversion stops at the first failure");
   assert_equals(received, undefined, "recv must not be called");

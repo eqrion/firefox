@@ -31,6 +31,15 @@ for (const [input, expected, description] of [
   [null, 0, "null is 0"],
   [[], 0, "empty array is 0"],
   [{ valueOf() { return 5; } }, 5, "valueOf is honoured"],
+  [-1, 0xffffffff, "-1 wraps"],
+  [0x100000000, 0, "2**32 wraps"],
+  [0x100000001 + 0.5, 1, "2**32 + 1.5 truncates and wraps"],
+  [NaN, 0, "NaN is 0"],
+  [Infinity, 0, "Infinity is 0"],
+  [-Infinity, 0, "-Infinity is 0"],
+  [undefined, 0, "undefined is 0"],
+  ["abc", 0, "a non-numeric string is 0"],
+  [{}, 0, "a plain object is 0"],
 ]) {
   promise_test(async () => {
     assert_equals(roundtrip(input), expected);
@@ -39,16 +48,8 @@ for (const [input, expected, description] of [
 }
 
 for (const [input, description] of [
-  [-1, "-1 is below range"],
-  [0x100000000, "2**32 is above range"],
-  [NaN, "NaN"],
-  [Infinity, "Infinity"],
-  [-Infinity, "-Infinity"],
-  [undefined, "undefined"],
-  ["abc", "non-numeric string"],
   [1n, "BigInt"],
   [Symbol(), "Symbol"],
-  [{}, "plain object"],
 ]) {
   promise_test(async () => {
     received = "unchanged";
@@ -65,8 +66,13 @@ promise_test(async () => {
 
 promise_test(async () => {
   const { roundtrip } = await componentExports("values/u32", { echo: () => -1 });
+  assert_equals(roundtrip(1), 0xffffffff);
+}, "u32: an import returning an out-of-range value wraps");
+
+promise_test(async () => {
+  const { roundtrip } = await componentExports("values/u32", { echo: () => 1n });
   assert_traps(() => roundtrip(1));
-}, "u32: an import returning an out-of-range value traps");
+}, "u32: an import returning a BigInt traps");
 
 promise_test(async () => {
   const { roundtrip } = await componentExports("values/u32", { echo: () => "9" });

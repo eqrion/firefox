@@ -12,6 +12,7 @@ const casingTable = [
   ["a1-2-3", "a123", "A123"],
   ["HTTP-request", "httpRequest", "HTTPRequest"],
 ];
+const labels = casingTable.map(([label]) => label);
 const camelNames = casingTable.map(([, camel]) => camel);
 const pascalNames = casingTable.map(([, , pascal]) => pascal);
 
@@ -89,8 +90,10 @@ promise_test(async () => {
 promise_test(async () => {
   const kebabInput = {};
   for (const [label] of casingTable) kebabInput[label] = 1;
-  assert_throws_js(TypeError, () => values.roundtripRecord(kebabInput));
-}, "record fields under kebab-case keys are missing");
+  const expected = {};
+  for (const [label, camel] of casingTable) expected[camel] = label === camel ? 1 : 0;
+  assert_value_equals(values.roundtripRecord(kebabInput), record(expected));
+}, "record fields under kebab-case keys are missing, and convert from undefined");
 
 promise_test(async () => {
   const input = {};
@@ -101,21 +104,21 @@ promise_test(async () => {
 }, "flags labels are named with CamelCase");
 
 promise_test(async () => {
-  for (const name of pascalNames.slice(0, -1)) {
-    assert_value_equals(values.roundtripVariant({ kind: name }), variant(name), name);
+  for (const label of labels.slice(0, -1)) {
+    assert_value_equals(values.roundtripVariant({ kind: label }), variant(label), label);
   }
-  assert_value_equals(values.roundtripVariant({ kind: "HTTPRequest", value: 5 }),
-                      variant("HTTPRequest", 5));
-}, "variant case kinds are named with PascalCase");
+  assert_value_equals(values.roundtripVariant({ kind: "HTTP-request", value: 5 }),
+                      variant("HTTP-request", 5));
+}, "variant case kinds are the labels verbatim");
 
 promise_test(async () => {
-  for (const [label, camel] of casingTable) {
-    for (const wrong of new Set([label, camel])) {
-      if (pascalNames.includes(wrong)) continue;
+  for (const [label, camel, pascal] of casingTable) {
+    for (const wrong of new Set([camel, pascal])) {
+      if (labels.includes(wrong)) continue;
       assert_throws_js(TypeError, () => values.roundtripVariant({ kind: wrong }), wrong);
     }
   }
-}, "variant kinds that are not PascalCase are rejected");
+}, "variant kinds are case-sensitive and not converted");
 
 promise_test(async () => {
   for (const [label] of casingTable) {

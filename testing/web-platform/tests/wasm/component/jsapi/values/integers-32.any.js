@@ -65,20 +65,31 @@ for (const [type, { min, max }] of Object.entries(types)) {
     }, `${type}: negative values truncate toward zero and parse from strings`);
   }
 
+  const span = max - min + 1;
+  for (const [input, expected, description] of [
+    [min - 1, max, `${min - 1} below range wraps`],
+    [max + 1, min, `${max + 1} above range wraps`],
+    [min - 1.5, max, `${min - 1.5} truncates and wraps`],
+    [max + 1.5, min, `${max + 1.5} truncates and wraps`],
+    [max + span * 3 + 1, max + 1 - span, "a value several times the range away wraps"],
+    [2 ** 53, 0, "2**53 wraps"],
+    [NaN, 0, "NaN is 0"],
+    [Infinity, 0, "Infinity is 0"],
+    [-Infinity, 0, "-Infinity is 0"],
+    [undefined, 0, "undefined is 0"],
+    ["abc", 0, "a non-numeric string is 0"],
+    [{}, 0, "a plain object is 0"],
+    [[1, 2], 0, "a two-element array is 0"],
+  ]) {
+    promise_test(async () => {
+      assert_equals(roundtrip(type, input), expected);
+      assert_equals(received[type], expected, "value seen by echo");
+    }, `${type}: ${description}`);
+  }
+
   for (const [input, description] of [
-    [min - 1, `${min - 1} is below range`],
-    [max + 1, `${max + 1} is above range`],
-    [min - 1.5, `${min - 1.5} truncates below range`],
-    [max + 1.5, `${max + 1.5} truncates above range`],
-    [NaN, "NaN"],
-    [Infinity, "Infinity"],
-    [-Infinity, "-Infinity"],
-    [undefined, "undefined"],
-    ["abc", "a non-numeric string"],
     [1n, "a BigInt"],
     [Symbol(), "a Symbol"],
-    [{}, "a plain object"],
-    [[1, 2], "a two-element array"],
   ]) {
     promise_test(async () => {
       received[type] = "unchanged";
@@ -105,8 +116,8 @@ for (const [type, { min, max }] of Object.entries(types)) {
   promise_test(async () => {
     const echo = { ...imports, [`echo${type[0].toUpperCase()}${type.slice(1)}`]: () => max + 1 };
     const e = await componentExports("values/integers-32", echo);
-    assert_traps(() => e[`roundtrip${type[0].toUpperCase()}${type.slice(1)}`](0));
-  }, `${type}: an import returning an out-of-range value traps`);
+    assert_equals(e[`roundtrip${type[0].toUpperCase()}${type.slice(1)}`](0), min);
+  }, `${type}: an import returning an out-of-range value wraps`);
 
   promise_test(async () => {
     const echo = { ...imports, [`echo${type[0].toUpperCase()}${type.slice(1)}`]: () => `${max}` };

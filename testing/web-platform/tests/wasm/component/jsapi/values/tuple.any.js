@@ -38,7 +38,7 @@ for (const [input, description] of [
   [[], "an empty Array"],
   [[1, "a"], "2 elements"],
   [[1, "a", true, 0], "4 elements"],
-  [[-1, "a", true], "an out-of-range first element"],
+  [[1n, "a", true], "a BigInt first element"],
   [[1, Symbol(), true], "a Symbol second element"],
   ["abc", "a string"],
   [{ 0: 1, 1: "a", 2: true, length: 3 }, "a non-iterable array-like"],
@@ -61,7 +61,7 @@ for (const [value, description] of [
   [[1, "a"], "2 elements"],
   [[1, "a", true, 0], "4 elements"],
   [5, "a Number"],
-  [[-1, "a", true], "an out-of-range element"],
+  [[1n, "a", true], "a BigInt element"],
 ]) {
   promise_test(async () => {
     const { roundtripMixed } = await componentExports("values/tuple", { echoMixed: () => value });

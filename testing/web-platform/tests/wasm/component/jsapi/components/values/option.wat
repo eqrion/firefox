@@ -1,5 +1,5 @@
-;; Passthrough for option<T> with several payload types, including the
-;; option<option<T>> case that takes the variant form in JS.
+;; Passthrough for option<T> with several payload types, including
+;; option<option<T>>, whose inner option takes the variant form in JS.
 (component
   (import "echo-u32" (func $echo-u32 (param "x" (option u32)) (result (option u32))))
   (import "echo-string" (func $echo-string (param "x" (option string)) (result (option string))))

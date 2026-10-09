@@ -99,7 +99,7 @@ for (const [input, description] of [
   [[["a", 1, 2]], "a pair with three elements"],
   [["a"], "a string element instead of a pair"],
   [[null], "a null element"],
-  [[["a", "x"]], "a value that fails conversion"],
+  [[["a", 1n]], "a value that fails conversion"],
 ]) {
   promise_test(async () => {
     received = "unchanged";

@@ -2,19 +2,20 @@
 // META: script=/wasm/component/jsapi/harness/component-helpers.js
 // META: script=/wasm/component/jsapi/harness/assertions.js
 
-test_instantiation_error(TypeError, "names/reserved-method-constructor", undefined, undefined,
-                         "a [method] named `constructor` throws a TypeError");
-
-test_instantiation_error(TypeError, "names/reserved-static-prototype", undefined, undefined,
-                         "a [static] named `prototype` throws a TypeError");
-
-promise_test(async () => {
-  const { Counter } = await componentExports("names/reserved-allowed");
-  assert_guest_class(Counter, { name: "Counter", methods: [["prototype", 0]], statics: [["constructor", 0]] });
-  assert_equals(Counter.prototype.constructor, Counter, "prototype.constructor is untouched");
-  assert_equals(Counter.constructor(), 3, "a static named constructor is an ordinary static");
-  assert_equals(new Counter().prototype(), 2, "a method named prototype is an ordinary method");
-}, "`constructor` as a static and `prototype` as a method are not reserved");
+// The JS-API reserves these names on both the class and its prototype. It
+// will export such members through the exports object instead, once it gives
+// them a JS name there; until then they are rejected.
+for (const [scope, name] of [
+  ["method", "constructor"],
+  ["static", "prototype"],
+  ["method", "prototype"],
+  ["static", "constructor"],
+  ["method", "name"],
+  ["static", "length"],
+]) {
+  test_instantiation_error(TypeError, `names/reserved-${scope}-${name}`, undefined, undefined,
+                           `a [${scope}] named \`${name}\` throws a TypeError`);
+}
 
 promise_test(async () => {
   let receiver;

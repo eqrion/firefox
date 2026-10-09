@@ -36,7 +36,7 @@ promise_test(async () => {
 promise_test(async () => {
   const log = [];
   calls = [];
-  assert_throws_js(TypeError, () => roundtrip(tracked(log, "a", 1), tracked(log, "b", 2), NaN));
+  assert_throws_js(TypeError, () => roundtrip(tracked(log, "a", 1), tracked(log, "b", 2), 1n));
   assert_array_equals(log, ["a", "b"]);
   assert_equals(calls.length, 0);
 }, "a failing third argument still converts the first two");
@@ -44,10 +44,11 @@ promise_test(async () => {
 promise_test(async () => {
   const log = [];
   calls = [];
-  assert_throws_js(TypeError, () => roundtrip(tracked(log, "a", 1), tracked(log, "b", 2)));
-  assert_array_equals(log, [], "no argument is converted when too few are passed");
-  assert_equals(calls.length, 0);
-}, "the arity check happens before any conversion");
+  roundtrip(tracked(log, "a", 1), tracked(log, "b", 2));
+  assert_array_equals(log, ["a", "b"]);
+  assert_equals(calls.length, 1);
+  assert_array_equals(calls[0], [1, 2, 0], "a missing argument converts from undefined");
+}, "a missing argument is converted in order like undefined");
 
 promise_test(async () => {
   const log = [];

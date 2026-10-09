@@ -2,9 +2,9 @@
 // META: script=/wasm/component/jsapi/harness/component-helpers.js
 // META: script=/wasm/component/jsapi/harness/assertions.js
 
-// list<u8> is special-cased: a Uint8Array is copied directly, everything
-// else goes through the generic iterable path, and the output is always a
-// fresh Uint8Array.
+// list<u8>, like every list of scalars, is special-cased: a Uint8Array is
+// copied directly, everything else goes through the generic iterable path, and
+// the output is always a fresh Uint8Array.
 
 let exports;
 let received;
@@ -99,9 +99,10 @@ for (const [make, bytes, description] of [
   [() => [1, 2, 3], [1, 2, 3], "an Array of Numbers"],
   [() => ["1", true, null], [1, 1, 0], "an Array of coercible values"],
   [() => new Uint8ClampedArray([1, 255]), [1, 255], "a Uint8ClampedArray"],
-  [() => new Int8Array([1, 2]), [1, 2], "an Int8Array of non-negative values"],
-  [() => new Uint16Array([1, 255]), [1, 255], "a Uint16Array of in-range values"],
+  [() => new Int8Array([1, -1]), [1, 255], "an Int8Array (elements wrap)"],
+  [() => new Uint16Array([1, 256]), [1, 0], "a Uint16Array (elements wrap)"],
   [() => new Float64Array([1.9, 2.1]), [1, 2], "a Float64Array (elements truncate)"],
+  [() => [256, -1, 1.5, NaN, undefined], [0, 255, 1, 0, 0], "an Array of values that wrap or are 0"],
   [() => new Set([3, 4]), [3, 4], "a Set"],
   [() => (function* () { yield 5; yield 6; })(), [5, 6], "a generator"],
   [() => ({ *[Symbol.iterator]() { yield 7; } }), [7], "a custom iterable"],
@@ -114,13 +115,8 @@ for (const [make, bytes, description] of [
 }
 
 for (const [make, description] of [
-  [() => new Int8Array([-1]), "an Int8Array with a negative element"],
-  [() => new Uint16Array([256]), "a Uint16Array with an element above 255"],
-  [() => [256], "an Array with 256"],
-  [() => [-1], "an Array with -1"],
-  [() => [1.5, NaN], "an Array with NaN"],
-  [() => [undefined], "an Array with undefined"],
   [() => [1n], "an Array with a BigInt"],
+  [() => [Symbol()], "an Array with a Symbol"],
   [() => new ArrayBuffer(4), "an ArrayBuffer"],
   [() => new DataView(new ArrayBuffer(4)), "a DataView"],
   [() => "abc", "a string"],
@@ -149,7 +145,7 @@ promise_test(async () => {
   const visited = [];
   const iterable = {
     *[Symbol.iterator]() {
-      for (const v of [1, 300, 2]) {
+      for (const v of [1, 1n, 2]) {
         visited.push(v);
         yield v;
       }
@@ -157,7 +153,7 @@ promise_test(async () => {
   };
   const { roundtripBytes } = await componentExports("values/list-u8", { echoBytes: x => x, recv() {} });
   assert_throws_js(TypeError, () => roundtripBytes(iterable));
-  assert_array_equals(visited, [1, 300, 2], "iteration finishes before conversion");
+  assert_array_equals(visited, [1, 1n, 2], "iteration finishes before conversion");
 }, "list<u8>: the iterable is consumed before any element is converted");
 
 promise_test(async () => {
@@ -166,7 +162,7 @@ promise_test(async () => {
 }, "list<u8>: an import returning an Array is converted");
 
 for (const [value, description] of [
-  [[256], "an Array with 256"],
+  [[1n], "an Array with a BigInt"],
   [5, "a Number"],
   ["ab", "a string"],
   [undefined, "undefined"],

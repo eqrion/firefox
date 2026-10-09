@@ -42,12 +42,13 @@ promise_test(async () => {
 
 promise_test(async () => {
   const { resultParam } = await load();
-  assert_equals(resultParam(variant("Ok", 3)), 0);
-  assert_equals(resultParam(variant("Error", "x")), 1);
-  assert_equals(resultParam({ kind: "Ok", value: 1 }), 0, "any object with kind works");
-  assert_throws_js(TypeError, () => resultParam({ kind: "Err", value: "x" }));
+  assert_equals(resultParam(variant("ok", 3)), 0);
+  assert_equals(resultParam(variant("error", "x")), 1);
+  assert_equals(resultParam({ kind: "ok", value: 1 }), 0, "any object with kind works");
+  assert_throws_js(TypeError, () => resultParam({ kind: "err", value: "x" }));
+  assert_throws_js(TypeError, () => resultParam({ kind: "Ok", value: 1 }));
   assert_throws_js(TypeError, () => resultParam(3));
-}, "a result outside return position is a variant with kind Ok or Error");
+}, "a result outside return position is a variant with kind ok or error");
 
 promise_test(async () => {
   const { callFallible } = await load({ fallible: x => x + 1 });
@@ -70,7 +71,7 @@ promise_test(async () => {
 }, "a thrown value is converted to the error type");
 
 promise_test(async () => {
-  const { callFallibleU32 } = await load({ fallibleU32: () => { throw {}; } });
+  const { callFallibleU32 } = await load({ fallibleU32: () => { throw 1n; } });
   assert_traps(() => callFallibleU32());
 }, "a thrown value that cannot convert to the error type traps");
 
@@ -105,19 +106,27 @@ promise_test(async () => {
   const { callFallibleRecord } = await componentExports("functions/results-record", {
     fallibleRecord() { throw { code: 4 }; },
   });
-  assert_traps(() => callFallibleRecord());
-}, "a thrown object missing a required error field traps");
+  assert_component_error(() => callFallibleRecord(),
+                         record({ code: 4, message: "undefined" }), "callFallibleRecord()");
+}, "a thrown object missing an error field converts it from undefined");
 
 promise_test(async () => {
-  const { callNested } = await load({ nested: () => variant("Ok", 9) });
-  assert_value_equals(callNested(), variant("Ok", 9));
+  const { callFallibleRecord } = await componentExports("functions/results-record", {
+    fallibleRecord() { throw { code: 1n, message: "m" }; },
+  });
+  assert_traps(() => callFallibleRecord());
+}, "a thrown object with an unconvertible error field traps");
+
+promise_test(async () => {
+  const { callNested } = await load({ nested: () => variant("ok", 9) });
+  assert_value_equals(callNested(), variant("ok", 9));
   const { callNested: erroring } = await load({ nested: () => { throw "outer"; } });
   assert_component_error(() => erroring(), "outer", "callNested()");
 }, "only the outermost result is unwrapped; the inner one keeps its variant shape");
 
 promise_test(async () => {
-  const { callNested } = await load({ nested: () => ({ kind: "Error", value: "inner" }) });
-  assert_value_equals(callNested(), variant("Error", "inner"));
+  const { callNested } = await load({ nested: () => ({ kind: "error", value: "inner" }) });
+  assert_value_equals(callNested(), variant("error", "inner"));
 }, "an import returns a nested result as a variant object");
 
 promise_test(async () => {

@@ -158,7 +158,7 @@ another way.
   validation to accept the functions that use them, so rejecting them would
   reject every component with a `record` in its API.
 - `compileStreaming` and `instantiateStreaming` are out of scope.
-- Objects and errors created by a conversion belong to the conversion realm.
+- Objects and errors created by a conversion belong to the component realm.
 - `ToComponentValueList` consumes the whole iterable before converting any
   element, so that the canonical ABI can allocate the list up front. A failing
   element therefore locks down the instance.
@@ -166,7 +166,12 @@ another way.
 - The brand check for a guest class used as a host type import looks only at
   the class, so a disposed instance still passes.
 - `Symbol.dispose` on a guest resource class is named `[Symbol.dispose]`.
-- `constructor` and `prototype` member names are only reserved on exports.
+- A `[method]` or `[static]` export with a reserved class member name
+  (`constructor`, `prototype`, `name`, ...) is a `TypeError`, until the spec
+  gives such members a JS name on the exports object.
+- The `Symbol.dispose` of a host resource is read from its constructor's
+  `prototype`, and an option is "nested" only when it is the payload of an
+  option.
 - Each export declaration gets its own function object, even when two
   declarations name the same function.
 - ESM: `[get]`/`[set]` exports have no namespace binding, a named import

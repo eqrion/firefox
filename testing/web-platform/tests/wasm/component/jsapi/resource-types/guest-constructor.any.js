@@ -16,8 +16,8 @@ promise_test(async () => {
 }, "new invokes the [constructor] export with converted arguments");
 
 promise_test(async () => {
-  assert_throws_js(TypeError, () => new exports.Counter());
-}, "too few constructor arguments throw TypeError");
+  assert_equals(new exports.Counter().value(), 0);
+}, "missing constructor arguments are undefined");
 
 promise_test(async () => {
   assert_equals(new exports.Counter(1, 2, 3).value(), 1);
@@ -29,7 +29,7 @@ promise_test(async () => {
 }, "constructor arguments are converted with ToComponentValue");
 
 promise_test(async () => {
-  assert_throws_js(TypeError, () => new exports.Counter(-1));
+  assert_throws_js(TypeError, () => new exports.Counter(1n));
   assert_throws_js(TypeError, () => new exports.Counter(Symbol()));
 }, "constructor arguments that fail conversion throw TypeError");
 

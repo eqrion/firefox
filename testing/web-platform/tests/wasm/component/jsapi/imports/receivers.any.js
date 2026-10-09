@@ -70,8 +70,9 @@ promise_test(async () => {
     },
   });
   await componentExports("imports/receivers", { R: ctor });
-  assert_array_equals(log, ["ctor get prototype", "proto get m", "ctor get s"]);
-}, "a method is read from R.prototype and a static from R, in declaration order");
+  assert_array_equals(log, ["ctor get prototype", "proto get Symbol(Symbol.dispose)",
+                            "ctor get prototype", "proto get m", "ctor get s"]);
+}, "Symbol.dispose is read from R.prototype with the type, then a method from R.prototype and a static from R, in declaration order");
 
 promise_test(async () => {
   class Base { m(y) { return y + 100; } static s(z) { return z + 200; } }

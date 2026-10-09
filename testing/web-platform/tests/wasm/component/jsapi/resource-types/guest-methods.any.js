@@ -56,7 +56,7 @@ promise_test(async () => {
   const { create } = Counter;
   assert_equals(create(4).value(), 4, "statics do not need a this");
   assert_equals(Counter.create.call({}, 5).value(), 5, "statics ignore this");
-  assert_throws_js(TypeError, () => Counter.create(), "statics check arity");
+  assert_equals(Counter.create().value(), 0, "a missing static argument is undefined");
 }, "statics are plain functions on the class");
 
 promise_test(async () => {

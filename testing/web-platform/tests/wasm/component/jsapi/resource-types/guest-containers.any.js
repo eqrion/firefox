@@ -37,7 +37,7 @@ promise_test(async () => {
   const some = wrapOption(true);
   assert_true(some instanceof Counter);
   assert_equals(some.value(), 5);
-  assert_equals(wrapOption(false), null);
+  assert_equals(wrapOption(false), undefined);
   assert_equals(unwrapOption(null), 0xffff);
   assert_equals(unwrapOption(undefined), 0xffff);
   assert_equals(unwrapOption(some), 5);
@@ -74,10 +74,10 @@ promise_test(async () => {
   const { Counter, unwrapResult, dropCount } = exports;
   const counter = exports.make();
   const before = dropCount();
-  assert_equals(unwrapResult(variant("Ok", counter)), 0);
+  assert_equals(unwrapResult(variant("ok", counter)), 0);
   assert_equals(dropCount(), before + 1);
-  assert_equals(unwrapResult(variant("Error", 5)), 1005);
-  assert_throws_js(TypeError, () => unwrapResult(variant("Err", 5)), "case labels are ok and error");
+  assert_equals(unwrapResult(variant("error", 5)), 1005);
+  assert_throws_js(TypeError, () => unwrapResult(variant("Error", 5)), "case labels are ok and error");
   assert_throws_js(TypeError, () => unwrapResult(exports.make()), "a result parameter is not unwrapped");
 }, "result<own<R>, u32> as a parameter uses the variant shape");
 
@@ -99,17 +99,17 @@ promise_test(async () => {
   const { Counter, wrapVariant, unwrapVariant, dropCount } = exports;
   const full = wrapVariant(true);
   assert_equals(Object.getPrototypeOf(full), null);
-  assert_equals(full.kind, "Full");
+  assert_equals(full.kind, "full");
   assert_true(full.value instanceof Counter);
   assert_equals(full.value.value(), 9);
   const empty = wrapVariant(false);
-  assert_equals(empty.kind, "Empty");
+  assert_equals(empty.kind, "empty");
   assert_false("value" in empty);
   const before = dropCount();
   assert_equals(unwrapVariant(full), 9);
   assert_equals(dropCount(), before + 1);
   assert_equals(unwrapVariant(empty), 0xffff);
-  assert_equals(unwrapVariant({ kind: "Full", value: exports.make() }), 0);
+  assert_equals(unwrapVariant({ kind: "full", value: exports.make() }), 0);
 }, "variant with an own<R> payload");
 
 promise_test(async () => {

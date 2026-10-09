@@ -145,6 +145,7 @@ promise_test(async () => {
   });
   await componentExports("imports/accessors", withX({ R: ctor }));
   assert_array_equals(log.filter(e => !e.includes("getPrototypeOf")), [
+    "ctor get prototype", "proto get Symbol(Symbol.dispose)",
     "ctor get prototype", "proto getOwnPropertyDescriptor p",
     "ctor get prototype", "proto getOwnPropertyDescriptor p",
     "ctor getOwnPropertyDescriptor q",

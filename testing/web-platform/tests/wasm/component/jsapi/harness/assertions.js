@@ -164,8 +164,8 @@ function variant(kind, ...value) {
 const flags = record;
 
 // Deep structural equality for converted component values: prototypes must
-// match (null-prototype objects for record/variant/flags, Array, Map,
-// Uint8Array), numbers compare with Object.is so NaN and -0 are distinguished,
+// match (null-prototype objects for record/variant/flags, Array, Map, typed
+// arrays), numbers compare with Object.is so NaN and -0 are distinguished,
 // Map entries compare in insertion order.
 function assert_value_equals(actual, expected, description = "value") {
   if (typeof expected !== "object" || expected === null) {
@@ -180,8 +180,12 @@ function assert_value_equals(actual, expected, description = "value") {
   assert_equals(typeof actual, "object", `${description}: typeof`);
   assert_not_equals(actual, null, `${description}: null`);
   assert_equals(Object.getPrototypeOf(actual), Object.getPrototypeOf(expected), `${description}: prototype`);
-  if (expected instanceof Uint8Array) {
-    assert_array_equals(Array.from(actual), Array.from(expected), `${description}: bytes`);
+  if (ArrayBuffer.isView(expected)) {
+    assert_equals(actual.length, expected.length, `${description}: length`);
+    for (let i = 0; i < expected.length; i++) {
+      assert_true(Object.is(actual[i], expected[i]),
+                  `${description}[${i}]: expected ${format_value(expected[i])}, got ${format_value(actual[i])}`);
+    }
     return;
   }
   if (expected instanceof Map) {
