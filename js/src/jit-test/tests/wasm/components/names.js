@@ -178,11 +178,15 @@ invalidFuncName("WASI:http/handler", /unexpected uppercase/);
 invalidFuncName("wasi:HTTP/handler", /unexpected uppercase/);
 invalidFuncName("0wasi:http/handler", /start with a letter/);
 
-// The projection is required, and nesting is not supported.
+// The projection is required, and may be nested, but nested namespaces are not
+// supported.
 invalidFuncName("wasi:http", /expected projection/);
 invalidFuncName("wasi:http/", /ended unexpectedly/);
 invalidFuncName("wasi:http:types/handler", /nested namespaces/);
-invalidFuncName("wasi:http/types/handler", /nested projections/);
+validFuncName("wasi:http/types/handler");
+validFuncName("wasi:http/types/handler@1.0.0");
+invalidFuncName("wasi:http/types/", /ended unexpectedly/);
+invalidFuncName("wasi:http/types//handler", /invalid character/);
 
 // Annotations are not allowed.
 invalidFuncName("[method]wasi:http/handler", /invalid character/);

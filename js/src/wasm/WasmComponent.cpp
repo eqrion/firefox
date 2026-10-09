@@ -2009,12 +2009,43 @@ bool ComponentInstance::resolveBuiltin(JSContext* cx, const ComponentName& name,
                                        MutableHandleValue value) const {
   static constexpr std::string_view JSGlobal = "wasm:js/global";
   mozilla::Span<const char> bytes = name.name.utf8Bytes();
-  *isBuiltin = component_->jsGlobalBuiltin() &&
-               std::string_view(bytes.data(), bytes.size()) == JSGlobal;
-  if (*isBuiltin) {
-    value.setObject(*realm_->maybeGlobal());
+  std::string_view specifier(bytes.data(), bytes.size());
+  *isBuiltin = false;
+  if (!component_->jsGlobalBuiltin() || !specifier.starts_with(JSGlobal)) {
+    return true;
   }
-  return true;
+  std::string_view path = specifier.substr(JSGlobal.size());
+  if (!path.empty() && !path.starts_with('/')) {
+    return true;
+  }
+  *isBuiltin = true;
+
+  // `wasm:js/global/a/b` is `globalThis.a.b`.
+  value.setObject(*realm_->maybeGlobal());
+  if (path.empty()) {
+    return true;
+  }
+  path.remove_prefix(1);
+  while (true) {
+    size_t end = path.find('/');
+    std::string_view projection = path.substr(0, end);
+    RootedObject obj(cx, ToObject(cx, value));
+    if (!obj) {
+      return false;
+    }
+    JSAtom* atom = AtomizeUTF8Chars(cx, projection.data(), projection.length());
+    if (!atom) {
+      return false;
+    }
+    RootedId id(cx, AtomToId(atom));
+    if (!GetProperty(cx, obj, obj, id, value)) {
+      return false;
+    }
+    if (end == std::string_view::npos) {
+      return true;
+    }
+    path.remove_prefix(end + 1);
+  }
 }
 
 bool ComponentInstance::readImport(JSContext* cx, ComponentImportScope& scope,
