@@ -47,7 +47,7 @@ function instantiate(f) {
 // Exceptions from the import, and results that fail ToComponentValue, trap.
 for (const f of [
   () => { throw new Error("host"); },
-  () => -1,
+  () => 1n,
   () => ({ valueOf() { throw new Error("valueOf"); } }),
 ]) {
   const call = instantiate(f);

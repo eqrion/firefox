@@ -62,6 +62,5 @@ const logged = new Proxy({ name: "p", points: [] }, {
 roundtrip(logged);
 assertDeepEq(log, ["name", "points"]);
 
-// A field that is missing, even if it's present in kebab-case, is a TypeError.
-assertErrorMessage(() => roundtrip({ name: "p", points: [{ x: 1, "y-coord": 1 }] }),
-                   TypeError, /record field 'yCoord' is missing/);
+// A field that is missing, even if it's present in kebab-case, is undefined.
+assertEq(roundtrip({ name: "p", points: [{ x: 1, "y-coord": 1 }] }).points[0].yCoord, NaN);

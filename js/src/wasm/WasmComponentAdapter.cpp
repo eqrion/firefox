@@ -18,11 +18,13 @@
 #  include "builtin/String.h"
 #  include "js/CallAndConstruct.h"
 #  include "js/Conversions.h"
+#  include "js/experimental/TypedData.h"
 #  include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #  include "util/Unicode.h"
 #  include "vm/BigIntType.h"
 #  include "vm/ErrorObject.h"
 #  include "vm/JSFunction.h"
+#  include "vm/TypedArrayObject.h"
 #  include "wasm/WasmBinary.h"
 #  include "wasm/WasmBuiltinModule.h"
 #  include "wasm/WasmBuiltins.h"
@@ -557,6 +559,40 @@ static ScalarLayout GetScalarLayout(ComponentTypeKind kind) {
   }
 }
 
+// The class of the typed array that a list of scalars of type `kind` is
+// represented by, if it is represented by one.
+static mozilla::Maybe<Scalar::Type> ScalarListArrayType(
+    ComponentTypeKind kind) {
+  switch (kind) {
+    case ComponentTypeKind::S8:
+      return mozilla::Some(Scalar::Int8);
+    case ComponentTypeKind::U8:
+      return mozilla::Some(Scalar::Uint8);
+    case ComponentTypeKind::S16:
+      return mozilla::Some(Scalar::Int16);
+    case ComponentTypeKind::U16:
+      return mozilla::Some(Scalar::Uint16);
+    case ComponentTypeKind::S32:
+      return mozilla::Some(Scalar::Int32);
+    case ComponentTypeKind::U32:
+      return mozilla::Some(Scalar::Uint32);
+    case ComponentTypeKind::S64:
+      return mozilla::Some(Scalar::BigInt64);
+    case ComponentTypeKind::U64:
+      return mozilla::Some(Scalar::BigUint64);
+    case ComponentTypeKind::F32:
+      return mozilla::Some(Scalar::Float32);
+    case ComponentTypeKind::F64:
+      return mozilla::Some(Scalar::Float64);
+    default:
+      return mozilla::Nothing();
+  }
+}
+
+// The canonical ABI's canonical NaNs.
+static constexpr uint32_t CanonicalFloat32NaN = 0x7fc00000;
+static constexpr uint64_t CanonicalFloat64NaN = 0x7ff8000000000000;
+
 // State shared by the code converting the values of one adapter.
 struct AdapterContext {
   AdapterModuleBuilder& builder;
@@ -848,6 +884,13 @@ template <typename F>
   return f.localGet(array);
 }
 
+// Pushes undefined.
+[[nodiscard]] static bool EmitUndefined(AdapterContext& a) {
+  uint32_t global;
+  return a.builder.importValue(UndefinedHandleValue, &global) &&
+         a.f.globalGet(global);
+}
+
 // Pushes the JS name of a label.
 [[nodiscard]] static bool EmitName(AdapterContext& a,
                                    mozilla::Span<const char> label,
@@ -888,14 +931,11 @@ template <typename F>
     return false;
   }
   for (size_t i = 0; i < fields.length(); i++) {
-    // A missing field is only allowed for an option.
-    bool allowUndefined = fields[i].type.kind() == ComponentTypeKind::Option;
     uint32_t field;
     if (!f.addLocal(ValType(RefType::extern_()), &field) ||
         !f.localGet(jsValue) ||
         !EmitName(a, fields[i].name.utf8Bytes(), ComponentJSCase::Camel) ||
-        !f.i32Const(allowUndefined) || !f.callBuiltin(Id::CmGetField) ||
-        !f.localSet(field) ||
+        !f.callBuiltin(Id::CmGetField) || !f.localSet(field) ||
         !EmitToComponentValue(a, fields[i].type, field, fieldLocs[i])) {
       return false;
     }
@@ -959,9 +999,9 @@ static ScalarLayout GetFlagsLayout(const ComponentType& type) {
     // A missing label is false.
     if (!f.localGet(bits) || !f.localGet(jsValue) ||
         !EmitName(a, labels[i].utf8Bytes(), ComponentJSCase::Camel) ||
-        !f.i32Const(1) || !f.callBuiltin(Id::CmGetField) ||
-        !f.callBuiltin(Id::CmToBool) || !f.i32Const(int32_t(i)) ||
-        !f.op(Op::I32Shl) || !f.op(Op::I32Or) || !f.localSet(bits)) {
+        !f.callBuiltin(Id::CmGetField) || !f.callBuiltin(Id::CmToBool) ||
+        !f.i32Const(int32_t(i)) || !f.op(Op::I32Shl) || !f.op(Op::I32Or) ||
+        !f.localSet(bits)) {
       return false;
     }
   }
@@ -1014,22 +1054,23 @@ static ScalarLayout GetFlagsLayout(const ComponentType& type) {
 // JS.
 enum class VariantRepr {
   // An object with a `kind`, and a `value` if the case has a payload. This is
-  // for variants, results outside of return position, and options of options.
+  // for variants, results outside of return position, and options that are the
+  // payload of an option.
   Object,
-  // null, or the payload. This is for other options.
-  Nullable,
+  // undefined, or the payload. This is for other options.
+  Optional,
   // The case's label. This is for enums.
   Label,
 };
 
-static VariantRepr GetVariantRepr(const ComponentType& type) {
+// The representation of a variant-like type, which is `inOption` if it is the
+// payload of an option.
+static VariantRepr GetVariantRepr(const ComponentType& type, bool inOption) {
   switch (type.kind()) {
     case ComponentTypeKind::Enum:
       return VariantRepr::Label;
     case ComponentTypeKind::Option:
-      return type.asOption().kind() == ComponentTypeKind::Option
-                 ? VariantRepr::Object
-                 : VariantRepr::Nullable;
+      return inOption ? VariantRepr::Object : VariantRepr::Optional;
     default:
       return VariantRepr::Object;
   }
@@ -1172,13 +1213,48 @@ static ValueLoc GetPayloadLoc(const ComponentType& type, const ValueLoc& loc) {
   }
 }
 
+[[nodiscard]] static bool EmitToJSValueVariant(AdapterContext& a,
+                                               const ComponentType& type,
+                                               const ValueLoc& loc,
+                                               bool inOption);
+[[nodiscard]] static bool EmitToComponentValueVariant(AdapterContext& a,
+                                                      const ComponentType& type,
+                                                      uint32_t jsValue,
+                                                      const ValueLoc& loc,
+                                                      bool inOption);
+
+// ToJSValue for the payload of a case, which is `inOption` if the variant is an
+// option.
+[[nodiscard]] static bool EmitCaseToJSValue(AdapterContext& a,
+                                            const ComponentType& caseType,
+                                            const ValueLoc& loc,
+                                            bool inOption) {
+  if (inOption && caseType.kind() == ComponentTypeKind::Option) {
+    return EmitToJSValueVariant(a, caseType, loc, /*inOption=*/true);
+  }
+  return EmitToJSValue(a, caseType, loc);
+}
+
+[[nodiscard]] static bool EmitCaseToComponentValue(
+    AdapterContext& a, const ComponentType& caseType, uint32_t jsValue,
+    const ValueLoc& loc, bool inOption) {
+  if (inOption && caseType.kind() == ComponentTypeKind::Option) {
+    return EmitToComponentValueVariant(a, caseType, jsValue, loc,
+                                       /*inOption=*/true);
+  }
+  return EmitToComponentValue(a, caseType, jsValue, loc);
+}
+
 // ToJSValue for the payload of a case at `payloadLoc`, where `joinedTypes` are
-// the flat types of the payloads of all the cases.
-[[nodiscard]] static bool EmitPayloadToJSValue(
-    AdapterContext& a, const ComponentType& caseType,
-    const ValueLoc& payloadLoc, const ValTypeVector& joinedTypes) {
+// the flat types of the payloads of all the cases, and `inOption` is whether
+// the variant is an option.
+[[nodiscard]] static bool EmitPayloadToJSValue(AdapterContext& a,
+                                               const ComponentType& caseType,
+                                               const ValueLoc& payloadLoc,
+                                               const ValTypeVector& joinedTypes,
+                                               bool inOption) {
   if (payloadLoc.inMemory()) {
-    return EmitToJSValue(a, caseType, payloadLoc);
+    return EmitCaseToJSValue(a, caseType, payloadLoc, inOption);
   }
 
   AdapterFuncEncoder& f = a.f;
@@ -1195,7 +1271,7 @@ static ValueLoc GetPayloadLoc(const ComponentType& type, const ValueLoc& loc) {
       return false;
     }
   }
-  return EmitToJSValue(a, caseType, ValueLoc::flat(caseLocals));
+  return EmitCaseToJSValue(a, caseType, ValueLoc::flat(caseLocals), inOption);
 }
 
 // ToComponentValue for the payload of a case, if any, to `payloadLoc`. The
@@ -1203,9 +1279,10 @@ static ValueLoc GetPayloadLoc(const ComponentType& type, const ValueLoc& loc) {
 [[nodiscard]] static bool EmitPayloadToComponentValue(
     AdapterContext& a, const mozilla::Maybe<ComponentType>& caseType,
     uint32_t jsValue, const ValueLoc& payloadLoc,
-    const ValTypeVector& joinedTypes) {
+    const ValTypeVector& joinedTypes, bool inOption) {
   if (payloadLoc.inMemory()) {
-    return !caseType || EmitToComponentValue(a, *caseType, jsValue, payloadLoc);
+    return !caseType || EmitCaseToComponentValue(a, *caseType, jsValue,
+                                                 payloadLoc, inOption);
   }
 
   AdapterFuncEncoder& f = a.f;
@@ -1214,8 +1291,8 @@ static ValueLoc GetPayloadLoc(const ComponentType& type, const ValueLoc& loc) {
     FlatLocals caseLocals;
     if (!FlatTypes(*caseType, &caseTypes) ||
         !AddFlatLocals(f, caseTypes, &caseLocals) ||
-        !EmitToComponentValue(a, *caseType, jsValue,
-                              ValueLoc::flat(caseLocals))) {
+        !EmitCaseToComponentValue(a, *caseType, jsValue,
+                                  ValueLoc::flat(caseLocals), inOption)) {
       return false;
     }
     for (size_t i = 0; i < caseTypes.length(); i++) {
@@ -1301,10 +1378,12 @@ template <typename E, typename F, typename G>
   return f.op(Op::End) && emitDefault() && f.op(Op::End);
 }
 
-// ToJSValue for a variant-like type.
+// ToJSValue for a variant-like type, which is `inOption` if it is the payload
+// of an option.
 [[nodiscard]] static bool EmitToJSValueVariant(AdapterContext& a,
                                                const ComponentType& type,
-                                               const ValueLoc& loc) {
+                                               const ValueLoc& loc,
+                                               bool inOption) {
   using Id = BuiltinModuleFuncId;
   AdapterFuncEncoder& f = a.f;
   VariantCaseVector cases;
@@ -1315,23 +1394,25 @@ template <typename E, typename F, typename G>
       !f.addLocal(ValType(RefType::extern_()), &result)) {
     return false;
   }
-  VariantRepr repr = GetVariantRepr(type);
+  VariantRepr repr = GetVariantRepr(type, inOption);
+  bool isOption = type.kind() == ComponentTypeKind::Option;
   ValueLoc payloadLoc = GetPayloadLoc(type, loc);
   auto emitCase = [&](size_t i, uint32_t depth) {
     const VariantCase& c = cases[i];
     bool ok;
     switch (repr) {
       case VariantRepr::Object:
-        ok = EmitName(a, c.label, ComponentJSCase::Pascal) &&
-             (c.type
-                  ? EmitPayloadToJSValue(a, *c.type, payloadLoc, joinedTypes) &&
-                        f.i32Const(1)
-                  : f.refNullExtern() && f.i32Const(0)) &&
+        ok = EmitName(a, c.label, ComponentJSCase::Verbatim) &&
+             (c.type ? EmitPayloadToJSValue(a, *c.type, payloadLoc, joinedTypes,
+                                            isOption) &&
+                           f.i32Const(1)
+                     : f.refNullExtern() && f.i32Const(0)) &&
              f.callBuiltin(Id::CmNewVariant);
         break;
-      case VariantRepr::Nullable:
-        ok = c.type ? EmitPayloadToJSValue(a, *c.type, payloadLoc, joinedTypes)
-                    : f.refNullExtern();
+      case VariantRepr::Optional:
+        ok = c.type ? EmitPayloadToJSValue(a, *c.type, payloadLoc, joinedTypes,
+                                           isOption)
+                    : EmitUndefined(a);
         break;
       case VariantRepr::Label:
         ok = EmitName(a, c.label, ComponentJSCase::Verbatim);
@@ -1347,11 +1428,13 @@ template <typename E, typename F, typename G>
          f.localGet(result);
 }
 
-// ToComponentValue for a variant-like type.
+// ToComponentValue for a variant-like type, which is `inOption` if it is the
+// payload of an option.
 [[nodiscard]] static bool EmitToComponentValueVariant(AdapterContext& a,
                                                       const ComponentType& type,
                                                       uint32_t jsValue,
-                                                      const ValueLoc& loc) {
+                                                      const ValueLoc& loc,
+                                                      bool inOption) {
   using Id = BuiltinModuleFuncId;
   AdapterFuncEncoder& f = a.f;
   VariantCaseVector cases;
@@ -1363,15 +1446,15 @@ template <typename E, typename F, typename G>
     return false;
   }
 
-  VariantRepr repr = GetVariantRepr(type);
+  VariantRepr repr = GetVariantRepr(type, inOption);
   bool ok;
   switch (repr) {
     case VariantRepr::Object:
       ok = f.localGet(jsValue) &&
-           EmitCaseNames(a, cases, ComponentJSCase::Pascal) &&
+           EmitCaseNames(a, cases, ComponentJSCase::Verbatim) &&
            f.callBuiltin(Id::CmVariantCase);
       break;
-    case VariantRepr::Nullable:
+    case VariantRepr::Optional:
       ok = f.localGet(jsValue) && f.callBuiltin(Id::CmIsNullish) &&
            f.op(Op::I32Eqz);
       break;
@@ -1395,13 +1478,13 @@ template <typename E, typename F, typename G>
           !f.localGet(jsValue) ||
           !EmitName(a, mozilla::MakeStringSpan("value"),
                     ComponentJSCase::Verbatim) ||
-          !f.i32Const(1) || !f.callBuiltin(Id::CmGetField) ||
-          !f.localSet(payload)) {
+          !f.callBuiltin(Id::CmGetField) || !f.localSet(payload)) {
         return false;
       }
     }
-    return EmitPayloadToComponentValue(a, c.type, payload, payloadLoc,
-                                       joinedTypes) &&
+    return EmitPayloadToComponentValue(
+               a, c.type, payload, payloadLoc, joinedTypes,
+               type.kind() == ComponentTypeKind::Option) &&
            f.br(depth);
   };
   auto emitIndex = [&]() { return f.localGet(disc); };
@@ -1427,14 +1510,19 @@ template <typename E, typename F, typename G>
     return false;
   }
 
-  // A Uint8Array is copied directly into a list<u8>.
-  if (elemType.kind() == ComponentTypeKind::U8 &&
-      (!f.localGet(jsValue) || !f.callBuiltin(Id::CmIsUint8Array) ||
+  // A typed array of the list's scalar type is copied directly.
+  int32_t kind = int32_t(elemType.kind());
+  if (ScalarListArrayType(elemType.kind()) &&
+      (!f.localGet(jsValue) || !f.i32Const(kind) ||
+       !f.callBuiltin(Id::CmIsScalarArray) ||
        !f.block(Op::If, mozilla::Nothing()) || !f.localGet(jsValue) ||
-       !f.callBuiltin(Id::CmUint8ArrayLength) || !f.localSet(length) ||
-       !EmitAllocate(a, 1, length, ptr) || !f.localGet(jsValue) ||
-       !f.localGet(ptr) || !f.localGet(length) ||
-       !f.callBuiltin(Id::CmCopyBytes) || !f.br(1) || !f.op(Op::End))) {
+       !f.i32Const(kind) || !f.callBuiltin(Id::CmScalarArrayLength) ||
+       !f.localSet(length) || !f.localGet(length) ||
+       !f.i32Const(int32_t(elemSize)) || !f.op(Op::I32Mul) ||
+       !f.localSet(byteLength) ||
+       !EmitAllocate(a, int32_t(alignment), byteLength, ptr) ||
+       !f.localGet(jsValue) || !f.localGet(ptr) || !f.localGet(length) ||
+       !f.callBuiltin(Id::CmCopyScalars) || !f.br(1) || !f.op(Op::End))) {
     return false;
   }
 
@@ -1475,10 +1563,14 @@ template <typename E, typename F, typename G>
   AdapterFuncEncoder& f = a.f;
   const ComponentFixedListType& fixedList = type.asFixedList();
   uint32_t elemSize = CanonElemSize(fixedList.elemType);
+  ComponentTypeKind elemKind = fixedList.elemType.kind();
   uint32_t array, elem;
   if (!f.addLocal(ValType(RefType::extern_()), &array) ||
       !f.addLocal(ValType(RefType::extern_()), &elem) || !f.localGet(jsValue) ||
-      !f.i32Const(0) || !f.callBuiltin(Id::CmIterableToArray) ||
+      !(ScalarListArrayType(elemKind)
+            ? f.i32Const(int32_t(elemKind)) &&
+                  f.callBuiltin(Id::CmScalarListToArray)
+            : f.i32Const(0) && f.callBuiltin(Id::CmIterableToArray)) ||
       !f.localSet(array) || !f.localGet(array) ||
       !f.i32Const(int32_t(fixedList.length)) ||
       !f.callBuiltin(Id::CmCheckArrayLength)) {
@@ -1525,6 +1617,16 @@ template <typename E, typename F, typename G>
   AdapterFuncEncoder& f = a.f;
   const ComponentFixedListType& fixedList = type.asFixedList();
   uint32_t elemSize = CanonElemSize(fixedList.elemType);
+  ComponentTypeKind elemKind = fixedList.elemType.kind();
+  bool isScalarList = ScalarListArrayType(elemKind).isSome();
+
+  // A list of scalars in memory becomes a typed array of its elements.
+  if (loc.inMemory() && isScalarList) {
+    return f.localGet(loc.ptrLocal()) && f.i32Const(int32_t(loc.offset())) &&
+           f.op(Op::I32Add) && f.i32Const(int32_t(fixedList.length)) &&
+           f.i32Const(int32_t(elemKind)) && f.callBuiltin(Id::CmScalarListToJS);
+  }
+
   uint32_t array;
   if (!f.addLocal(ValType(RefType::extern_()), &array) ||
       !f.i32Const(int32_t(fixedList.length)) ||
@@ -1562,7 +1664,10 @@ template <typename E, typename F, typename G>
       return false;
     }
   }
-  return f.localGet(array);
+  // A flattened list of scalars becomes a typed array of its elements.
+  return f.localGet(array) &&
+         (!isScalarList || (f.i32Const(int32_t(elemKind)) &&
+                            f.callBuiltin(Id::CmArrayToScalarList)));
 }
 
 // A map is stored as a list of tuples of its key and value, and this is the
@@ -1627,7 +1732,7 @@ static MapEntryLayout GetMapEntryLayout(const ComponentMapType& map) {
            f.callBuiltin(Id::CmArrayGet) && f.localSet(entry) &&
            f.localGet(fromObject) && f.block(Op::If, mozilla::Nothing()) &&
            f.localGet(entry) && f.localSet(key) && f.localGet(jsValue) &&
-           f.localGet(key) && f.i32Const(1) && f.callBuiltin(Id::CmGetField) &&
+           f.localGet(key) && f.callBuiltin(Id::CmGetField) &&
            f.localSet(value) && f.op(Op::Else) && f.localGet(entry) &&
            f.i32Const(0) && f.callBuiltin(Id::CmIterableToArray) &&
            f.localSet(entry) && f.localGet(entry) && f.i32Const(2) &&
@@ -1685,10 +1790,11 @@ static MapEntryLayout GetMapEntryLayout(const ComponentMapType& map) {
   AdapterFuncEncoder& f = a.f;
   ComponentType elemType = type.asList();
 
-  // A list<u8> becomes a Uint8Array.
-  if (elemType.kind() == ComponentTypeKind::U8) {
+  // A list of scalars becomes a typed array.
+  if (ScalarListArrayType(elemType.kind())) {
     return EmitGetI32(f, loc, 0) && EmitGetI32(f, loc, 1) &&
-           f.callBuiltin(Id::CmBytesToJS);
+           f.i32Const(int32_t(elemType.kind())) &&
+           f.callBuiltin(Id::CmScalarListToJS);
   }
 
   uint32_t elemSize = CanonElemSize(elemType);
@@ -1757,7 +1863,8 @@ static MapEntryLayout GetMapEntryLayout(const ComponentMapType& map) {
     case ComponentTypeKind::Enum:
     case ComponentTypeKind::Option:
     case ComponentTypeKind::Result:
-      return EmitToComponentValueVariant(a, type, jsValue, loc);
+      return EmitToComponentValueVariant(a, type, jsValue, loc,
+                                         /*inOption=*/false);
     case ComponentTypeKind::Own:
     case ComponentTypeKind::Borrow:
       return f.ctx() && f.localGet(jsValue) &&
@@ -1816,7 +1923,7 @@ static MapEntryLayout GetMapEntryLayout(const ComponentMapType& map) {
     case ComponentTypeKind::Enum:
     case ComponentTypeKind::Option:
     case ComponentTypeKind::Result:
-      return EmitToJSValueVariant(a, type, loc);
+      return EmitToJSValueVariant(a, type, loc, /*inOption=*/false);
     case ComponentTypeKind::Own:
     case ComponentTypeKind::Borrow:
       return f.ctx() && EmitGetScalar(f, ComponentTypeKind::U32, loc) &&
@@ -1838,13 +1945,6 @@ static MapEntryLayout GetMapEntryLayout(const ComponentMapType& map) {
          f.i32Const(int32_t(CanonElemSize(type))) &&
          f.i32Const(int32_t(CanonAlignment(type))) &&
          f.callBuiltin(BuiltinModuleFuncId::CmCheckRange);
-}
-
-// Pushes undefined.
-[[nodiscard]] static bool EmitUndefined(AdapterContext& a) {
-  uint32_t global;
-  return a.builder.importValue(UndefinedHandleValue, &global) &&
-         a.f.globalGet(global);
 }
 
 // ToJSValue for a lifted function's result, into local `jsResult`. A `result`
@@ -1870,15 +1970,16 @@ static MapEntryLayout GetMapEntryLayout(const ComponentMapType& map) {
   auto emitIndex = [&]() { return EmitGetDiscriminant(f, 2, loc); };
   auto emitCase = [&](size_t i, uint32_t depth) {
     if (i == 0) {
-      return (resultType.type ? EmitPayloadToJSValue(a, *resultType.type,
-                                                     payloadLoc, joinedTypes)
-                              : EmitUndefined(a)) &&
+      return (resultType.type
+                  ? EmitPayloadToJSValue(a, *resultType.type, payloadLoc,
+                                         joinedTypes, /*inOption=*/false)
+                  : EmitUndefined(a)) &&
              f.localSet(jsResult) && f.br(depth);
     }
     return f.ctx() &&
            (resultType.errorType
                 ? EmitPayloadToJSValue(a, *resultType.errorType, payloadLoc,
-                                       joinedTypes) &&
+                                       joinedTypes, /*inOption=*/false) &&
                       f.i32Const(1)
                 : f.refNullExtern() && f.i32Const(0)) &&
            f.callBuiltin(Id::CmSetComponentError) && EmitUndefined(a) &&
@@ -1928,7 +2029,7 @@ template <typename F, typename G>
            f.i32Const(index) && f.localSet(disc) &&
            EmitSetDiscriminant(f, 2, loc, disc) &&
            EmitPayloadToComponentValue(a, caseType, payload, payloadLoc,
-                                       joinedTypes);
+                                       joinedTypes, /*inOption=*/false);
   };
 
   //   block $ok
@@ -2168,9 +2269,6 @@ static bool CallLiftedFunction(JSContext* cx, unsigned argc, Value* vp) {
   uint32_t numParams = params >> 1;
   bool takesSelf = params & 1;
   uint32_t numArgs = numParams - takesSelf;
-  if (!args.requireAtLeast(cx, "WebAssembly component function", numArgs)) {
-    return false;
-  }
 
   ComponentInstance& instance =
       callee.getExtendedSlot(LiftedFunctionSlot_Instance)
@@ -2191,7 +2289,7 @@ static bool CallLiftedFunction(JSContext* cx, unsigned argc, Value* vp) {
     adapterArgs[0].set(args.thisv());
   }
   for (uint32_t i = 0; i < numArgs; i++) {
-    adapterArgs[takesSelf + i].set(args[i]);
+    adapterArgs[takesSelf + i].set(args.get(i));
   }
 
   // A call that fails after entering the guest locks down the instance, even
@@ -2494,60 +2592,6 @@ static ComponentInstance& InstanceFromCtxRef(void* ctxRef) {
       .instance();
 }
 
-static const char* IntegerTypeName(ComponentTypeKind kind) {
-  switch (kind) {
-    case ComponentTypeKind::S8:
-      return "s8";
-    case ComponentTypeKind::U8:
-      return "u8";
-    case ComponentTypeKind::S16:
-      return "s16";
-    case ComponentTypeKind::U16:
-      return "u16";
-    case ComponentTypeKind::S32:
-      return "s32";
-    case ComponentTypeKind::U32:
-      return "u32";
-    case ComponentTypeKind::S64:
-      return "s64";
-    case ComponentTypeKind::U64:
-      return "u64";
-    default:
-      MOZ_CRASH("not an integer type");
-  }
-}
-
-static void IntegerRange(ComponentTypeKind kind, double* min, double* max) {
-  switch (kind) {
-    case ComponentTypeKind::S8:
-      *min = INT8_MIN;
-      *max = INT8_MAX;
-      return;
-    case ComponentTypeKind::U8:
-      *min = 0;
-      *max = UINT8_MAX;
-      return;
-    case ComponentTypeKind::S16:
-      *min = INT16_MIN;
-      *max = INT16_MAX;
-      return;
-    case ComponentTypeKind::U16:
-      *min = 0;
-      *max = UINT16_MAX;
-      return;
-    case ComponentTypeKind::S32:
-      *min = INT32_MIN;
-      *max = INT32_MAX;
-      return;
-    case ComponentTypeKind::U32:
-      *min = 0;
-      *max = UINT32_MAX;
-      return;
-    default:
-      MOZ_CRASH("not an integer type");
-  }
-}
-
 // The canonical ABI's lift_flat_signed and lift_flat_unsigned, which keep only
 // the bits of the type's width.
 static double LiftFlatInteger(int32_t value, ComponentTypeKind kind) {
@@ -2579,65 +2623,47 @@ static void* ExternRefForCompiledCode(JSContext* cx, HandleValue value) {
   return result.get().forCompiledCode();
 }
 
-static bool ReportBadInteger(JSContext* cx, ComponentTypeKind kind) {
-  JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
-                            JSMSG_WASM_COMPONENT_BAD_INTEGER,
-                            IntegerTypeName(kind));
-  return false;
+// Converts a JS value with one of the JS::ToInt8 family of conversions, for
+// the sign- or zero-extended bits of the result.
+template <typename T>
+static bool ToIntegerBits(JSContext* cx, HandleValue value,
+                          bool (*convert)(JSContext*, HandleValue, T*),
+                          uint64_t* bits) {
+  T n;
+  if (!convert(cx, value, &n)) {
+    return false;
+  }
+  *bits = uint64_t(n);
+  return true;
 }
 
 // The JS-API's ToComponentValueInteger, for the bits of the integer.
 static bool ToComponentValueInteger(JSContext* cx, HandleValue value,
                                     ComponentTypeKind kind, uint64_t* bits) {
-  bool is64 = kind == ComponentTypeKind::S64 || kind == ComponentTypeKind::U64;
-  if (is64 && value.isBigInt()) {
-    if (kind == ComponentTypeKind::S64) {
-      int64_t n;
-      if (!BigInt::isInt64(value.toBigInt(), &n)) {
-        return ReportBadInteger(cx, kind);
-      }
-      *bits = uint64_t(n);
-    } else {
-      if (!BigInt::isUint64(value.toBigInt(), bits)) {
-        return ReportBadInteger(cx, kind);
-      }
-    }
-    return true;
-  }
-
-  double number;
-  if (!ToNumber(cx, value, &number)) {
-    return false;
-  }
-  double truncated = std::trunc(number);
-  if (!std::isfinite(number)) {
-    return ReportBadInteger(cx, kind);
-  }
-
   switch (kind) {
-    case ComponentTypeKind::S64:
-      // The range is [-2^63, 2^63), and both bounds are exact doubles.
-      if (truncated < -9223372036854775808.0 ||
-          truncated >= 9223372036854775808.0) {
-        return ReportBadInteger(cx, kind);
-      }
-      *bits = uint64_t(int64_t(truncated));
-      return true;
-    case ComponentTypeKind::U64:
-      if (truncated < 0 || truncated >= 18446744073709551616.0) {
-        return ReportBadInteger(cx, kind);
-      }
-      *bits = uint64_t(truncated);
-      return true;
-    default: {
-      double min, max;
-      IntegerRange(kind, &min, &max);
-      if (truncated < min || truncated > max) {
-        return ReportBadInteger(cx, kind);
-      }
-      *bits = uint64_t(int64_t(truncated));
+    case ComponentTypeKind::S8:
+      return ToIntegerBits(cx, value, JS::ToInt8, bits);
+    case ComponentTypeKind::U8:
+      return ToIntegerBits(cx, value, JS::ToUint8, bits);
+    case ComponentTypeKind::S16:
+      return ToIntegerBits(cx, value, JS::ToInt16, bits);
+    case ComponentTypeKind::U16:
+      return ToIntegerBits(cx, value, JS::ToUint16, bits);
+    case ComponentTypeKind::S32:
+      return ToIntegerBits(cx, value, JS::ToInt32, bits);
+    case ComponentTypeKind::U32:
+      return ToIntegerBits(cx, value, JS::ToUint32, bits);
+    case ComponentTypeKind::S64: {
+      int64_t n;
+      JS_TRY_VAR_OR_RETURN_FALSE(cx, n, ToBigInt64(cx, value));
+      *bits = uint64_t(n);
       return true;
     }
+    case ComponentTypeKind::U64:
+      JS_TRY_VAR_OR_RETURN_FALSE(cx, *bits, ToBigUint64(cx, value));
+      return true;
+    default:
+      MOZ_CRASH("not an integer type");
   }
 }
 
@@ -2834,12 +2860,9 @@ int32_t wasm::CmCheckRange(Instance* instance, int32_t ptr, int32_t count,
   return 0;
 }
 
-void* wasm::CmIterableToArray(Instance* instance, void* valueRef,
-                              int32_t elemSize) {
-  MOZ_ASSERT(SASigCmIterableToArray.failureMode ==
-             FailureMode::FailOnInvalidRef);
-  JSContext* cx = instance->cx();
-  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+// The body of CmIterableToArray.
+static void* IterableToArrayRef(JSContext* cx, HandleValue value,
+                                uint32_t elemSize) {
   if (!value.isObject()) {
     JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_NOT_ITERABLE,
                               "value");
@@ -2850,13 +2873,22 @@ void* wasm::CmIterableToArray(Instance* instance, void* valueRef,
     return AnyRef::invalid().forCompiledCode();
   }
   // The list's size in bytes must fit in a 32-bit memory.
-  if (uint64_t(array->length()) * uint32_t(elemSize) > UINT32_MAX) {
+  if (uint64_t(array->length()) * elemSize > UINT32_MAX) {
     JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                               JSMSG_WASM_COMPONENT_LIST_TOO_LONG);
     return AnyRef::invalid().forCompiledCode();
   }
   RootedValue arrayValue(cx, ObjectValue(*array));
   return ExternRefForCompiledCode(cx, arrayValue);
+}
+
+void* wasm::CmIterableToArray(Instance* instance, void* valueRef,
+                              int32_t elemSize) {
+  MOZ_ASSERT(SASigCmIterableToArray.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  return IterableToArrayRef(cx, value, uint32_t(elemSize));
 }
 
 static ArrayObject& ArrayFromRef(void* arrayRef) {
@@ -2921,8 +2953,7 @@ int32_t wasm::CmCheckObject(Instance* instance, void* valueRef) {
   return 0;
 }
 
-void* wasm::CmGetField(Instance* instance, void* objectRef, void* nameRef,
-                       int32_t allowUndefined) {
+void* wasm::CmGetField(Instance* instance, void* objectRef, void* nameRef) {
   MOZ_ASSERT(SASigCmGetField.failureMode == FailureMode::FailOnInvalidRef);
   JSContext* cx = instance->cx();
   RootedObject obj(cx, &AnyRef::fromCompiledCode(objectRef).toJSObject());
@@ -2931,16 +2962,6 @@ void* wasm::CmGetField(Instance* instance, void* objectRef, void* nameRef,
   RootedValue value(cx);
   if (!ToPropertyKey(cx, nameValue, &name) ||
       !GetProperty(cx, obj, obj, name, &value)) {
-    return AnyRef::invalid().forCompiledCode();
-  }
-  if (value.isUndefined() && !allowUndefined) {
-    UniqueChars nameChars =
-        IdToPrintableUTF8(cx, name, IdToPrintableBehavior::IdIsIdentifier);
-    if (nameChars) {
-      JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
-                               JSMSG_WASM_COMPONENT_MISSING_FIELD,
-                               nameChars.get());
-    }
     return AnyRef::invalid().forCompiledCode();
   }
   return ExternRefForCompiledCode(cx, value);
@@ -3184,52 +3205,106 @@ int32_t wasm::CmIsNullish(Instance* instance, void* valueRef) {
   return AnyRef::fromCompiledCode(valueRef).toJSValue().isNullOrUndefined();
 }
 
-void* wasm::CmBytesToJS(Instance* instance, int32_t ptr, int32_t length) {
-  MOZ_ASSERT(SASigCmBytesToJS.failureMode == FailureMode::FailOnInvalidRef);
+static JSObject* NewScalarArray(JSContext* cx, Scalar::Type type,
+                                size_t length) {
+  switch (type) {
+#  define NEW_ARRAY(ExternalType, NativeType, Name) \
+    case Scalar::Name:                              \
+      return JS_New##Name##Array(cx, length);
+    JS_FOR_EACH_TYPED_ARRAY(NEW_ARRAY)
+#  undef NEW_ARRAY
+    default:
+      MOZ_CRASH("not a typed array type");
+  }
+}
+
+static JSObject* NewScalarArrayFromArray(JSContext* cx, Scalar::Type type,
+                                         HandleObject array) {
+  switch (type) {
+#  define NEW_ARRAY(ExternalType, NativeType, Name) \
+    case Scalar::Name:                              \
+      return JS_New##Name##ArrayFromArray(cx, array);
+    JS_FOR_EACH_TYPED_ARRAY(NEW_ARRAY)
+#  undef NEW_ARRAY
+    default:
+      MOZ_CRASH("not a typed array type");
+  }
+}
+
+// Replaces NaNs with the canonical NaN, as the canonical ABI does when it
+// loads a float.
+template <typename T, typename Bits>
+static void CanonicalizeNaNs(T* elems, size_t length, Bits canonicalNaN) {
+  for (size_t i = 0; i < length; i++) {
+    if (std::isnan(elems[i])) {
+      elems[i] = mozilla::BitwiseCast<T>(canonicalNaN);
+    }
+  }
+}
+
+void* wasm::CmScalarListToJS(Instance* instance, int32_t ptr, int32_t length,
+                             int32_t kind) {
+  MOZ_ASSERT(SASigCmScalarListToJS.failureMode ==
+             FailureMode::FailOnInvalidRef);
   JSContext* cx = instance->cx();
-  const uint8_t* src =
-      GetMemoryRange(instance, uint32_t(ptr), uint32_t(length));
+  Scalar::Type type = *ScalarListArrayType(ComponentTypeKind(kind));
+  size_t elemSize = Scalar::byteSize(type);
+  uint64_t byteLength = uint64_t(uint32_t(length)) * elemSize;
+  if (!CheckAlignment(instance, uint32_t(ptr), elemSize)) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  const uint8_t* src = GetMemoryRange(instance, uint32_t(ptr), byteLength);
   if (!src) {
     return AnyRef::invalid().forCompiledCode();
   }
-  if (length < 0) {
-    ReportOutOfMemory(cx);
-    return AnyRef::invalid().forCompiledCode();
-  }
   // Memory is not moved by GC, so `src` stays valid while allocating.
-  Rooted<TypedArrayObject*> array(cx, NewUint8ArrayWithLength(cx, length));
-  if (!array) {
+  JSObject* obj = NewScalarArray(cx, type, uint32_t(length));
+  if (!obj) {
     return AnyRef::invalid().forCompiledCode();
   }
-  memcpy(array->dataPointerUnshared(), src, length);
-  RootedValue value(cx, ObjectValue(*array));
+  TypedArrayObject& array = obj->as<TypedArrayObject>();
+  void* dst = array.dataPointerUnshared();
+  memcpy(dst, src, byteLength);
+  if (type == Scalar::Float32) {
+    CanonicalizeNaNs(static_cast<float*>(dst), uint32_t(length),
+                     CanonicalFloat32NaN);
+  } else if (type == Scalar::Float64) {
+    CanonicalizeNaNs(static_cast<double*>(dst), uint32_t(length),
+                     CanonicalFloat64NaN);
+  }
+  RootedValue value(cx, ObjectValue(array));
   return ExternRefForCompiledCode(cx, value);
 }
 
-static TypedArrayObject* AsUint8Array(const Value& value) {
+// Gets a value as a typed array of the given type, or null.
+static TypedArrayObject* AsScalarArray(const Value& value, int32_t kind) {
   if (!value.isObject() || !value.toObject().is<TypedArrayObject>()) {
     return nullptr;
   }
   TypedArrayObject& array = value.toObject().as<TypedArrayObject>();
-  return array.type() == Scalar::Uint8 ? &array : nullptr;
+  return array.type() == *ScalarListArrayType(ComponentTypeKind(kind))
+             ? &array
+             : nullptr;
 }
 
-int32_t wasm::CmIsUint8Array(Instance* instance, void* valueRef) {
-  MOZ_ASSERT(SASigCmIsUint8Array.failureMode == FailureMode::Infallible);
-  return !!AsUint8Array(AnyRef::fromCompiledCode(valueRef).toJSValue());
+int32_t wasm::CmIsScalarArray(Instance* instance, void* valueRef,
+                              int32_t kind) {
+  MOZ_ASSERT(SASigCmIsScalarArray.failureMode == FailureMode::Infallible);
+  return !!AsScalarArray(AnyRef::fromCompiledCode(valueRef).toJSValue(), kind);
 }
 
-// Gets the length of a Uint8Array, or throws if its buffer is detached or it
-// is out of bounds.
-static bool GetUint8ArrayLength(JSContext* cx, TypedArrayObject* array,
-                                uint32_t* length) {
+// Gets the length of a typed array, or throws if its buffer is detached, it is
+// out of bounds, or its elements wouldn't fit in a 32-bit memory.
+static bool GetScalarArrayLength(JSContext* cx, TypedArrayObject* array,
+                                 uint32_t* length) {
   mozilla::Maybe<size_t> maybeLength = array->length();
   if (!maybeLength) {
     JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                               JSMSG_TYPED_ARRAY_DETACHED);
     return false;
   }
-  if (*maybeLength > INT32_MAX) {
+  if (*maybeLength > INT32_MAX ||
+      uint64_t(*maybeLength) * array->bytesPerElement() > UINT32_MAX) {
     JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                               JSMSG_WASM_COMPONENT_LIST_TOO_LONG);
     return false;
@@ -3238,28 +3313,31 @@ static bool GetUint8ArrayLength(JSContext* cx, TypedArrayObject* array,
   return true;
 }
 
-int32_t wasm::CmUint8ArrayLength(Instance* instance, void* valueRef) {
-  MOZ_ASSERT(SASigCmUint8ArrayLength.failureMode == FailureMode::FailOnNegI32);
+int32_t wasm::CmScalarArrayLength(Instance* instance, void* valueRef,
+                                  int32_t kind) {
+  MOZ_ASSERT(SASigCmScalarArrayLength.failureMode == FailureMode::FailOnNegI32);
   uint32_t length;
-  if (!GetUint8ArrayLength(
+  if (!GetScalarArrayLength(
           instance->cx(),
-          AsUint8Array(AnyRef::fromCompiledCode(valueRef).toJSValue()),
+          AsScalarArray(AnyRef::fromCompiledCode(valueRef).toJSValue(), kind),
           &length)) {
     return -1;
   }
   return int32_t(length);
 }
 
-int32_t wasm::CmCopyBytes(Instance* instance, void* valueRef, int32_t ptr,
-                          int32_t length) {
-  MOZ_ASSERT(SASigCmCopyBytes.failureMode == FailureMode::FailOnNegI32);
+int32_t wasm::CmCopyScalars(Instance* instance, void* valueRef, int32_t ptr,
+                            int32_t length) {
+  MOZ_ASSERT(SASigCmCopyScalars.failureMode == FailureMode::FailOnNegI32);
   JSContext* cx = instance->cx();
-  TypedArrayObject* array =
-      AsUint8Array(AnyRef::fromCompiledCode(valueRef).toJSValue());
+  TypedArrayObject& array = AnyRef::fromCompiledCode(valueRef)
+                                .toJSValue()
+                                .toObject()
+                                .as<TypedArrayObject>();
 
   // realloc can run JS that changes the array after its length was read.
   uint32_t currentLength;
-  if (!GetUint8ArrayLength(cx, array, &currentLength)) {
+  if (!GetScalarArrayLength(cx, &array, &currentLength)) {
     return -1;
   }
   if (currentLength != uint32_t(length)) {
@@ -3267,13 +3345,62 @@ int32_t wasm::CmCopyBytes(Instance* instance, void* valueRef, int32_t ptr,
                               JSMSG_WASM_COMPONENT_BAD_LENGTH);
     return -1;
   }
-  uint8_t* dst = GetMemoryRange(instance, uint32_t(ptr), uint32_t(length));
+  size_t elemSize = array.bytesPerElement();
+  uint64_t byteLength = uint64_t(uint32_t(length)) * elemSize;
+  if (!CheckAlignment(instance, uint32_t(ptr), elemSize)) {
+    return -1;
+  }
+  uint8_t* dst = GetMemoryRange(instance, uint32_t(ptr), byteLength);
   if (!dst) {
     return -1;
   }
   // The array could be a view of the memory itself.
-  memmove(dst, array->dataPointerEither().unwrap(), length);
+  memmove(dst, array.dataPointerEither().unwrap(), byteLength);
   return 0;
+}
+
+void* wasm::CmScalarListToArray(Instance* instance, void* valueRef,
+                                int32_t kind) {
+  MOZ_ASSERT(SASigCmScalarListToArray.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  Rooted<TypedArrayObject*> typedArray(cx, AsScalarArray(value, kind));
+  if (!typedArray) {
+    return IterableToArrayRef(cx, value, 0);
+  }
+  uint32_t length;
+  if (!GetScalarArrayLength(cx, typedArray, &length)) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  Rooted<ArrayObject*> array(cx, NewDenseFullyAllocatedArray(cx, length));
+  if (!array) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue elem(cx);
+  for (uint32_t i = 0; i < length; i++) {
+    if (!GetElement(cx, typedArray, typedArray, i, &elem) ||
+        !DefineDataElement(cx, array, i, elem)) {
+      return AnyRef::invalid().forCompiledCode();
+    }
+  }
+  RootedValue arrayValue(cx, ObjectValue(*array));
+  return ExternRefForCompiledCode(cx, arrayValue);
+}
+
+void* wasm::CmArrayToScalarList(Instance* instance, void* arrayRef,
+                                int32_t kind) {
+  MOZ_ASSERT(SASigCmArrayToScalarList.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedObject array(cx, &ArrayFromRef(arrayRef));
+  JSObject* typedArray = NewScalarArrayFromArray(
+      cx, *ScalarListArrayType(ComponentTypeKind(kind)), array);
+  if (!typedArray) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue value(cx, ObjectValue(*typedArray));
+  return ExternRefForCompiledCode(cx, value);
 }
 
 void* wasm::CmToString(Instance* instance, void* valueRef) {
@@ -3578,6 +3705,27 @@ int32_t wasm::CmResourceRep(Instance* instance, void* ctxRef, int32_t handle,
   return 0;
 }
 
+// Calls the disposer of an imported resource type, if any, for a dropped own
+// handle. Dropping is infallible, so an exception thrown by the disposer traps.
+static bool CallHostResourceDisposer(JSContext* cx,
+                                     const ComponentInstance& instance,
+                                     int32_t resourceType, HandleValue value) {
+  RootedValue disposer(
+      cx, ObjectOrNullValue(instance.hostResourceDisposer(resourceType)));
+  if (disposer.isNull()) {
+    return true;
+  }
+  RootedValue rval(cx);
+  if (Call(cx, disposer, value, &rval)) {
+    return true;
+  }
+  if (cx->isExceptionPending()) {
+    cx->clearPendingException();
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_DISPOSE_EXCEPTION);
+  }
+  return false;
+}
+
 int32_t wasm::CmResourceDrop(Instance* instance, void* ctxRef, int32_t handle,
                              int32_t resourceType) {
   MOZ_ASSERT(SASigCmResourceDrop.failureMode == FailureMode::FailOnNegI32);
@@ -3601,6 +3749,12 @@ int32_t wasm::CmResourceDrop(Instance* instance, void* ctxRef, int32_t handle,
     MOZ_ASSERT(removed.borrowScope < componentInstance.callScopeDepth());
     componentInstance.callScope(removed.borrowScope).numBorrows--;
     return 0;
+  }
+  if (componentInstance.hostResourceCtor(resourceType)) {
+    RootedValue value(cx, removed.hostValue);
+    return CallHostResourceDisposer(cx, componentInstance, resourceType, value)
+               ? 0
+               : -1;
   }
   componentInstance.setScratch(uint32_t(removed.rep));
   return 1;

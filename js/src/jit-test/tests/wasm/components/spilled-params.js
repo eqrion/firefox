@@ -70,7 +70,7 @@ const f32Params = Array.from({ length: 14 }, (_, i) => `(param "f${i}" f32)`).jo
 
   // Arguments are converted after the params are allocated, so a failing
   // conversion locks down the instance.
-  assertErrorMessage(() => first(...args.slice(0, 16), -1), TypeError, /./);
+  assertErrorMessage(() => first(...args.slice(0, 16), 1n), TypeError, /./);
   assertErrorMessage(() => first(...args), WebAssembly.RuntimeError,
                      /locked down/);
 }

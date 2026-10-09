@@ -1792,6 +1792,7 @@ void ComponentInstance::tracePrivate(JSTracer* trc) {
   TraceEdge(trc, &pendingErrorData_, "component pending error data");
   handles_.trace(trc);
   hostResourceCtors_.trace(trc);
+  hostResourceDisposers_.trace(trc);
   guestResourceClasses_.trace(trc);
   guestResourcePrototypes_.trace(trc);
   guestResourceConstructors_.trace(trc);
@@ -1981,6 +1982,7 @@ bool ComponentInstance::readImports(JSContext* cx, HandleObject importObj) {
   size_t numResourceTypes = component_->resourceTypes().length();
   if (!importValues_.resize(component_->numImportedItems()) ||
       !hostResourceCtors_.resize(numResourceTypes) ||
+      !hostResourceDisposers_.resize(numResourceTypes) ||
       !guestResourceClasses_.resize(numResourceTypes) ||
       !guestResourcePrototypes_.resize(numResourceTypes) ||
       !guestResourceConstructors_.resize(numResourceTypes) ||
@@ -2002,14 +2004,48 @@ bool ComponentInstance::readImports(JSContext* cx, HandleObject importObj) {
   return true;
 }
 
-JSObject* ComponentInstance::resolveBuiltin(const ComponentName& name) const {
+bool ComponentInstance::resolveBuiltin(JSContext* cx, const ComponentName& name,
+                                       bool* isBuiltin,
+                                       MutableHandleValue value) const {
   static constexpr std::string_view JSGlobal = "wasm:js/global";
   mozilla::Span<const char> bytes = name.name.utf8Bytes();
-  if (component_->jsGlobalBuiltin() &&
-      std::string_view(bytes.data(), bytes.size()) == JSGlobal) {
-    return realm_->maybeGlobal();
+  std::string_view specifier(bytes.data(), bytes.size());
+  *isBuiltin = false;
+  if (!component_->jsGlobalBuiltin() || !specifier.starts_with(JSGlobal)) {
+    return true;
   }
-  return nullptr;
+  std::string_view path = specifier.substr(JSGlobal.size());
+  if (!path.empty() && !path.starts_with('/')) {
+    return true;
+  }
+  *isBuiltin = true;
+
+  // `wasm:js/global/a/b` is `globalThis.a.b`.
+  value.setObject(*realm_->maybeGlobal());
+  if (path.empty()) {
+    return true;
+  }
+  path.remove_prefix(1);
+  while (true) {
+    size_t end = path.find('/');
+    std::string_view projection = path.substr(0, end);
+    RootedObject obj(cx, ToObject(cx, value));
+    if (!obj) {
+      return false;
+    }
+    JSAtom* atom = AtomizeUTF8Chars(cx, projection.data(), projection.length());
+    if (!atom) {
+      return false;
+    }
+    RootedId id(cx, AtomToId(atom));
+    if (!GetProperty(cx, obj, obj, id, value)) {
+      return false;
+    }
+    if (end == std::string_view::npos) {
+      return true;
+    }
+    path.remove_prefix(end + 1);
+  }
 }
 
 bool ComponentInstance::readImport(JSContext* cx, ComponentImportScope& scope,
@@ -2052,8 +2088,14 @@ bool ComponentInstance::readImport(JSContext* cx, ComponentImportScope& scope,
   RootedValue value(cx);
   RootedValue receiver(cx);
   RootedObject lookupTarget(cx, scope.object);
-  if (attrs.contains(Attr::Constructor) || attrs.contains(Attr::Method) ||
-      attrs.contains(Attr::Static)) {
+  bool isBuiltin = false;
+  if (scope.resolveBuiltins && !resolveBuiltin(cx, name, &isBuiltin, &value)) {
+    return false;
+  }
+  if (isBuiltin) {
+    lookupTarget = nullptr;
+  } else if (attrs.contains(Attr::Constructor) ||
+             attrs.contains(Attr::Method) || attrs.contains(Attr::Static)) {
     RootedObject ctor(
         cx,
         hostResourceCtors_[scope.resourceType(ComponentResourceLabelOf(name))]);
@@ -2079,10 +2121,6 @@ bool ComponentInstance::readImport(JSContext* cx, ComponentImportScope& scope,
       lookupTarget = &proto.toObject();
       callKind = CallKind::CallWithFirstArgAsReceiver;
     }
-  } else if (JSObject* builtin =
-                 scope.resolveBuiltins ? resolveBuiltin(name) : nullptr) {
-    value.setObject(*builtin);
-    lookupTarget = nullptr;
   } else if (!scope.object) {
     JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
                              JSMSG_WASM_BAD_IMPORT_ARG);
@@ -2106,7 +2144,26 @@ bool ComponentInstance::readImport(JSContext* cx, ComponentImportScope& scope,
     if (!IsCallable(value)) {
       return ReportBadImportType(cx, jsName, "constructor");
     }
-    hostResourceCtors_[*resourceType] = &value.toObject();
+    RootedObject ctor(cx, &value.toObject());
+    hostResourceCtors_[*resourceType] = ctor;
+
+    // The disposer is captured now, and called when a resource is dropped.
+    RootedValue proto(cx);
+    if (!GetProperty(cx, ctor, ctor, cx->names().prototype, &proto)) {
+      return false;
+    }
+    if (proto.isObject()) {
+      RootedObject protoObj(cx, &proto.toObject());
+      RootedId disposeId(cx,
+                         PropertyKey::Symbol(cx->wellKnownSymbols().dispose));
+      RootedValue dispose(cx);
+      if (!GetProperty(cx, protoObj, protoObj, disposeId, &dispose)) {
+        return false;
+      }
+      if (IsCallable(dispose)) {
+        hostResourceDisposers_[*resourceType] = &dispose.toObject();
+      }
+    }
     return true;
   }
 
@@ -2892,9 +2949,12 @@ bool ComponentInstance::createGuestResourceClasses(
     bool isMethod = attrs.contains(Attr::Method);
     RootedObject target(cx, isMethod ? guestResourcePrototypes_[resourceType]
                                      : guestResourceClasses_[resourceType]);
-    PropertyName* reserved =
-        isMethod ? cx->names().constructor : cx->names().prototype;
-    if (name == reserved) {
+    // TODO(wasm-cm): The JS-API exports members with these names on the
+    // exports object instead, once it gives them a JS name there.
+    if (name == cx->names().proto_ || name == cx->names().constructor ||
+        name == cx->names().prototype || name == cx->names().arguments ||
+        name == cx->names().caller || name == cx->names().name ||
+        name == cx->names().length) {
       JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                                 JSMSG_WASM_COMPONENT_RESERVED_MEMBER);
       return false;

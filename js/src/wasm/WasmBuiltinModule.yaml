@@ -810,14 +810,13 @@
 - op: CmGetField
   symbolic_address:
     name: CmGetField
-    type: Args_General_GeneralGeneralGeneralInt32
+    type: Args_General3
     needs_thunk: true
   entry: CmGetField
   export: cmGetField
   params:
     - 'externref'
     - 'externref'
-    - 'i32'
   result: 'externref'
   fail_mode: FailOnInvalidRef
   uses_memory: false
@@ -944,58 +943,89 @@
   fail_mode: Infallible
   uses_memory: false
 
-- op: CmBytesToJS
+- op: CmScalarListToJS
   symbolic_address:
-    name: CmBytesToJS
-    type: Args_General_GeneralInt32Int32
+    name: CmScalarListToJS
+    type: Args_General_GeneralInt32Int32Int32
     needs_thunk: true
-  entry: CmBytesToJS
-  export: cmBytesToJS
+  entry: CmScalarListToJS
+  export: cmScalarListToJS
   params:
+    - 'i32'
     - 'i32'
     - 'i32'
   result: 'externref'
   fail_mode: FailOnInvalidRef
   uses_memory: false
 
-- op: CmIsUint8Array
+- op: CmIsScalarArray
   symbolic_address:
-    name: CmIsUint8Array
-    type: Args_Int32_GeneralGeneral
+    name: CmIsScalarArray
+    type: Args_Int32_GeneralGeneralInt32
     needs_thunk: true
-  entry: CmIsUint8Array
-  export: cmIsUint8Array
+  entry: CmIsScalarArray
+  export: cmIsScalarArray
   params:
     - 'externref'
+    - 'i32'
   result: 'i32'
   fail_mode: Infallible
   uses_memory: false
 
-- op: CmUint8ArrayLength
+- op: CmScalarArrayLength
   symbolic_address:
-    name: CmUint8ArrayLength
-    type: Args_Int32_GeneralGeneral
+    name: CmScalarArrayLength
+    type: Args_Int32_GeneralGeneralInt32
     needs_thunk: true
-  entry: CmUint8ArrayLength
-  export: cmUint8ArrayLength
+  entry: CmScalarArrayLength
+  export: cmScalarArrayLength
   params:
     - 'externref'
+    - 'i32'
   result: 'i32'
   fail_mode: FailOnNegI32
   uses_memory: false
 
-- op: CmCopyBytes
+- op: CmCopyScalars
   symbolic_address:
-    name: CmCopyBytes
+    name: CmCopyScalars
     type: Args_Int32_GeneralGeneralInt32Int32
     needs_thunk: true
-  entry: CmCopyBytes
-  export: cmCopyBytes
+  entry: CmCopyScalars
+  export: cmCopyScalars
   params:
     - 'externref'
     - 'i32'
     - 'i32'
   fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: CmScalarListToArray
+  symbolic_address:
+    name: CmScalarListToArray
+    type: Args_General_GeneralGeneralInt32
+    needs_thunk: true
+  entry: CmScalarListToArray
+  export: cmScalarListToArray
+  params:
+    - 'externref'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: CmArrayToScalarList
+  symbolic_address:
+    name: CmArrayToScalarList
+    type: Args_General_GeneralGeneralInt32
+    needs_thunk: true
+  entry: CmArrayToScalarList
+  export: cmArrayToScalarList
+  params:
+    - 'externref'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
   uses_memory: false
 
 - op: CmToString

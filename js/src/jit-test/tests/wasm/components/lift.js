@@ -28,8 +28,8 @@ for (const [type, min, max] of [
   assertEq(id(max), max);
   assertEq(id(min - 0.5), min);
   assertEq(id(max + 0.5), max);
-  assertErrorMessage(() => id(min - 1), TypeError, `value is not a valid ${type}`);
-  assertErrorMessage(() => id(max + 1), TypeError, `value is not a valid ${type}`);
+  assertEq(id(min - 1), max);
+  assertEq(id(max + 1), min);
 }
 
 // Lifting a result keeps only the bits of its type.
@@ -90,7 +90,7 @@ for (const [type, expected] of [
     (func $id (param "x" u32) (result u32) (canon lift (core func $i "id")))
     (export "id" (func $id))
   )`);
-  assertErrorMessage(() => id(-1), TypeError, /not a valid u32/);
+  assertErrorMessage(() => id(1n), TypeError, /BigInt/);
   assertEq(id(1), 1);
 }
 

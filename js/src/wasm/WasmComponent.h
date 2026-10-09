@@ -1313,6 +1313,10 @@ class ComponentInstance {
   // correspond 1:1 with Component::resourceTypes(), and are null for resource
   // types defined by the component.
   ObjectVector hostResourceCtors_;
+  // The %Symbol.dispose% method of each imported resource type's prototype,
+  // called when an own handle of the resource type is dropped, or null if it
+  // has none.
+  ObjectVector hostResourceDisposers_;
 
   // The JS-API's guest resource class of each exported resource type defined
   // by the component, its prototype, and the function for its
@@ -1373,8 +1377,11 @@ class ComponentInstance {
                                 const ComponentName& name,
                                 const ComponentExternDesc& desc,
                                 uint32_t firstItem);
-  // The JS-API's "resolve a builtin specifier", or null.
-  JSObject* resolveBuiltin(const ComponentName& name) const;
+  // The JS-API's "resolve a builtin specifier", which sets `isBuiltin` and
+  // `value` if `name` is an enabled builtin.
+  [[nodiscard]] bool resolveBuiltin(JSContext* cx, const ComponentName& name,
+                                    bool* isBuiltin,
+                                    MutableHandleValue value) const;
 
  public:
   ComponentInstance(JSContext* cx, Handle<WasmComponentInstanceObject*> object,
@@ -1418,6 +1425,9 @@ class ComponentInstance {
   // defined by the component.
   JSObject* hostResourceCtor(uint32_t resourceType) const {
     return hostResourceCtors_[resourceType];
+  }
+  JSObject* hostResourceDisposer(uint32_t resourceType) const {
+    return hostResourceDisposers_[resourceType];
   }
 
   // The guest resource class of a resource type, its prototype, and the

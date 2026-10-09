@@ -125,11 +125,9 @@ int32_t CmArraySet(Instance* instance, void* arrayRef, int32_t index,
                    void* valueRef);
 
 // ToComponentValueRecord: CmCheckObject throws unless the value is an object,
-// and CmGetField gets a field, throwing if it is undefined unless
-// `allowUndefined`. `nameRef` is an atom.
+// and CmGetField gets a field. `nameRef` is an atom.
 int32_t CmCheckObject(Instance* instance, void* valueRef);
-void* CmGetField(Instance* instance, void* objectRef, void* nameRef,
-                 int32_t allowUndefined);
+void* CmGetField(Instance* instance, void* objectRef, void* nameRef);
 
 // ToJSValueRecord: creates a null-prototype object, and defines its fields.
 void* CmNewRecord(Instance* instance);
@@ -163,15 +161,25 @@ int32_t CmEnumCase(Instance* instance, void* valueRef, void* namesRef);
 // Whether a value is null or undefined, which is an option's `none`.
 int32_t CmIsNullish(Instance* instance, void* valueRef);
 
-// ToJSValue for a list<u8>, as a Uint8Array.
-void* CmBytesToJS(Instance* instance, int32_t ptr, int32_t length);
+// ToJSValue for a list of scalars of type `kind`, a ComponentTypeKind, as a
+// typed array.
+void* CmScalarListToJS(Instance* instance, int32_t ptr, int32_t length,
+                       int32_t kind);
 
-// ToComponentValueBytes for a Uint8Array: CmIsUint8Array tests for one,
-// CmUint8ArrayLength gets its length, and CmCopyBytes copies it to memory.
-int32_t CmIsUint8Array(Instance* instance, void* valueRef);
-int32_t CmUint8ArrayLength(Instance* instance, void* valueRef);
-int32_t CmCopyBytes(Instance* instance, void* valueRef, int32_t ptr,
-                    int32_t length);
+// ToComponentValueScalarList for a typed array of the list's scalar type
+// `kind`: CmIsScalarArray tests for one, CmScalarArrayLength gets its length,
+// and CmCopyScalars copies it to memory.
+int32_t CmIsScalarArray(Instance* instance, void* valueRef, int32_t kind);
+int32_t CmScalarArrayLength(Instance* instance, void* valueRef, int32_t kind);
+int32_t CmCopyScalars(Instance* instance, void* valueRef, int32_t ptr,
+                      int32_t length);
+
+// For a list<T, N> of scalars of type `kind`: CmScalarListToArray gets the
+// elements of a typed array of type `kind` as an array, and otherwise iterates
+// the value like CmIterableToArray. CmArrayToScalarList creates the typed array
+// for an array of the elements.
+void* CmScalarListToArray(Instance* instance, void* valueRef, int32_t kind);
+void* CmArrayToScalarList(Instance* instance, void* arrayRef, int32_t kind);
 
 // The steps of storing a JS string with the canonical ABI's store_string.
 // CmToString converts a JS value to a string, and the rest take that string.
@@ -206,7 +214,8 @@ void* CmStringToJS(Instance* instance, int32_t ptr, int32_t taggedLength,
 // resource type at index `resourceType` of Component::resourceTypes().
 // CmResourceRep puts the rep in the instance's scratch. CmResourceDrop returns
 // 1 if the resource's destructor, if any, should be called with the rep in the
-// instance's scratch, and 0 otherwise.
+// instance's scratch, and 0 otherwise. Dropping an own handle of an imported
+// resource type calls the Symbol.dispose of its constructor's prototype.
 int32_t CmResourceNew(Instance* instance, void* ctxRef, int32_t rep,
                       int32_t resourceType);
 int32_t CmResourceRep(Instance* instance, void* ctxRef, int32_t handle,

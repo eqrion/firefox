@@ -22,19 +22,19 @@ const { roundtrip } = new WebAssembly.ComponentInstance(
   )`)), { echo: x => { seen = x; return 0; } }).exports;
 let seen;
 for (const value of [
-  { kind: "None" },
-  { kind: "F", value: 1.5 },
-  { kind: "F", value: NaN },
-  { kind: "D", value: -0.1 },
-  { kind: "L", value: 2n ** 64n - 1n },
-  { kind: "Pair", value: [-2.5, 0xffffffff] },
+  { kind: "none" },
+  { kind: "f", value: 1.5 },
+  { kind: "f", value: NaN },
+  { kind: "d", value: -0.1 },
+  { kind: "l", value: 2n ** 64n - 1n },
+  { kind: "pair", value: [-2.5, 0xffffffff] },
 ]) {
   roundtrip(value);
   assertEq(JSON.stringify(seen, (k, v) => typeof v === "bigint" ? `${v}n` : v),
            JSON.stringify(value, (k, v) => typeof v === "bigint" ? `${v}n` : v));
   assertEq(Object.getPrototypeOf(seen), null);
 }
-assertErrorMessage(() => roundtrip({ kind: "none" }), TypeError, /'none' is not a case/);
+assertErrorMessage(() => roundtrip({ kind: "None" }), TypeError, /'None' is not a case/);
 assertErrorMessage(() => roundtrip(null), TypeError, /not a non-null object/);
 
 // Lifting a discriminant that is not a case traps.

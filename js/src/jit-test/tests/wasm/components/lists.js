@@ -41,9 +41,9 @@ const { take, sizes } = new WebAssembly.ComponentInstance(
 // Each list is allocated once, at its final size, and the outer list before
 // its elements. Empty lists are allocated too.
 take([[1, 2, 3], [], [4]]);
-assertDeepEq(sizes(), [3 * 8, 3 * 2, 0, 1 * 2]);
+assertDeepEq(sizes(), new Uint32Array([3 * 8, 3 * 2, 0, 1 * 2]));
 take([]);
-assertDeepEq(sizes(), [0]);
+assertDeepEq(sizes(), new Uint32Array([0]));
 
 // Lifting a list that is out of bounds or misaligned traps.
 function liftList(ptr, len) {
@@ -59,7 +59,7 @@ function liftList(ptr, len) {
     (export "f" (func $f))
   )`))).exports.f;
 }
-assertDeepEq(liftList(8, 0)(), []);
+assertDeepEq(liftList(8, 0)(), new Uint32Array());
 assertErrorMessage(liftList(2, 1), WebAssembly.RuntimeError, /unaligned memory access/);
 assertErrorMessage(liftList(0xfffc, 2), WebAssembly.RuntimeError, /index out of bounds/);
 assertErrorMessage(liftList(8, 0x40000000), WebAssembly.RuntimeError, /index out of bounds/);

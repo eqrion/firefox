@@ -40,12 +40,14 @@ for (const [type, values] of Object.entries({
   }
 }
 
-// f32 values are rounded, and 64-bit integers also accept Numbers.
+// f32 values are rounded, integers wrap, and 64-bit integers don't accept
+// Numbers.
 assertEq(roundtrip("f32", x => x)(0.1), Math.fround(0.1));
-assertEq(roundtrip("s64", x => x)(-5), -5n);
-assertEq(roundtrip("u64", x => x)(2 ** 53), 2n ** 53n);
-assertErrorMessage(() => roundtrip("u64", x => x)(-1n), TypeError, /not a valid u64/);
-assertErrorMessage(() => roundtrip("s64", x => x)(2n ** 63n), TypeError, /not a valid s64/);
+assertEq(roundtrip("s8", x => x)(128), -128);
+assertEq(roundtrip("u32", x => x)(-1), 2 ** 32 - 1);
+assertEq(roundtrip("u64", x => x)(-1n), 2n ** 64n - 1n);
+assertEq(roundtrip("s64", x => x)(2n ** 63n), -(2n ** 63n));
+assertErrorMessage(() => roundtrip("s64", x => x)(-5), TypeError, /BigInt/);
 
 // A lifted char must be a Unicode scalar value.
 {
