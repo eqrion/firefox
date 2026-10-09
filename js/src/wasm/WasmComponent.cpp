@@ -2008,7 +2008,8 @@ bool ComponentInstance::resolveBuiltin(JSContext* cx, const ComponentName& name,
                                        bool* isBuiltin,
                                        MutableHandleValue value) const {
   static constexpr std::string_view JSGlobal = "wasm:js/global";
-  mozilla::Span<const char> bytes = name.name.utf8Bytes();
+  mozilla::Span<const char> bytes =
+      name.externalID ? name.externalID->utf8Bytes() : name.name.utf8Bytes();
   std::string_view specifier(bytes.data(), bytes.size());
   *isBuiltin = false;
   if (!component_->jsGlobalBuiltin() || !specifier.starts_with(JSGlobal)) {
