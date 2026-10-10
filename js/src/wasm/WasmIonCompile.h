@@ -34,8 +34,8 @@ namespace wasm {
     const CodeMetadata& codeMeta, const CodeTailMetadata* codeTailMeta,
     const CompilerEnvironment& compilerEnv, LifoAlloc& lifo,
     const FuncCompileInputVector& inputs, CompiledCode* code,
-    const BytecodeRegion& codeBytes, const VwEnv* itascaEnv,
-    UniqueChars* error);
+    const BytecodeRegion& codeBytes, const VwEnv* itascaEnv, UniqueChars* error,
+    VwBatch* validationBatch);
 
 [[nodiscard]] bool IonDumpFunction(const CompilerEnvironment& compilerEnv,
                                    const CodeMetadata& codeMeta,

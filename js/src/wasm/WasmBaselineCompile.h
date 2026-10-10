@@ -34,8 +34,8 @@ namespace wasm {
 [[nodiscard]] bool BaselineCompileFunctions(
     const CodeMetadata& codeMeta, const CompilerEnvironment& compilerEnv,
     LifoAlloc& lifo, const FuncCompileInputVector& inputs, CompiledCode* code,
-    const BytecodeRegion& codeBytes, const VwEnv* itascaEnv,
-    UniqueChars* error);
+    const BytecodeRegion& codeBytes, const VwEnv* itascaEnv, UniqueChars* error,
+    VwBatch* validationBatch);
 
 // BaseLocalIter iterates over a vector of types of locals and provides offsets
 // from the Frame address for those locals, and associated data.

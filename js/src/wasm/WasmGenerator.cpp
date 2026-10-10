@@ -628,16 +628,16 @@ static bool ExecuteCompileTask(CompileTask* task, UniqueChars* error) {
     case Tier::Optimized:
       if (!IonCompileFunctions(task->codeMeta, task->codeTailMeta,
                                task->compilerEnv, task->lifo, task->inputs,
-                               &task->output, task->codeBytes,
-                               task->itascaEnv, error)) {
+                               &task->output, task->codeBytes, task->itascaEnv,
+                               error, task->validationBatch.get())) {
         return false;
       }
       break;
     case Tier::Baseline:
       if (!BaselineCompileFunctions(task->codeMeta, task->compilerEnv,
                                     task->lifo, task->inputs, &task->output,
-                                    task->codeBytes, task->itascaEnv,
-                                    error)) {
+                                    task->codeBytes, task->itascaEnv, error,
+                                    task->validationBatch.get())) {
         return false;
       }
       break;
@@ -752,6 +752,10 @@ bool ModuleGenerator::finishTask(CompileTask* task) {
   MOZ_ASSERT(task->inputs.empty());
   MOZ_ASSERT(task->output.empty());
   MOZ_ASSERT(task->lifo.isEmpty());
+  if (task->validationBatch &&
+      !completedValidationBatches_.append(std::move(task->validationBatch))) {
+    return false;
+  }
   freeTasks_.infallibleAppend(task);
   return true;
 }
@@ -805,20 +809,8 @@ bool ModuleGenerator::finishOutstandingTask() {
 
 bool ModuleGenerator::compileFuncDef(uint32_t funcIndex,
                                      uint32_t bytecodeOffset,
-                                     uint32_t entryOffset,
-                                     const uint8_t* begin, const uint8_t* end) {
-  MOZ_ASSERT(!finishedFuncDefs_);
-  MOZ_ASSERT(funcIndex < codeMeta_->numFuncs());
-
-  if (compilingTier1()) {
-    static_assert(MaxFunctionBytes < UINT32_MAX);
-    uint32_t bodyLength = (uint32_t)(end - begin);
-    funcDefRanges_.infallibleAppend(BytecodeRange(bytecodeOffset, bodyLength));
-    if (!funcDefEntryOffsets_.append(entryOffset)) {
-      return false;
-    }
-  }
-
+                                     uint32_t entryOffset, const uint8_t* begin,
+                                     const uint8_t* end) {
   uint32_t threshold;
   switch (tier()) {
     case Tier::Baseline:
@@ -847,6 +839,25 @@ bool ModuleGenerator::compileFuncDef(uint32_t funcIndex,
     }
   }
 
+  return appendFuncDef(funcIndex, bytecodeOffset, entryOffset, begin, end);
+}
+
+bool ModuleGenerator::appendFuncDef(uint32_t funcIndex, uint32_t bytecodeOffset,
+                                    uint32_t entryOffset, const uint8_t* begin,
+                                    const uint8_t* end) {
+  MOZ_ASSERT(!finishedFuncDefs_);
+  MOZ_ASSERT(funcIndex < codeMeta_->numFuncs());
+
+  if (compilingTier1()) {
+    static_assert(MaxFunctionBytes < UINT32_MAX);
+    uint32_t bodyLength = (uint32_t)(end - begin);
+    funcDefRanges_.infallibleAppend(BytecodeRange(bytecodeOffset, bodyLength));
+    if (!funcDefEntryOffsets_.append(entryOffset)) {
+      return false;
+    }
+  }
+
+  uint32_t funcBytecodeLength = end - begin;
   if (!currentTask_) {
     if (freeTasks_.empty() && !finishOutstandingTask()) {
       return false;
@@ -864,6 +875,42 @@ bool ModuleGenerator::compileFuncDef(uint32_t funcIndex,
 
   batchedBytecode_ += funcBytecodeLength;
   MOZ_ASSERT(batchedBytecode_ <= MaxCodeSectionBytes);
+  return true;
+}
+
+bool ModuleGenerator::compileValidationBatch(UniqueVwBatch batch) {
+  MOZ_ASSERT(!currentTask_);
+  size_t count = itasca_batch_len(batch.get());
+  for (size_t i = 0; i < count; i++) {
+    VwBatchEntry entry;
+    VwStatus status = itasca_batch_next_entry(batch.get(), &entry);
+    if (status.error != VW_OK) {
+      return ReportItascaError(status, error_);
+    }
+    if (entry.end - entry.contents > MaxFunctionBytes) {
+      return FailItasca(error_, "function body too big");
+    }
+    if (!appendFuncDef(codeMeta_->numFuncImports + entry.index,
+                       codeBytes_.moduleOffset(entry.contents), entry.start,
+                       entry.data + (entry.contents - entry.start),
+                       entry.data + (entry.end - entry.start))) {
+      return false;
+    }
+  }
+  MOZ_ASSERT(currentTask_);
+  bool last = itasca_batch_is_last(batch.get());
+  currentTask_->validationBatch = std::move(batch);
+  return last ? locallyCompileCurrentTask() : launchBatchCompile();
+}
+
+bool ModuleGenerator::takeValidationBatch(UniqueVwBatch* batch) {
+  while (completedValidationBatches_.empty()) {
+    if (!outstanding_ || !finishOutstandingTask()) {
+      return false;
+    }
+  }
+  *batch = std::move(completedValidationBatches_.back());
+  completedValidationBatches_.popBack();
   return true;
 }
 

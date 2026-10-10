@@ -194,13 +194,11 @@ struct CompileTask : public HelperThreadTask {
   CompileTaskState& state;
   LifoAlloc lifo;
   FuncCompileInputVector inputs;
+  UniqueVwBatch validationBatch;
   CompiledCode output;
 
-  // The code section and the environment its function bodies are validated
-  // against. The environment is null when the bodies in this task have already
-  // been validated, which is every lazy tier-2 compilation: the environment
-  // does not outlive the module's first compilation, and a body reaching tier 2
-  // was accepted then.
+  // Retained context for tier-2; initial compilation additionally owns a batch
+  // whose immutable ranges contain only bytes already received from the stream.
   BytecodeRegion codeBytes;
   const VwEnv* itascaEnv = nullptr;
 
@@ -316,6 +314,7 @@ class MOZ_STACK_CLASS ModuleGenerator {
   CompileTaskState taskState_;
   CompileTaskVector tasks_;
   CompileTaskPtrVector freeTasks_;
+  Vector<UniqueVwBatch, 0, SystemAllocPolicy> completedValidationBatches_;
   CompileTask* currentTask_;
   uint32_t batchedBytecode_;
 
@@ -363,6 +362,10 @@ class MOZ_STACK_CLASS ModuleGenerator {
            compileState_ == CompileState::EagerTier1 ||
            compileState_ == CompileState::LazyTier1;
   }
+
+  [[nodiscard]] bool appendFuncDef(uint32_t funcIndex, uint32_t bytecodeOffset,
+                                   uint32_t entryOffset, const uint8_t* begin,
+                                   const uint8_t* end);
 
   void warnf(const char* msg, ...) MOZ_FORMAT_PRINTF(2, 3);
 
@@ -414,6 +417,9 @@ class MOZ_STACK_CLASS ModuleGenerator {
   // or finishTier2().
 
   [[nodiscard]] bool finishFuncDefs();
+  [[nodiscard]] bool compileValidationBatch(UniqueVwBatch batch);
+  [[nodiscard]] bool takeValidationBatch(UniqueVwBatch* batch);
+  size_t validationBatchCapacity() const { return tasks_.length(); }
 
   // If env->mode is Once or Tier1, finishModule() must be called to generate
   // a new Module. Otherwise, if env->mode is Tier2, finishTier2() must be

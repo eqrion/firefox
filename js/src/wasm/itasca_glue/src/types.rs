@@ -4,8 +4,8 @@
 //! Nothing verified carries a `repr` attribute, and adding one to suit a C
 //! consumer would be letting the interface reach into the proofs, so every type
 //! that crosses the boundary by value has a mirror here. The handles go the
-//! other way: they are `repr(transparent)` newtypes, so a pointer to one is a
-//! pointer to the real thing and the accessors can borrow straight through it.
+//! other way: C++ holds opaque handles and accesses their contents through Rust.
+//! Streaming callbacks borrow the environment; successful validation transfers ownership.
 
 use itasca::code::{BlockType, Context, LabelKind, MemArg, OpIterState, StackType};
 use itasca::error::{Error, OpError, VisitError};
@@ -24,7 +24,8 @@ pub struct VwState(pub(crate) OpIterState);
 pub struct VwContext(pub(crate) Context);
 
 /// Everything the binary declares before the code section. Owned by the
-/// consumer, freed with `itasca_env_free`.
+/// consumer after successful module validation, freed with `itasca_env_free`.
+/// The streaming environment callback only borrows it until scope exit.
 #[repr(transparent)]
 pub struct VwEnv(pub(crate) Env);
 
@@ -316,7 +317,11 @@ pub(crate) fn op_error_code(e: OpError) -> i32 {
 }
 
 pub(crate) fn status(e: Error) -> VwStatus {
-    match e {
+    status_ref(&e)
+}
+
+pub(crate) fn status_ref(e: &Error) -> VwStatus {
+    match *e {
         Error::Read(op) => VwStatus::nested(VW_ERR_READ, op),
         Error::Body(op) => VwStatus::nested(VW_ERR_BODY, op),
         Error::Visitor(VisitError::OutOfMemory) => {

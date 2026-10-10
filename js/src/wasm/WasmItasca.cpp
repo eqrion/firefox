@@ -48,20 +48,6 @@ static bool FailLimit(UniqueChars* error, const char* what) {
   return false;
 }
 
-// itasca's completeness theorems carry VW_MAX_MODULE_BYTES as a hypothesis on
-// the whole module, but nothing on itasca's side enforces it. DecodePreamble
-// enforces it for a module with a code section, by construction (see
-// BytecodeSource::BytecodeSource): reaching either entry point below with a
-// module that has none means the length is still unchecked.
-static_assert(VW_MAX_MODULE_BYTES == MaxModuleBytes);
-
-static bool CheckModuleLength(size_t length, UniqueChars* error) {
-  if (length > MaxModuleBytes) {
-    return FailItasca(error, "module too big");
-  }
-  return true;
-}
-
 // --- The caps itasca does not carry ---
 
 static LimitsVisitorState* Self(const VwHookCtx* c) {
@@ -562,46 +548,34 @@ static bool BuildElemSegments(const VwEnv* env, CodeMetadata* codeMeta,
 // What OnCustomSection needs: the region whose decode is running, since the
 // hook's positions index the bytes it was handed and a CustomSectionRange has
 // to be module-absolute, and where to file what it finds.
-struct CustomSectionVisitorState {
-  const BytecodeRegion& region;
-  CodeMetadata* codeMeta;
-  CustomSections* customs;
-};
-
-// One custom section, reported by decode_env_with or decode_tail_with, in the
-// order it appears. The name range is the bytes immediately before the
-// payload, which is the only place a name can be:
-// [payload_start - name_len, payload_start). itasca reports a length rather
-// than a start there on purpose, since a start would need a subtraction in
-// verified code, which is a panic site for something the consumer can do
-// itself.
-static uint32_t OnCustomSection(void* user, size_t nameLen,
-                                size_t payloadStart, size_t payloadEnd) {
-  auto* state = static_cast<CustomSectionVisitorState*>(user);
-  const BytecodeRegion& region = state->region;
-
+uint32_t wasm::RecordCustomSectionWithItasca(const BytecodeRegion& region,
+                                             CodeMetadata* codeMeta,
+                                             CustomSections* customs,
+                                             size_t nameLen,
+                                             size_t payloadStart,
+                                             size_t payloadEnd) {
   CustomSectionRange range;
   range.name = BytecodeRange(region.moduleOffset(payloadStart - nameLen),
                              uint32_t(nameLen));
   range.payload = BytecodeRange(region.moduleOffset(payloadStart),
                                 uint32_t(payloadEnd - payloadStart));
-  if (!state->codeMeta->customSectionRanges.append(range)) {
+  if (!codeMeta->customSectionRanges.append(range)) {
     return VW_VISIT_OOM;
   }
 
   // The first custom section named "name", across both regions in module
   // order.
   const uint8_t* nameBytes = region.data() + (payloadStart - nameLen);
-  if (state->customs->nameSectionIndex.isNothing() &&
+  if (customs->nameSectionIndex.isNothing() &&
       nameLen == strlen(NameSectionName) &&
       memcmp(nameBytes, NameSectionName, nameLen) == 0) {
-    state->customs->nameSectionIndex =
-        Some(uint32_t(state->codeMeta->customSectionRanges.length() - 1));
+    customs->nameSectionIndex =
+        Some(uint32_t(codeMeta->customSectionRanges.length() - 1));
     // The payload runs to the end of its region rather than to the end of
     // the section, so that a subsection reading past its section is caught
     // and reported by finishCustomSection the way it always was, rather than
     // looking like a truncated module.
-    state->customs->nameSectionBytes = Some(region.span.From(payloadStart));
+    customs->nameSectionBytes = Some(region.span.From(payloadStart));
   }
 
   return VW_VISIT_OK;
@@ -619,32 +593,9 @@ void wasm::DecodeNameSectionWithItasca(const CustomSections& customs,
                            warnings);
 }
 
-bool wasm::DecodeEnvWithItasca(const BytecodeRegion& env,
-                                 ModuleMetadata* moduleMeta,
-                                 CustomSections* customs, UniqueVwEnv* outEnv,
-                                 size_t* outCodePos, UniqueChars* error) {
-  if (!CheckModuleLength(env.size(), error)) {
-    return false;
-  }
-
+bool wasm::BuildEnvWithItasca(const VwEnv* vwEnv, ModuleMetadata* moduleMeta,
+                              UniqueChars* error) {
   CodeMetadata* codeMeta = moduleMeta->codeMeta;
-  CustomSectionVisitorState state{env, codeMeta, customs};
-  VwModuleVisitor visitor{};
-  visitor.on_custom_section = OnCustomSection;
-
-  VwEnv* raw = nullptr;
-  VwStatus s = itasca_decode_env_with(env.data(), env.size(), &visitor,
-                                        &state, &raw, outCodePos);
-  outEnv->reset(raw);
-  if (s.error == VW_ERR_VISITOR) {
-    // The only way OnCustomSection declines is running out of memory.
-    return false;
-  }
-  if (s.error != VW_OK) {
-    return ReportItascaError(s, error);
-  }
-
-  const VwEnv* vwEnv = outEnv->get();
   if (!CheckEnvLimits(vwEnv, error)) {
     return false;
   }
@@ -688,32 +639,9 @@ static bool BuildDataSegments(const VwTail* tail, ModuleMetadata* moduleMeta) {
   return true;
 }
 
-bool wasm::DecodeTailWithItasca(const BytecodeRegion& tail, const VwEnv* env,
-                                  ModuleMetadata* moduleMeta,
-                                  CustomSections* customs,
-                                  UniqueChars* error) {
-  CodeMetadata* codeMeta = moduleMeta->codeMeta;
-  CustomSectionVisitorState state{tail, codeMeta, customs};
-  VwModuleVisitor visitor{};
-  visitor.on_custom_section = OnCustomSection;
-
-  UniqueVwTail decoded;
-  {
-    VwTail* raw = nullptr;
-    VwStatus s = itasca_decode_tail_with(tail.data(), tail.size(), 0, env,
-                                           &visitor, &state, &raw);
-    decoded.reset(raw);
-    if (s.error == VW_ERR_VISITOR) {
-      // The only way OnCustomSection declines is running out of memory.
-      return false;
-    }
-    if (s.error != VW_OK) {
-      return ReportItascaError(s, error);
-    }
-  }
-
-  return CheckTailLimits(decoded.get(), error) &&
-         BuildDataSegments(decoded.get(), moduleMeta);
+bool wasm::BuildTailWithItasca(const VwTail* tail, ModuleMetadata* moduleMeta,
+                               UniqueChars* error) {
+  return CheckTailLimits(tail, error) && BuildDataSegments(tail, moduleMeta);
 }
 
 // --- The code section ---
@@ -730,292 +658,157 @@ static bool CheckEntryFits(size_t contentsStart, size_t entryEnd,
   return true;
 }
 
-// What CompileOnNeedBytes and CompileOnCodeEntry need to discharge the
-// obligation itasca_validate_code_with hands them: each entry has to reach
-// mg.compileFuncDef, which is what validates it, on some thread, before
-// mg.finishFuncDefs() is allowed to run.
-struct CompileCodeState {
-  const BytecodeRegion& code;
-  const CodeMetadata& codeMeta;
-  ModuleGenerator& mg;
-  CodeSectionArrival& arrival;
-  UniqueChars* error;
-};
-
-static uint32_t CompileOnNeedBytes(void* user, size_t end) {
-  auto* state = static_cast<CompileCodeState*>(user);
-  // A cancelled stream has already set *error.
-  return state->arrival.waitFor(end) ? VW_VISIT_OK : VW_VISIT_OOM;
-}
-
-static uint32_t CompileOnCodeEntry(void* user, size_t index, size_t entryPos,
-                                   size_t contentsStart, size_t entryEnd) {
-  auto* state = static_cast<CompileCodeState*>(user);
-  const BytecodeRegion& code = state->code;
-
-  if (!CheckEntryFits(contentsStart, entryEnd, state->error)) {
-    return VW_VISIT_OOM;
-  }
-  // The entry is about to be handed to another thread, which reads it
-  // without validating it: mg.compileFuncDef's worker drives itasca over it
-  // itself, and mg.finishFuncDefs() fails the compile if that rejects.
-  if (!state->mg.compileFuncDef(
-          state->codeMeta.numFuncImports + index,
-          code.moduleOffset(contentsStart), uint32_t(entryPos),
-          code.data() + contentsStart, code.data() + entryEnd)) {
-    return VW_VISIT_OOM;
-  }
-  return VW_VISIT_OK;
-}
-
-bool wasm::DecodeCodeSectionWithItasca(const BytecodeRegion& code,
-                                         const VwEnv* env,
-                                         const CodeMetadata& codeMeta,
-                                         ModuleGenerator& mg,
-                                         CodeSectionArrival& arrival,
-                                         UniqueChars* error) {
-  CompileCodeState state{code, codeMeta, mg, arrival, error};
-  VwCodeVisitor visitor{};
-  visitor.on_need_bytes = CompileOnNeedBytes;
-  visitor.on_code_entry = CompileOnCodeEntry;
-
-  size_t next = 0;
-  VwStatus s = itasca_validate_code_with(code.data(), code.size(), 0, env,
-                                           &visitor, &state, &next);
-  if (s.error == VW_ERR_VISITOR) {
-    // CompileOnNeedBytes or CompileOnCodeEntry declined and has already said
-    // why, or left *error null for out-of-memory.
-    return false;
-  }
-  if (s.error != VW_OK) {
-    return ReportItascaError(s, error);
-  }
-
-  // itasca showed the entries tile the section; the region is the section
-  // here, so showing the section fills the region is this side's to check. A
-  // split that put anything else in here is one itasca did not agree with.
-  if (next != code.size()) {
-    return FailItasca(error, "code section size does not match its contents");
-  }
-
-  return mg.finishFuncDefs();
-}
-
-static uint32_t RefuseCodeEntry(void*, size_t, size_t, size_t, size_t) {
-  return VW_VISIT_OOM;
-}
-
-bool wasm::CheckNoCodeSectionWithItasca(const BytecodeRegion& region,
-                                          const VwEnv* env,
-                                          UniqueChars* error) {
-  VwCodeVisitor visitor{};
-  visitor.on_code_entry = RefuseCodeEntry;
-
-  size_t next = 0;
-  VwStatus s = itasca_validate_code_with(region.data(), region.size(), 0,
-                                           env, &visitor, nullptr, &next);
-  if (s.error == VW_ERR_VISITOR || (s.error == VW_OK && next != 0)) {
-    // The splitter passed over a code section larger than
-    // MaxCodeSectionBytes, or with a header its own read did not accept, which
-    // is the only way to be here with itasca finding one: either its first
-    // entry declined, or it found no entries and read the header alone.
-    return FailItasca(error, "too many code section bytes");
-  }
-  if (s.error != VW_OK) {
-    return ReportItascaError(s, error);
-  }
-  return true;
-}
-
 // --- Validation ---
 
-bool wasm::DriveBodyWithItasca(const BytecodeRegion& code,
-                                 size_t entryOffset, const VwEnv* env,
-                                 uint32_t funcDefIndex,
-                                 const VwVisitor& visitor, void* user,
-                                 const DeclineReason* decline,
-                                 UniqueChars* error) {
+bool wasm::DriveBodyWithItasca(const BytecodeRegion& code, size_t entryOffset,
+                               const VwEnv* env, uint32_t funcDefIndex,
+                               const VwVisitor& visitor, void* user,
+                               const DeclineReason* decline, UniqueChars* error,
+                               VwBatch* batch) {
   size_t next = 0;
   size_t errorOffset = 0;
-  VwStatus s = itasca_validate_code_entry(code.data(), code.size(),
-                                            entryOffset, env, funcDefIndex,
-                                            &visitor, user, &next,
-                                            &errorOffset);
+  VwStatus s = batch ? itasca_batch_validate_func(batch, funcDefIndex, &visitor,
+                                                  user, &errorOffset)
+                     : itasca_validate_code_entry(
+                           code.data(), code.size(), entryOffset, env,
+                           funcDefIndex, &visitor, user, &next, &errorOffset);
   if (s.error != VW_OK) {
     // A hook that refused because the compiler refused has already said why,
     // through the decoder it shares with the rest of the engine.
     if (*error) {
       return false;
     }
-    return ReportItascaBodyError(s, code.moduleOffset(errorOffset), *decline,
-                                   error);
+    return ReportItascaBodyError(
+        s, code.moduleOffset(errorOffset + (batch ? entryOffset : 0)), *decline,
+        error);
   }
   return true;
 }
 
 bool wasm::DriveBodyWithItascaBaseline(const BytecodeRegion& code,
-                                         size_t entryOffset, const VwEnv* env,
-                                         uint32_t funcDefIndex, void* user,
-                                         const DeclineReason* decline,
-                                         UniqueChars* error) {
+                                       size_t entryOffset, const VwEnv* env,
+                                       uint32_t funcDefIndex, void* user,
+                                       const DeclineReason* decline,
+                                       UniqueChars* error, VwBatch* batch) {
   size_t next = 0;
   size_t errorOffset = 0;
-  VwStatus s = itasca_validate_code_entry_baseline(
-      code.data(), code.size(), entryOffset, env, funcDefIndex, user, &next,
-      &errorOffset);
+  VwStatus s = batch ? itasca_batch_validate_func_baseline(batch, funcDefIndex,
+                                                           user, &errorOffset)
+                     : itasca_validate_code_entry_baseline(
+                           code.data(), code.size(), entryOffset, env,
+                           funcDefIndex, user, &next, &errorOffset);
   if (s.error != VW_OK) {
     // A hook that refused because the compiler refused has already said why,
     // through the decoder it shares with the rest of the engine.
     if (*error) {
       return false;
     }
-    return ReportItascaBodyError(s, code.moduleOffset(errorOffset), *decline,
-                                   error);
+    return ReportItascaBodyError(
+        s, code.moduleOffset(errorOffset + (batch ? entryOffset : 0)), *decline,
+        error);
   }
   return true;
 }
 
-
-bool wasm::RegionsAfterEnv(const BytecodeSource& bytecode, size_t codePos,
-                           BytecodeRegion* code, BytecodeRegion* tail,
-                           UniqueChars* error) {
-  BytecodeRegion env(bytecode.envSpan(), 0);
-
-  if (!bytecode.hasCodeSection()) {
-    // Everything the environment did not take is in its region, and there is
-    // no code section for the tail to follow.
-    *code = env.from(codePos);
-    *tail = *code;
-    return true;
-  }
-
-  // The split and the environment have to end in the same place. A section
-  // between them is one the environment would not take and the split did not
-  // reach: the module has it before the code section, where it may not be.
-  if (codePos != env.size()) {
-    return FailItasca(error, "unknown section before code section");
-  }
-
-  *code = BytecodeRegion(bytecode.codeSpan(), bytecode.codeRange().start);
-  *tail = BytecodeRegion(bytecode.tailSpan(), bytecode.tailRange().start);
-  return true;
-}
-
-// What ValidateOnCodeEntry needs to discharge validate_code_with's obligation
-// itself, by calling itasca_validate_code_entry against the same entry and
-// env it was just handed.
-struct ValidateCodeState {
-  const BytecodeRegion& code;
-  const VwEnv* env;
-  const VwVisitor& visitor;
+namespace {
+struct ValidateStreamState {
+  const BytecodeSource& source;
   UniqueChars* error;
-};
+  UniqueVwBatch completed;
 
-static uint32_t ValidateOnCodeEntry(void* user, size_t index, size_t entryPos,
-                                    size_t contentsStart, size_t entryEnd) {
-  auto* state = static_cast<ValidateCodeState*>(user);
-  const BytecodeRegion& code = state->code;
-
-  if (!CheckEntryFits(contentsStart, entryEnd, state->error)) {
-    return VW_VISIT_OOM;
+  static uint32_t range(void* user, VwStreamRegion region, size_t start,
+                        size_t end, const uint8_t** data, size_t* len) {
+    auto& s = *static_cast<ValidateStreamState*>(user);
+    BytecodeSpan span = region == VwStreamRegion::Environment
+                            ? s.source.envSpan()
+                        : !s.source.hasCodeSection()     ? BytecodeSpan()
+                        : region == VwStreamRegion::Code ? s.source.codeSpan()
+                                                         : s.source.tailSpan();
+    if (region == VwStreamRegion::Code) {
+      if (start > end || end > span.size()) {
+        return VW_VISIT_OOM;
+      }
+      span = span.Subspan(start, end - start);
+    }
+    *data = span.data();
+    *len = span.size();
+    return VW_VISIT_OK;
   }
-
-  LimitsVisitorState limits;
-  size_t next = 0;
-  size_t errorOffset = 0;
-  VwStatus s = itasca_validate_code_entry(code.data(), code.size(), entryPos,
-                                            state->env, index, &state->visitor,
-                                            &limits, &next, &errorOffset);
-  if (s.error != VW_OK) {
-    return ReportItascaBodyError(s, code.moduleOffset(errorOffset),
-                                   limits.decline, state->error)
+  static uint32_t environment(void* user, const VwEnv* env, size_t, size_t,
+                              VwStreamConfig* config) {
+    auto& s = *static_cast<ValidateStreamState*>(user);
+    config->batch_bytes = 25000;
+    config->max_batches = 1;
+    return CheckEnvLimits(env, s.error) ? VW_VISIT_OK : VW_VISIT_OOM;
+  }
+  static uint32_t custom(void*, VwStreamRegion, size_t, size_t, size_t) {
+    return VW_VISIT_OK;
+  }
+  static uint32_t submit(void* user, VwBatch* raw) {
+    auto& s = *static_cast<ValidateStreamState*>(user);
+    s.completed.reset(raw);
+    VwVisitor visitor;
+    InitLimitsVisitor(&visitor);
+    for (size_t i = 0; i < itasca_batch_len(raw); i++) {
+      VwBatchEntry entry;
+      VwStatus framed = itasca_batch_next_entry(raw, &entry);
+      if (framed.error != VW_OK) {
+        (void)ReportItascaError(framed, s.error);
+        return VW_VISIT_OOM;
+      }
+      if (!CheckEntryFits(entry.contents, entry.end, s.error)) {
+        return VW_VISIT_OOM;
+      }
+      LimitsVisitorState limits;
+      size_t offset = 0;
+      VwStatus status = itasca_batch_validate_func(raw, entry.index, &visitor,
+                                                   &limits, &offset);
+      if (status.error != VW_OK) {
+        (void)ReportItascaBodyError(
+            status, s.source.codeRange().start + entry.start + offset,
+            limits.decline, s.error);
+        break;
+      }
+    }
+    return VW_VISIT_OK;
+  }
+  static uint32_t complete(void* user, VwBatch** batch) {
+    auto& s = *static_cast<ValidateStreamState*>(user);
+    *batch = s.completed.release();
+    return VW_VISIT_OK;
+  }
+  static void finishValidation(void* user, bool) {
+    static_cast<ValidateStreamState*>(user)->completed.reset();
+  }
+  static uint32_t codeEnd(void*) { return VW_VISIT_OK; }
+  static uint32_t tail(void* user, VwTail* raw) {
+    UniqueVwTail tail(raw);
+    return CheckTailLimits(tail.get(),
+                           static_cast<ValidateStreamState*>(user)->error)
                ? VW_VISIT_OK
                : VW_VISIT_OOM;
   }
-  return VW_VISIT_OK;
-}
-
-// The code-section half of ValidateWithItasca, split out because it is the
-// one part CheckNoCodeSectionWithItasca does not cover.
-static bool ValidateCodeSectionWithItasca(const BytecodeRegion& code,
-                                            const VwEnv* env,
-                                            UniqueChars* error) {
-  VwVisitor visitor;
-  InitLimitsVisitor(&visitor);
-
-  ValidateCodeState state{code, env, visitor, error};
-  VwCodeVisitor codeVisitor{};
-  codeVisitor.on_code_entry = ValidateOnCodeEntry;
-
-  size_t next = 0;
-  VwStatus s = itasca_validate_code_with(code.data(), code.size(), 0, env,
-                                           &codeVisitor, &state, &next);
-  if (s.error == VW_ERR_VISITOR) {
-    // ValidateOnCodeEntry declined and has already reported why, or left
-    // *error null for out-of-memory.
-    return false;
-  }
-  if (s.error != VW_OK) {
-    return ReportItascaError(s, error);
-  }
-
-  // itasca showed the entries tile the section; the region is the section
-  // here, so showing the section fills the region is this side's to check.
-  if (next != code.size()) {
-    return FailAt(error, code.moduleOffset(next),
-                 "code section size does not match its contents");
-  }
-  return true;
-}
+};
+}  // namespace
 
 bool wasm::ValidateWithItasca(const BytecodeSource& bytecode,
-                                UniqueChars* error) {
-  BytecodeSpan envSpan = bytecode.envSpan();
-
-  if (!CheckModuleLength(envSpan.size(), error)) {
+                              UniqueChars* error) {
+  ValidateStreamState state{bytecode, error, nullptr};
+  VwStreamVisitor visitor{
+      ValidateStreamState::range,    ValidateStreamState::environment,
+      ValidateStreamState::custom,   ValidateStreamState::submit,
+      ValidateStreamState::complete, ValidateStreamState::codeEnd,
+      ValidateStreamState::tail,     ValidateStreamState::finishValidation};
+  VwEnv* rawEnv = nullptr;
+  VwStatus status = itasca_validate_stream(
+      &visitor, &state,
+      bytecode.hasCodeSection() ? bytecode.codeSpan().size() : 0, &rawEnv);
+  UniqueVwEnv env(rawEnv);
+  if (status.error == VW_OK) {
+    return true;
+  }
+  if (*error || status.error == VW_ERR_VISITOR) {
     return false;
   }
-
-  UniqueVwEnv env;
-  size_t codePos = 0;
-  {
-    VwEnv* raw = nullptr;
-    VwStatus s =
-        itasca_decode_env(envSpan.data(), envSpan.size(), &raw, &codePos);
-    env.reset(raw);
-    if (s.error != VW_OK) {
-      return ReportItascaError(s, error);
-    }
-  }
-
-  if (!CheckEnvLimits(env.get(), error)) {
-    return false;
-  }
-
-  BytecodeRegion code;
-  BytecodeRegion tail;
-  if (!RegionsAfterEnv(bytecode, codePos, &code, &tail, error)) {
-    return false;
-  }
-
-  if (!bytecode.hasCodeSection()) {
-    if (!CheckNoCodeSectionWithItasca(code, env.get(), error)) {
-      return false;
-    }
-  } else if (!ValidateCodeSectionWithItasca(code, env.get(), error)) {
-    return false;
-  }
-
-  UniqueVwTail decoded;
-  {
-    VwTail* raw = nullptr;
-    VwStatus s =
-        itasca_decode_tail(tail.data(), tail.size(), 0, env.get(), &raw);
-    decoded.reset(raw);
-    if (s.error != VW_OK) {
-      return ReportItascaError(s, error);
-    }
-  }
-
-  return CheckTailLimits(decoded.get(), error);
+  return ReportItascaError(status, error);
 }

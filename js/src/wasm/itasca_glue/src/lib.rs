@@ -2,14 +2,12 @@
 //!
 //! This is ordinary Rust with raw pointers, glue between itasca's verified
 //! core and the compilers in `js/src/wasm/`. It is not part of itasca's
-//! extraction and carries none of its proof obligations; see itasca's
-//! TRUST.md for what a consumer built on top of its public API is trusted
-//! for.
+//! extraction; see itasca's README and DEVELOPMENT.md for the verified boundary.
 //!
-//! The three-part split of `module` is the interface, rather than only
-//! `validate_module`, because that is the split a compiler drives:
-//! `itasca_decode_env` once, `itasca_validate_code_entry` per function and
-//! on whatever thread it likes, `itasca_decode_tail` at the end.
+//! `itasca_validate_stream` is the experimental whole-module entry point. It
+//! owns phase sequencing and consumes body-validation batch results before
+//! accepting. The implementation is itasca's opt-in `stream` module and is
+//! extracted but not yet proved. Retained tier-2 compilation uses the code-entry API.
 //!
 //! # Safety
 //!
@@ -35,6 +33,7 @@
 
 mod baseline;
 pub mod env;
+mod stream;
 pub mod types;
 pub mod visitor;
 
@@ -70,105 +69,6 @@ unsafe fn out_ptr<'a, T>(p: *mut T, what: &str) -> &'a mut T {
     &mut *p
 }
 
-// --- Part one: everything before the code section ---
-
-/// Decode and validate every section up to the code section.
-///
-/// `*out_code_pos` comes back at the code section's own header, unread, which
-/// is where `itasca_validate_code_with` and `itasca_validate_code_entry` pick
-/// up.
-#[no_mangle]
-pub unsafe extern "C" fn itasca_decode_env(
-    data: *const u8,
-    len: usize,
-    out_env: *mut *mut VwEnv,
-    out_code_pos: *mut usize,
-) -> VwStatus {
-    let env_slot = out_ptr(out_env, "out_env");
-    let pos_slot = out_ptr(out_code_pos, "out_code_pos");
-    *env_slot = core::ptr::null_mut();
-    *pos_slot = 0;
-    match module::validate_env(bytes(data, len)) {
-        Ok((env, pos)) => {
-            *env_slot = Box::into_raw(Box::new(VwEnv(env)));
-            *pos_slot = pos;
-            VwStatus::OK
-        }
-        Err(e) => status(e),
-    }
-}
-
-/// What a consumer is told as a module is decoded around its code section.
-///
-/// Zero-initialise and fill in only the hooks you want: a null slot is skipped,
-/// so an unused hook costs nothing. `user` is handed back to every hook
-/// untouched.
-///
-/// A hook is trusted for what `VwVisitor`'s hooks are trusted for: it must
-/// return, must not unwind, and must return `VW_VISIT_OK` for decoding to
-/// finish. One that declines stops the decode with `VW_ERR_VISITOR`, which is
-/// not a verdict about the module.
-#[repr(C)]
-#[derive(Default)]
-pub struct VwModuleVisitor {
-    /// One custom section, framed and its name checked but not otherwise read.
-    /// The name ends where the payload starts, so the name is
-    /// `[payload_start - name_len, payload_start)`. Positions are into the
-    /// bytes the entry point was handed.
-    pub on_custom_section: Option<
-        extern "C" fn(*mut c_void, usize, usize, usize) -> u32,
-    >,
-}
-
-/// Forwards to the C vtable, if there is one.
-struct FfiModuleVisitor<'a> {
-    vt: &'a VwModuleVisitor,
-    user: *mut c_void,
-}
-
-impl module::ModuleVisitor for FfiModuleVisitor<'_> {
-    fn on_custom_section(&mut self, s: itasca::types::CustomSection) -> itasca::code::VisitResult {
-        match self.vt.on_custom_section {
-            Some(f) => visitor::verdict(f(self.user, s.name_len, s.payload_start, s.payload_end)),
-            None => Ok(()),
-        }
-    }
-}
-
-/// `itasca_decode_env`, reporting each custom section it passes to `visitor`.
-///
-/// A null `visitor` reports nothing, which is the same run as
-/// `itasca_decode_env`.
-#[no_mangle]
-pub unsafe extern "C" fn itasca_decode_env_with(
-    data: *const u8,
-    len: usize,
-    visitor: *const VwModuleVisitor,
-    user: *mut c_void,
-    out_env: *mut *mut VwEnv,
-    out_code_pos: *mut usize,
-) -> VwStatus {
-    let env_slot = out_ptr(out_env, "out_env");
-    let pos_slot = out_ptr(out_code_pos, "out_code_pos");
-    *env_slot = core::ptr::null_mut();
-    *pos_slot = 0;
-    let d = bytes(data, len);
-    let r = if visitor.is_null() {
-        module::validate_env(d)
-    } else {
-        let mut v = FfiModuleVisitor { vt: &*visitor, user };
-        module::validate_env_with(d, &mut v)
-    };
-    match r {
-        Ok((env, pos)) => {
-            *env_slot = Box::into_raw(Box::new(VwEnv(env)));
-            *pos_slot = pos;
-            VwStatus::OK
-        }
-        Err(e) => status(e),
-    }
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn itasca_env_free(env: *mut VwEnv) {
     if !env.is_null() {
@@ -176,7 +76,7 @@ pub unsafe extern "C" fn itasca_env_free(env: *mut VwEnv) {
     }
 }
 
-// --- Part two: the code section ---
+// --- Retained code-entry validation for tier-2 compilation ---
 
 /// Validate one code-section entry, reporting each accepted operator to
 /// `visitor`.
@@ -273,36 +173,6 @@ pub unsafe extern "C" fn itasca_validate_code_entry_baseline(
     }
 }
 
-/// What a consumer is told as the code section is walked.
-///
-/// `on_code_entry` is not optional: a null slot elsewhere in this interface
-/// means "skipped", and an entry that is skipped is one nothing validated. A
-/// null visitor or a null `on_code_entry` aborts. `on_need_bytes` is nullable,
-/// since waiting for nothing is a thing a consumer means.
-#[repr(C)]
-pub struct VwCodeVisitor {
-    /// Before the walk reads the bytes up to `end`, exclusive. `end` may be
-    /// past the input, which means all of it. Return non-zero to give up,
-    /// which is what a cancelled stream does.
-    pub on_need_bytes: Option<extern "C" fn(*mut c_void, usize) -> u32>,
-    /// One entry, framed and not validated. The arguments are
-    /// `(user, index, entry_pos, contents_start, entry_end)`.
-    ///
-    /// Whoever takes this on owes the entry's validation: call
-    /// `itasca_validate_code_entry` with `entry_pos` and `index`, against the
-    /// same `env`, and fail the whole run if it rejects. It is a pure function
-    /// of those, so it may happen later and on another thread.
-    pub on_code_entry:
-        Option<extern "C" fn(*mut c_void, usize, usize, usize, usize) -> u32>,
-}
-
-/// Forwards to the C vtable. A decline becomes `Error::Visitor`, which is what
-/// `VW_ERR_VISITOR` reports; the consumer's own state says why.
-struct FfiCodeVisitor<'a> {
-    vt: &'a VwCodeVisitor,
-    user: *mut c_void,
-}
-
 fn code_verdict(r: u32) -> Result<(), itasca::error::Error> {
     if r == VW_VISIT_OK {
         Ok(())
@@ -310,117 +180,6 @@ fn code_verdict(r: u32) -> Result<(), itasca::error::Error> {
         Err(itasca::error::Error::Visitor(
             itasca::error::VisitError::OutOfMemory,
         ))
-    }
-}
-
-impl module::CodeVisitor for FfiCodeVisitor<'_> {
-    fn on_need_bytes(&mut self, end: usize) -> core::result::Result<(), itasca::error::Error> {
-        match self.vt.on_need_bytes {
-            Some(f) => code_verdict(f(self.user, end)),
-            None => Ok(()),
-        }
-    }
-
-    fn on_code_entry(
-        &mut self,
-        _data: &[u8],
-        _env: &itasca::module::Env,
-        index: usize,
-        entry_pos: usize,
-        contents_start: usize,
-        entry_end: usize,
-    ) -> core::result::Result<(), itasca::error::Error> {
-        let f = self.vt.on_code_entry.expect("itasca: on_code_entry must not be null");
-        code_verdict(f(self.user, index, entry_pos, contents_start, entry_end))
-    }
-}
-
-/// Walk the code section, reporting each entry to `visitor` rather than
-/// validating it here.
-///
-/// `*out_next_pos` comes back where the tail starts, and the entries are shown
-/// to tile the section before it does.
-#[no_mangle]
-pub unsafe extern "C" fn itasca_validate_code_with(
-    data: *const u8,
-    len: usize,
-    pos: usize,
-    env: *const VwEnv,
-    visitor: *const VwCodeVisitor,
-    user: *mut c_void,
-    out_next_pos: *mut usize,
-) -> VwStatus {
-    let next_slot = out_ptr(out_next_pos, "out_next_pos");
-    *next_slot = 0;
-    let vt = handle(visitor, "visitor");
-    assert!(
-        vt.on_code_entry.is_some(),
-        "itasca: on_code_entry must not be null; a skipped entry is one \
-         nothing validated"
-    );
-    let mut v = FfiCodeVisitor { vt, user };
-    match module::validate_code_with(bytes(data, len), pos, &handle(env, "env").0, &mut v) {
-        Ok(next) => {
-            *next_slot = next;
-            VwStatus::OK
-        }
-        Err(e) => status(e),
-    }
-}
-
-// --- Part three: everything after the code section ---
-
-/// `itasca_decode_tail`, reporting each custom section it passes to
-/// `visitor`. The same visitor the environment's walk takes, so a consumer
-/// hears about a module's custom sections from one place whichever side of the
-/// code section they are on.
-#[no_mangle]
-pub unsafe extern "C" fn itasca_decode_tail_with(
-    data: *const u8,
-    len: usize,
-    pos: usize,
-    env: *const VwEnv,
-    visitor: *const VwModuleVisitor,
-    user: *mut c_void,
-    out: *mut *mut VwTail,
-) -> VwStatus {
-    let slot = out_ptr(out, "out");
-    *slot = core::ptr::null_mut();
-    let d = bytes(data, len);
-    let e = &handle(env, "env").0;
-    let r = if visitor.is_null() {
-        module::validate_tail(d, pos, e)
-    } else {
-        let mut v = FfiModuleVisitor { vt: &*visitor, user };
-        module::validate_tail_with(d, pos, e, &mut v)
-    };
-    match r {
-        Ok(tail) => {
-            *slot = Box::into_raw(Box::new(VwTail(tail)));
-            VwStatus::OK
-        }
-        Err(e) => status(e),
-    }
-}
-
-/// Decode the module's tail. On success `*out` must be freed with
-/// `itasca_tail_free`.
-#[no_mangle]
-pub unsafe extern "C" fn itasca_decode_tail(
-    data: *const u8,
-    len: usize,
-    pos: usize,
-    env: *const VwEnv,
-    out: *mut *mut VwTail,
-) -> VwStatus {
-    let slot = out_ptr(out, "out");
-    *slot = core::ptr::null_mut();
-    match module::validate_tail(bytes(data, len), pos, &handle(env, "env").0) {
-        Ok(tail) => {
-            *slot = Box::into_raw(Box::new(VwTail(tail)));
-            VwStatus::OK
-        }
-        Err(e) => status(e),
     }
 }
 
@@ -454,7 +213,7 @@ pub extern "C" fn itasca_error_str(code: i32) -> *const c_char {
         VW_ERR_SECTION_OUT_OF_ORDER => c"section out of order",
         VW_ERR_SECTION_SIZE_MISMATCH => c"section size does not match its contents",
         VW_ERR_FUNC_CODE_MISMATCH => {
-            c"function and code sections have inconsistent lengths"
+            c"function body count does not match function signature count"
         }
         VW_ERR_INVALID_UTF8 => c"name is not valid UTF-8",
         VW_ERR_UNKNOWN_TYPE => c"unknown type",
@@ -577,50 +336,15 @@ mod tests {
             0x0a, 0x09, 0x01, 0x07, 0x00, 0x41, 0x01, 0x42, 0x02, 0x6a, 0x0b,
         ];
 
-        let mut env = core::ptr::null_mut();
-        let mut code_pos = 0;
-        let s = unsafe {
-            itasca_decode_env(wasm.as_ptr(), wasm.len(), &mut env, &mut code_pos)
-        };
-        assert_eq!(s.error, VW_OK);
-
-        // Frame the entry without validating it, the way a compiler dispatching
-        // entries to threads would, to find where it starts.
-        extern "C" fn record_entry_pos(
-            user: *mut c_void,
-            _index: usize,
-            entry_pos: usize,
-            _contents_start: usize,
-            _entry_end: usize,
-        ) -> u32 {
-            unsafe { *(user as *mut usize) = entry_pos };
-            VW_VISIT_OK
-        }
-
-        let mut entries: usize = 0;
-        let code_visitor = VwCodeVisitor {
-            on_need_bytes: None,
-            on_code_entry: Some(record_entry_pos),
-        };
+        let (decoded, code_pos) = module::validate_env(wasm).unwrap();
+        let entries = module::code_section(wasm, code_pos, &decoded).unwrap().unwrap().entries;
+        let env = Box::into_raw(Box::new(VwEnv(decoded)));
         let mut next = 0;
-        let s = unsafe {
-            itasca_validate_code_with(
-                wasm.as_ptr(),
-                wasm.len(),
-                code_pos,
-                env,
-                &code_visitor,
-                &mut entries as *mut usize as *mut c_void,
-                &mut next,
-            )
-        };
-        assert_eq!(s.error, VW_OK);
 
         // Every hook default, so no hook declines: the rejection is the
         // validator's.
         let visitor = VwVisitor::default();
         let mut error_at = 0;
-        next = 0;
         let s = unsafe {
             itasca_validate_code_entry(
                 wasm.as_ptr(),

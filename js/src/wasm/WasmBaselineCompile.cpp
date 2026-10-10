@@ -9462,8 +9462,8 @@ bool js::wasm::BaselinePlatformSupport() {
 bool js::wasm::BaselineCompileFunctions(
     const CodeMetadata& codeMeta, const CompilerEnvironment& compilerEnv,
     LifoAlloc& lifo, const FuncCompileInputVector& inputs, CompiledCode* code,
-    const BytecodeRegion& codeBytes, const VwEnv* itascaEnv,
-    UniqueChars* error) {
+    const BytecodeRegion& codeBytes, const VwEnv* itascaEnv, UniqueChars* error,
+    VwBatch* validationBatch) {
   MOZ_ASSERT(compilerEnv.tier() == Tier::Baseline);
 
   // The MacroAssembler will sometimes access the jitContext.
@@ -9525,16 +9525,17 @@ bool js::wasm::BaselineCompileFunctions(
     BaseDriver driver(codeMeta, compilerEnv, func, trapExitLayout,
                       trapExitLayoutNumWords, d, stk, &alloc, &masm,
                       &code->stackMaps);
-    driver.opOffsetBase = codeBytes.start;
+    driver.opOffsetBase =
+        codeBytes.start + (validationBatch ? func.entryOffset : 0);
 
     // Every body reaching baseline came out of a module itasca validated.
     // The engine's own synthetic modules, which built their bodies rather than
     // parsing them, are excluded from this prototype.
     MOZ_RELEASE_ASSERT(itascaEnv);
-    if (!DriveBodyWithItascaBaseline(codeBytes, func.entryOffset,
-                                       itascaEnv,
-                                       func.index - codeMeta.numFuncImports,
-                                       &driver, &driver.decline, error)) {
+    if (!DriveBodyWithItascaBaseline(codeBytes, func.entryOffset, itascaEnv,
+                                     func.index - codeMeta.numFuncImports,
+                                     &driver, &driver.decline, error,
+                                     validationBatch)) {
       return false;
     }
 

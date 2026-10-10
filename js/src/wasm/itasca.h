@@ -10,11 +10,10 @@
  *
  * C++ rather than C, since the consumer this exists for is SpiderMonkey.
  *
- * What a consumer is trusted for, and only this: a hook must return, must not
- * unwind, and must return VW_VISIT_OK for validation to finish. A hook that
- * does none of those can refuse a valid function body or hang. It cannot make
- * the validator accept bad bytes, because whether the bytes are accepted is
- * decided before any hook is consulted. See itasca's TRUST.md.
+ * Opcode hooks may reject validation but cannot override its checks. The
+ * experimental stream API additionally requires coherent byte publication and
+ * exclusive ownership of batch handles; see VwStreamVisitor below. Its complete
+ * Aeneas model compiles, but its correctness proofs are still deferred.
  */
 
 #ifndef itasca_h
@@ -35,6 +34,7 @@ struct VwState;
 struct VwContext;
 struct VwEnv;
 struct VwTail;
+struct VwBatch;
 
 /* TypeCode's value types, which are the bytes valtype encodes as. Handing one
  * of these to SpiderMonkey is an identity and not a conversion.
@@ -374,65 +374,6 @@ static_assert(sizeof(VwMemoryHooks) == 23 * sizeof(void*), "memory hooks");
 static_assert(sizeof(VwNumericHooks) == 123 * sizeof(void*), "numeric hooks");
 static_assert(sizeof(VwVisitor) == 174 * sizeof(void*), "hooks");
 
-/* What a consumer is told as a module is decoded around its code section.
- *
- * One visitor for both ends of the module rather than one each: a custom
- * section is legal between any two others and the code section cannot hold one,
- * so the same consumer hears about the ones before the code section from
- * itasca_decode_env_with and the ones after it from itasca_decode_tail_with,
- * in module order, without caring which side reported them.
- *
- * Zero-initialise and fill in only the hooks you want: a null slot is skipped.
- * A hook is trusted for what a VwVisitor hook is trusted for, and one that
- * declines stops the decode with VW_ERR_VISITOR, which is not a verdict about
- * the module.
- */
-struct VwModuleVisitor {
-  /* One custom section, framed and its name checked but not otherwise read.
-   * The arguments are (user, name_len, payload_start, payload_end). The name
-   * ends where the payload starts, so it is
-   * [payload_start - name_len, payload_start). Positions are into the bytes the
-   * entry point was handed, so a consumer that decoded a region rather than a
-   * whole module re-bases them itself.
-   */
-  uint32_t (*on_custom_section)(void*, size_t, size_t, size_t);
-};
-
-static_assert(sizeof(VwModuleVisitor) == 1 * sizeof(void*), "module hooks");
-
-/* What a consumer is told as the code section is walked.
- *
- * The walk frames each entry and hands it over without validating it, which is
- * what a compiler that dispatches entries to threads needs: where entry k
- * starts must be known before the k before it have been validated. Taking
- * on_code_entry means taking on the entry's validation -- call
- * itasca_validate_code_entry with the entry_pos and index you were given,
- * against the same env, and fail the run if it rejects. That is a pure function
- * of those, so it may happen later and on another thread.
- *
- * on_code_entry is not optional. A null slot elsewhere in this interface means
- * "skipped", and an entry that is skipped is one nothing validated, so a null
- * visitor or a null on_code_entry aborts rather than quietly accepting. A null
- * on_need_bytes is fine: waiting for nothing is a thing a consumer means.
- */
-struct VwCodeVisitor {
-  /* Before the walk reads the bytes up to `end`, exclusive, which may be past
-   * the input and so mean all of it. (user, end).
-   */
-  uint32_t (*on_need_bytes)(void*, size_t);
-  /* One entry, framed and not validated.
-   * (user, index, entry_pos, contents_start, entry_end).
-   *
-   * entry_pos is at the size prefix, which is what
-   * itasca_validate_code_entry takes. contents_start is the first byte of the
-   * locals declarations, which is not where the body's code begins:
-   * on_function_start reports that, after the declarations.
-   */
-  uint32_t (*on_code_entry)(void*, size_t, size_t, size_t, size_t);
-};
-
-static_assert(sizeof(VwCodeVisitor) == 2 * sizeof(void*), "code hooks");
-
 /* What a hook returns. */
 static const uint32_t VW_VISIT_OK = 0;
 static const uint32_t VW_VISIT_OOM = 1;
@@ -505,10 +446,6 @@ static const uint64_t VW_MAX_LOCALS = 50000;
 /* Entry points. */
 VwValType itasca_context_local(const VwContext* c, size_t i);
 size_t itasca_context_num_locals(const VwContext* c);
-VwStatus itasca_decode_env(const uint8_t* data, size_t len, VwEnv** out_env, size_t* out_code_pos);
-VwStatus itasca_decode_env_with(const uint8_t* data, size_t len, const VwModuleVisitor* visitor, void* user, VwEnv** out_env, size_t* out_code_pos);
-VwStatus itasca_decode_tail(const uint8_t* data, size_t len, size_t pos, const VwEnv* env, VwTail** out);
-VwStatus itasca_decode_tail_with(const uint8_t* data, size_t len, size_t pos, const VwEnv* env, const VwModuleVisitor* visitor, void* user, VwTail** out);
 VwConstExpr itasca_env_defined_global_init(const VwEnv* e, size_t i);
 VwGlobalType itasca_env_defined_global_type(const VwEnv* e, size_t i);
 uint32_t itasca_env_element_func(const VwEnv* e, size_t i, size_t j);
@@ -552,7 +489,6 @@ uint32_t itasca_tail_data_memory_index(const VwTail* t, size_t i);
 VwConstExpr itasca_tail_data_offset(const VwTail* t, size_t i);
 void itasca_tail_free(VwTail* tail);
 size_t itasca_tail_num_data(const VwTail* t);
-VwStatus itasca_validate_code_with(const uint8_t* data, size_t len, size_t pos, const VwEnv* env, const VwCodeVisitor* visitor, void* user, size_t* out_next_pos);
 VwStatus itasca_validate_code_entry(const uint8_t* data, size_t len, size_t pos, const VwEnv* env, size_t index, const VwVisitor* visitor, void* user, size_t* out_next_pos, size_t* out_error_offset);
 /* Same as itasca_validate_code_entry, driven with baseline's hooks. Baseline's
  * hooks are fixed extern "C" symbols (see WasmBaselineCompile.cpp) rather than a
@@ -562,6 +498,43 @@ VwStatus itasca_validate_code_entry(const uint8_t* data, size_t len, size_t pos,
  * through a vtable.
  */
 VwStatus itasca_validate_code_entry_baseline(const uint8_t* data, size_t len, size_t pos, const VwEnv* env, size_t index, void* user, size_t* out_next_pos, size_t* out_error_offset);
+
+enum class VwStreamRegion : uint32_t { Environment, Code, Tail };
+
+struct VwStreamConfig {
+  size_t batch_bytes;
+  size_t max_batches;
+};
+struct VwBatchEntry {
+  size_t index, start, contents, end;
+  const uint8_t* data;
+};
+// All callbacks are required. Ranges publish initialized immutable bytes.
+// The environment is borrowed until finish; tail and submit transfer
+// ownership even on failure. complete transfers a live batch back; the driver
+// checks its module and batch IDs. finish must join and release all remaining
+// jobs before returning, including on error. Successful validation transfers
+// the environment through out_env; failure leaves out_env null.
+struct VwStreamVisitor {
+  uint32_t (*range)(void*, VwStreamRegion, size_t, size_t, const uint8_t**,
+                    size_t*);
+  uint32_t (*environment)(void*, const VwEnv*, size_t, size_t, VwStreamConfig*);
+  uint32_t (*custom)(void*, VwStreamRegion, size_t, size_t, size_t);
+  uint32_t (*submit)(void*, VwBatch*);
+  uint32_t (*complete)(void*, VwBatch**);
+  uint32_t (*code_end)(void*);
+  uint32_t (*tail)(void*, VwTail*);
+  void (*finish)(void*, bool success);
+};
+VwStatus itasca_validate_stream(const VwStreamVisitor*, void*, size_t code_len,
+                                VwEnv** out_env);
+void itasca_batch_free(VwBatch*);
+size_t itasca_batch_len(const VwBatch*);
+bool itasca_batch_is_last(const VwBatch*);
+VwStatus itasca_batch_next_entry(VwBatch*, VwBatchEntry*);
+VwStatus itasca_batch_validate_func(VwBatch*, size_t, const VwVisitor*, void*,
+                                    size_t*);
+VwStatus itasca_batch_validate_func_baseline(VwBatch*, size_t, void*, size_t*);
 
 }  // extern "C"
 

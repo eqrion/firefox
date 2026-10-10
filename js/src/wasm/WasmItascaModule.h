@@ -32,6 +32,11 @@ struct VwEnvDeleter {
   void operator()(VwEnv* p) { itasca_env_free(p); }
 };
 
+struct VwBatchDeleter {
+  void operator()(VwBatch* p) { itasca_batch_free(p); }
+};
+using UniqueVwBatch = mozilla::UniquePtr<VwBatch, VwBatchDeleter>;
+
 using UniqueVwEnv = mozilla::UniquePtr<VwEnv, VwEnvDeleter>;
 
 // A validated environment that outlives the compilation that produced it.

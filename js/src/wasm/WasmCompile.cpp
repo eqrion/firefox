@@ -937,85 +937,199 @@ static const VwEnv* RetainItascaContext(ModuleGenerator& mg, UniqueVwEnv env,
   return itascaEnv;
 }
 
+namespace {
+class ItascaCompilation {
+  const CompileArgs& args_;
+  UniqueChars* error_;
+  UniqueCharsVector* warnings_;
+  MutableModuleMetadata moduleMeta_;
+  CompilerEnvironment compilerEnv_;
+  CustomSections customs_;
+  BytecodeRegion environment_;
+  BytecodeRegion code_;
+  BytecodeRegion tail_;
+  SharedBytes retainedCode_;
+  CodeSectionArrival& arrival_;
+  const ExclusiveStreamEndData* streamEnd_;
+  const Atomic<bool>* cancelled_;
+  SharedBytes streamTail_;
+  JS::OptimizedEncodingListener* listener_ = nullptr;
+  Maybe<ModuleGenerator> mg_;
+
+  static ItascaCompilation& self(void* user) {
+    return *static_cast<ItascaCompilation*>(user);
+  }
+  static uint32_t result(bool ok) { return ok ? VW_VISIT_OK : VW_VISIT_OOM; }
+
+  static uint32_t range(void* user, VwStreamRegion region, size_t start,
+                        size_t end, const uint8_t** data, size_t* len) {
+    auto& s = self(user);
+    BytecodeSpan span;
+    if (region == VwStreamRegion::Environment) {
+      span = s.environment_.span;
+    } else if (region == VwStreamRegion::Code) {
+      if (start > end || end > s.code_.size() || !s.arrival_.waitFor(end)) {
+        return VW_VISIT_OOM;
+      }
+      span = s.code_.span.Subspan(start, end - start);
+    } else {
+      if (s.streamEnd_) {
+        auto streamEnd = s.streamEnd_->lock();
+        while (!streamEnd->reached) {
+          if (*s.cancelled_) {
+            return VW_VISIT_OOM;
+          }
+          streamEnd.wait();
+        }
+        s.streamTail_ = streamEnd->tailBytes;
+        s.listener_ = streamEnd->completeTier2Listener;
+        s.tail_.span = s.streamTail_->span();
+      }
+      span = s.tail_.span;
+    }
+    *data = span.data();
+    *len = span.size();
+    return VW_VISIT_OK;
+  }
+
+  static uint32_t environment(void* user, const VwEnv* env, size_t codeStart,
+                              size_t codeLen, VwStreamConfig* config) {
+    auto& s = self(user);
+    if (!BuildEnvWithItasca(env, s.moduleMeta_, s.error_)) {
+      return VW_VISIT_OOM;
+    }
+    if (codeLen) {
+      s.moduleMeta_->codeMeta->codeSectionRange =
+          Some(BytecodeRange(codeStart, codeLen));
+    }
+    Decoder decoder(s.environment_.span, 0, s.error_, s.warnings_);
+    if (!CheckBuiltinModuleImports(decoder, s.moduleMeta_->codeMeta.get(),
+                                   s.moduleMeta_)) {
+      return VW_VISIT_OOM;
+    }
+    s.compilerEnv_.computeParameters(*s.moduleMeta_);
+    if (!s.moduleMeta_->prepareForCompile(s.compilerEnv_.mode())) {
+      return VW_VISIT_OOM;
+    }
+    s.mg_.emplace(*s.moduleMeta_->codeMeta, s.compilerEnv_,
+                  s.compilerEnv_.initialState(), s.cancelled_, s.error_,
+                  s.warnings_);
+    if (!s.mg_->initializeCompleteTier()) {
+      return VW_VISIT_OOM;
+    }
+    s.mg_->setItascaContext(s.code_, env);
+    config->batch_bytes = s.compilerEnv_.tier() == Tier::Baseline
+                              ? JitOptions.wasmBatchBaselineThreshold
+                              : JitOptions.wasmBatchIonThreshold;
+    config->batch_bytes = std::max(size_t(1), config->batch_bytes);
+    config->max_batches = s.mg_->validationBatchCapacity();
+    return VW_VISIT_OK;
+  }
+  static uint32_t custom(void* user, VwStreamRegion region, size_t nameLen,
+                         size_t payloadStart, size_t payloadEnd) {
+    auto& s = self(user);
+    return RecordCustomSectionWithItasca(
+        region == VwStreamRegion::Environment ? s.environment_ : s.tail_,
+        s.moduleMeta_->codeMeta, &s.customs_, nameLen, payloadStart,
+        payloadEnd);
+  }
+  static uint32_t submit(void* user, VwBatch* raw) {
+    return result(self(user).mg_->compileValidationBatch(UniqueVwBatch(raw)));
+  }
+  static uint32_t complete(void* user, VwBatch** raw) {
+    UniqueVwBatch batch;
+    if (!self(user).mg_->takeValidationBatch(&batch)) {
+      return VW_VISIT_OOM;
+    }
+    *raw = batch.release();
+    return VW_VISIT_OK;
+  }
+  static uint32_t codeEnd(void* user) {
+    return result(self(user).mg_->finishFuncDefs());
+  }
+  static uint32_t tail(void* user, VwTail* raw) {
+    auto& s = self(user);
+    UniqueVwTail tail(raw);
+    return result(BuildTailWithItasca(tail.get(), s.moduleMeta_, s.error_));
+  }
+
+  static void finishValidation(void* user, bool success) {
+    if (!success) {
+      self(user).mg_.reset();
+    }
+  }
+
+ public:
+  ItascaCompilation(const CompileArgs& args, const BytecodeSource& source,
+                    SharedBytes retainedCode, CodeSectionArrival& arrival,
+                    UniqueChars* error, UniqueCharsVector* warnings,
+                    const ExclusiveStreamEndData* streamEnd = nullptr,
+                    const Atomic<bool>* cancelled = nullptr)
+      : args_(args),
+        error_(error),
+        warnings_(warnings),
+        compilerEnv_(args),
+        environment_(source.envSpan(), 0),
+        code_(source.hasCodeSection() ? source.codeSpan() : BytecodeSpan(),
+              source.envSpan().size()),
+        tail_(source.hasCodeSection() ? source.tailSpan() : BytecodeSpan(),
+              source.envSpan().size() + code_.size()),
+        retainedCode_(std::move(retainedCode)),
+        arrival_(arrival),
+        streamEnd_(streamEnd),
+        cancelled_(cancelled) {}
+
+  bool validate() {
+    moduleMeta_ = js_new<ModuleMetadata>();
+    if (!moduleMeta_ || !moduleMeta_->init(args_) ||
+        (code_.size() && !retainedCode_)) {
+      return false;
+    }
+    VwStreamVisitor visitor{range,    environment, custom, submit,
+                            complete, codeEnd,     tail,   finishValidation};
+    VwEnv* rawEnv = nullptr;
+    VwStatus status =
+        itasca_validate_stream(&visitor, this, code_.size(), &rawEnv);
+    UniqueVwEnv env(rawEnv);
+    if (status.error != VW_OK) {
+      if (cancelled_ && *cancelled_ && !*error_) {
+        return FailItasca(error_, "unexpected end of input");
+      }
+      if (*error_ || status.error == VW_ERR_VISITOR) {
+        return false;
+      }
+      return ReportItascaError(status, error_);
+    }
+    if (!RetainItascaContext(*mg_, std::move(env), code_, retainedCode_)) {
+      return false;
+    }
+    DecodeNameSectionWithItasca(customs_, moduleMeta_, warnings_);
+    return true;
+  }
+  SharedModule finish(const BytecodeBufferOrSource& bytecode,
+                      JS::OptimizedEncodingListener* listener) {
+    return mg_->finishModule(bytecode, *moduleMeta_, listener);
+  }
+  const ShareableBytes* streamTail() const { return streamTail_; }
+  JS::OptimizedEncodingListener* listener() const { return listener_; }
+};
+}  // namespace
+
 SharedModule wasm::CompileModule(const CompileArgs& args,
                                  const BytecodeBufferOrSource& bytecode,
                                  UniqueChars* error,
                                  UniqueCharsVector* warnings,
                                  JS::OptimizedEncodingListener* listener) {
-  MutableModuleMetadata moduleMeta = js_new<ModuleMetadata>();
-  if (!moduleMeta || !moduleMeta->init(args)) {
+  const BytecodeSource& source = bytecode.source();
+  SharedBytes code =
+      source.hasCodeSection() ? bytecode.getOrCreateCodeSection() : nullptr;
+  CodeSectionArrival arrival;
+  ItascaCompilation compilation(args, source, std::move(code), arrival, error,
+                                warnings);
+  if (!compilation.validate()) {
     return nullptr;
   }
-
-  const BytecodeSource& bytecodeSource = bytecode.source();
-  BytecodeRegion envRegion(bytecodeSource.envSpan(), 0);
-
-  CustomSections customs;
-  UniqueVwEnv env;
-  size_t codePos = 0;
-  if (!DecodeEnvWithItasca(envRegion, moduleMeta, &customs, &env, &codePos,
-                             error)) {
-    return nullptr;
-  }
-
-  BytecodeRegion code;
-  BytecodeRegion tail;
-  if (!RegionsAfterEnv(bytecodeSource, codePos, &code, &tail, error)) {
-    return nullptr;
-  }
-
-  // The split already found the code section, and itasca has just agreed
-  // that everything before it is well formed.
-  if (bytecodeSource.hasCodeSection()) {
-    moduleMeta->codeMeta->codeSectionRange = Some(bytecodeSource.codeRange());
-  }
-
-  Decoder envDecoder(bytecodeSource.envSpan(), bytecodeSource.envRange().start,
-                     error, warnings);
-  if (!CheckBuiltinModuleImports(envDecoder, moduleMeta->codeMeta.get(),
-                                 moduleMeta)) {
-    return nullptr;
-  }
-
-  CompilerEnvironment compilerEnv(args);
-  compilerEnv.computeParameters(*moduleMeta);
-  if (!moduleMeta->prepareForCompile(compilerEnv.mode())) {
-    return nullptr;
-  }
-
-  ModuleGenerator mg(*moduleMeta->codeMeta, compilerEnv,
-                     compilerEnv.initialState(), nullptr, error, warnings);
-  if (!mg.initializeCompleteTier()) {
-    return nullptr;
-  }
-
-  const VwEnv* itascaEnv = RetainItascaContext(
-      mg, std::move(env), code,
-      bytecodeSource.hasCodeSection() ? bytecode.getOrCreateCodeSection()
-                                      : nullptr);
-  if (!itascaEnv) {
-    return nullptr;
-  }
-
-  if (bytecodeSource.hasCodeSection()) {
-    CodeSectionArrival arrival;
-    if (!DecodeCodeSectionWithItasca(code, itascaEnv,
-                                       *moduleMeta->codeMeta, mg, arrival,
-                                       error)) {
-      return nullptr;
-    }
-  } else if (!CheckNoCodeSectionWithItasca(code, itascaEnv, error) ||
-             !mg.finishFuncDefs()) {
-    return nullptr;
-  }
-
-  if (!DecodeTailWithItasca(tail, itascaEnv, moduleMeta, &customs,
-                             error)) {
-    return nullptr;
-  }
-  DecodeNameSectionWithItasca(customs, moduleMeta, warnings);
-
-  return mg.finishModule(bytecode, *moduleMeta, listener);
+  return compilation.finish(bytecode, listener);
 }
 
 #ifdef ENABLE_WASM_COMPONENTS
@@ -1194,90 +1308,17 @@ SharedModule wasm::CompileStreaming(
     const ExclusiveStreamEndData& exclusiveStreamEnd,
     const Atomic<bool>& cancelled, UniqueChars* error,
     UniqueCharsVector* warnings) {
-  MutableModuleMetadata moduleMeta = js_new<ModuleMetadata>();
-  if (!moduleMeta || !moduleMeta->init(args)) {
+  BytecodeSource source(envBytes.span(), codeBytes.span(), BytecodeSpan());
+  BytecodeRegion code(source.codeSpan(), source.codeRange().start);
+  StreamingCodeSection arrival(code, codeBytesEnd, cancelled, error);
+  ItascaCompilation compilation(args, source, &codeBytes, arrival, error,
+                                warnings, &exclusiveStreamEnd, &cancelled);
+  if (!compilation.validate()) {
     return nullptr;
   }
-
-  // The environment is all here: the stream is split on the code section, so
-  // reaching this at all means everything before it has arrived.
-  BytecodeRegion envRegion(BytecodeSpan(envBytes.begin(), envBytes.length()),
-                           0);
-  CustomSections customs;
-  UniqueVwEnv env;
-  size_t codePos = 0;
-  if (!DecodeEnvWithItasca(envRegion, moduleMeta, &customs, &env, &codePos,
-                             error)) {
-    return nullptr;
-  }
-  // The tail has not arrived, so its region is empty for now; the code
-  // section's is allocated at the size its header declared.
-  BytecodeSource arrived(envRegion.span,
-                         BytecodeSpan(codeBytes.begin(), codeBytes.length()),
-                         BytecodeSpan());
-  BytecodeRegion code;
-  BytecodeRegion tail;
-  if (!RegionsAfterEnv(arrived, codePos, &code, &tail, error)) {
-    return nullptr;
-  }
-  moduleMeta->codeMeta->codeSectionRange = Some(arrived.codeRange());
-
-  Decoder envDecoder(envRegion.span, 0, error, warnings);
-  if (!CheckBuiltinModuleImports(envDecoder, moduleMeta->codeMeta.get(),
-                                 moduleMeta)) {
-    return nullptr;
-  }
-
-  CompilerEnvironment compilerEnv(args);
-  compilerEnv.computeParameters(*moduleMeta);
-  if (!moduleMeta->prepareForCompile(compilerEnv.mode())) {
-    return nullptr;
-  }
-
-  ModuleGenerator mg(*moduleMeta->codeMeta, compilerEnv,
-                     compilerEnv.initialState(), &cancelled, error, warnings);
-  if (!mg.initializeCompleteTier()) {
-    return nullptr;
-  }
-
-  const VwEnv* itascaEnv =
-      RetainItascaContext(mg, std::move(env), code, &codeBytes);
-  if (!itascaEnv) {
-    return nullptr;
-  }
-
-  {
-    StreamingCodeSection arrival(code, codeBytesEnd, cancelled, error);
-    if (!DecodeCodeSectionWithItasca(code, itascaEnv,
-                                       *moduleMeta->codeMeta, mg, arrival,
-                                       error)) {
-      return nullptr;
-    }
-  }
-
-  {
-    auto streamEnd = exclusiveStreamEnd.lock();
-    while (!streamEnd->reached) {
-      if (cancelled) {
-        return nullptr;
-      }
-      streamEnd.wait();
-    }
-  }
-
-  const StreamEndData streamEnd = exclusiveStreamEnd.lock();
-  const ShareableBytes& tailBytes = *streamEnd.tailBytes;
-  tail.span = BytecodeSpan(tailBytes.begin(), tailBytes.length());
-
-  if (!DecodeTailWithItasca(tail, itascaEnv, moduleMeta, &customs,
-                             error)) {
-    return nullptr;
-  }
-  DecodeNameSectionWithItasca(customs, moduleMeta, warnings);
-
-  BytecodeBuffer bytecodeBuffer(&envBytes, &codeBytes, &tailBytes);
-  return mg.finishModule(BytecodeBufferOrSource(std::move(bytecodeBuffer)),
-                         *moduleMeta, streamEnd.completeTier2Listener);
+  BytecodeBuffer bytecode(&envBytes, &codeBytes, compilation.streamTail());
+  return compilation.finish(BytecodeBufferOrSource(std::move(bytecode)),
+                            compilation.listener());
 }
 
 // wasmDumpIon is a shell testing function, and the only remaining consumer of

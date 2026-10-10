@@ -346,7 +346,7 @@ class RootCompiler {
                wasm::TryNoteVector& tryNotes,
                wasm::InliningContext& inliningContext,
                const BytecodeRegion& codeBytes, const VwEnv* itascaEnv,
-               UniqueChars* error)
+               UniqueChars* error, VwBatch* validationBatch)
       : compilerEnv_(compilerEnv),
         codeMeta_(codeMeta),
         codeTailMeta_(codeTailMeta),
@@ -366,11 +366,13 @@ class RootCompiler {
         inliningContext_(inliningContext),
         codeBytes_(codeBytes),
         itascaEnv_(itascaEnv),
+        validationBatch_(validationBatch),
         error_(error) {}
 
   // The code section and the environment its bodies are validated against.
   const BytecodeRegion codeBytes_;
   const VwEnv* const itascaEnv_;
+  VwBatch* const validationBatch_;
   UniqueChars* const error_;
 
   const CompilerEnvironment& compilerEnv() const { return compilerEnv_; }
@@ -8529,11 +8531,13 @@ bool RootCompiler::generate() {
   // so initRoot/startBlock/beginPushedBody, wait for on_function_start.
   FunctionCompiler funcCompiler(*this, decoder_, func_, compileInfo_);
   {
-    IonDriver driver{funcCompiler, codeBytes_.start};
+    IonDriver driver{
+        funcCompiler,
+        codeBytes_.start + (validationBatch_ ? func_.entryOffset : 0)};
     if (!DriveBodyWithItasca(codeBytes_, func_.entryOffset, itascaEnv_,
-                               func_.index - codeMeta_.numFuncImports,
-                               IonItascaVisitor(), &driver, &driver.decline,
-                               error_)) {
+                             func_.index - codeMeta_.numFuncImports,
+                             IonItascaVisitor(), &driver, &driver.decline,
+                             error_, validationBatch_)) {
       return false;
     }
   }
@@ -8632,14 +8636,12 @@ CompileInfo* RootCompiler::startInlineCall(
 
 void RootCompiler::finishInlineCall() { inlinedCallerOffsets_.popBack(); }
 
-bool wasm::IonCompileFunctions(const CodeMetadata& codeMeta,
-                               const CodeTailMetadata* codeTailMeta,
-                               const CompilerEnvironment& compilerEnv,
-                               LifoAlloc& lifo,
-                               const FuncCompileInputVector& inputs,
-                               CompiledCode* code,
-                               const BytecodeRegion& codeBytes,
-                               const VwEnv* itascaEnv, UniqueChars* error) {
+bool wasm::IonCompileFunctions(
+    const CodeMetadata& codeMeta, const CodeTailMetadata* codeTailMeta,
+    const CompilerEnvironment& compilerEnv, LifoAlloc& lifo,
+    const FuncCompileInputVector& inputs, CompiledCode* code,
+    const BytecodeRegion& codeBytes, const VwEnv* itascaEnv, UniqueChars* error,
+    VwBatch* validationBatch) {
   MOZ_ASSERT(compilerEnv.tier() == Tier::Optimized);
   MOZ_ASSERT(compilerEnv.debug() == DebugEnabled::False);
   MOZ_ASSERT_IF(compilerEnv.mode() == CompileMode::LazyTiering, !!codeTailMeta);
@@ -8697,7 +8699,7 @@ bool wasm::IonCompileFunctions(const CodeMetadata& codeMeta,
     // Set up for Ion compilation.
     RootCompiler rootCompiler(compilerEnv, codeMeta, codeTailMeta, alloc, func,
                               d, masm.tryNotes(), masm.inliningContext(),
-                              codeBytes, itascaEnv, error);
+                              codeBytes, itascaEnv, error, validationBatch);
     if (!rootCompiler.generate()) {
       return false;
     }

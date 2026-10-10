@@ -6,4 +6,4 @@ license = "MPL-2.0"
 
 [dependencies]
 # Prototype: the verified wasm 1.0 validator lives outside the tree for now.
-itasca = { path = "../../../../../../src/itasca" }
+itasca = { path = "../../../../../../src/itasca", features = ["stream"] }

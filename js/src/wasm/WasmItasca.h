@@ -119,66 +119,18 @@ class CodeSectionArrival {
 [[nodiscard]] bool ValidateWithItasca(const BytecodeSource& bytecode,
                                         UniqueChars* error);
 
-// What DecodeEnvWithItasca and DecodeTailWithItasca accumulate as they
-// report each custom section they pass over, for DecodeNameSectionWithItasca
-// to decode afterwards.
-//
-// A name section may be on either side of the code section, so this has to
-// survive both calls: `nameSectionIndex` is where it landed in
-// CodeMetadata::customSectionRanges, and `nameSectionBytes` is its payload,
-// which is a span into whichever region reported it and stays valid once that
-// region does.
+// Custom-section metadata collected across the environment and tail.
 struct CustomSections {
   mozilla::Maybe<uint32_t> nameSectionIndex;
   mozilla::Maybe<BytecodeSpan> nameSectionBytes;
 };
 
-// Decode and validate everything before the code section, and translate it into
-// the metadata SpiderMonkey compiles against. `env` is the module's first
-// region, which begins with its header. `*outEnv` is the environment the
-// per-function validation then runs against, and `*outCodePos` is where the
-// environment ended, which is the code section's header when there is one.
-[[nodiscard]] bool DecodeEnvWithItasca(const BytecodeRegion& env,
-                                         ModuleMetadata* moduleMeta,
-                                         CustomSections* customs,
-                                         UniqueVwEnv* outEnv,
-                                         size_t* outCodePos,
-                                         UniqueChars* error);
-
-// Where the code section and the tail are, given where the environment ended.
-//
-// The two are the same region for a module with no code section: what follows
-// the environment is the tail, in the environment's own region. Fails if the
-// split and the environment do not end in the same place, which is a section
-// before the code section that belongs in neither.
-[[nodiscard]] bool RegionsAfterEnv(const BytecodeSource& bytecode,
-                                   size_t codePos, BytecodeRegion* code,
-                                   BytecodeRegion* tail, UniqueChars* error);
-
-// Walk the code section, handing each entry to `mg.compileFuncDef`.
-//
-// `code` is the section, from its id byte to its last content byte, which is
-// the region a bytecode source is split on. itasca_validate_code_with frames
-// each entry from its own size prefix and hands it over unvalidated, so entries
-// can be dispatched to compile threads before any of them is checked, and it
-// shows the entries tile the section exactly before returning: a partition it
-// hands out is the one itasca itself would produce walking the section
-// itself.
-[[nodiscard]] bool DecodeCodeSectionWithItasca(const BytecodeRegion& code,
-                                                 const VwEnv* env,
-                                                 const CodeMetadata& codeMeta,
-                                                 ModuleGenerator& mg,
-                                                 CodeSectionArrival& arrival,
-                                                 UniqueChars* error);
-
-// Check that itasca agrees that a module the splitter found no code section
-// in has none: the function section may have declared bodies for one, and a
-// section too big for the splitter to take is one it did not find.
-//
-// `region` is the module's bytes from where the environment ended.
-[[nodiscard]] bool CheckNoCodeSectionWithItasca(const BytecodeRegion& region,
-                                                  const VwEnv* env,
-                                                  UniqueChars* error);
+[[nodiscard]] bool BuildEnvWithItasca(const VwEnv*, ModuleMetadata*,
+                                      UniqueChars*);
+[[nodiscard]] bool BuildTailWithItasca(const VwTail*, ModuleMetadata*,
+                                       UniqueChars*);
+uint32_t RecordCustomSectionWithItasca(const BytecodeRegion&, CodeMetadata*,
+                                       CustomSections*, size_t, size_t, size_t);
 
 // A value type a hook reports, in SpiderMonkey's terms. The enum values are
 // the binary format's, which are TypeCode's, so this is a check and not a
@@ -201,43 +153,21 @@ ValType ToWasmValType(VwStackType type);
 // decode-and-validate loop and the hooks are the compiler. `*decline` is where
 // a hook that refused the body left its reason, since itasca reports only
 // that one did.
-[[nodiscard]] bool DriveBodyWithItasca(const BytecodeRegion& code,
-                                         size_t entryOffset, const VwEnv* env,
-                                         uint32_t funcDefIndex,
-                                         const VwVisitor& visitor, void* user,
-                                         const DeclineReason* decline,
-                                         UniqueChars* error);
+[[nodiscard]] bool DriveBodyWithItasca(
+    const BytecodeRegion& code, size_t entryOffset, const VwEnv* env,
+    uint32_t funcDefIndex, const VwVisitor& visitor, void* user,
+    const DeclineReason* decline, UniqueChars* error, VwBatch* batch = nullptr);
 
 // The same drive, for baseline's hooks specifically. Baseline's hooks are
 // fixed extern "C" symbols rather than entries in a VwVisitor, so
 // itasca_glue's baseline visitor calls them directly instead of through a
 // vtable, which is what makes them inlinable across the FFI boundary; there
 // is accordingly no `visitor` argument to take.
-[[nodiscard]] bool DriveBodyWithItascaBaseline(const BytecodeRegion& code,
-                                                 size_t entryOffset,
-                                                 const VwEnv* env,
-                                                 uint32_t funcDefIndex,
-                                                 void* user,
-                                                 const DeclineReason* decline,
-                                                 UniqueChars* error);
+[[nodiscard]] bool DriveBodyWithItascaBaseline(
+    const BytecodeRegion& code, size_t entryOffset, const VwEnv* env,
+    uint32_t funcDefIndex, void* user, const DeclineReason* decline,
+    UniqueChars* error, VwBatch* batch = nullptr);
 
-// Decode and validate everything after the code section, and translate it.
-// `tail` is the module's bytes from where the code section ended.
-//
-// This fills ModuleMetadata::dataSegments directly rather than the ranges the
-// old decoder produced: a validator that reports a segment's bytes has no byte
-// range to hand over, and it already copied them.
-[[nodiscard]] bool DecodeTailWithItasca(const BytecodeRegion& tail,
-                                          const VwEnv* env,
-                                          ModuleMetadata* moduleMeta,
-                                          CustomSections* customs,
-                                          UniqueChars* error);
-
-// Decode the name section DecodeEnvWithItasca and DecodeTailWithItasca
-// found, if either found one. A custom section is allowed between any two
-// others and the code section cannot hold one, so the two calls between them
-// see every custom section in module order regardless of which side of the
-// code section it is on, and `customs` is where they left what they found.
 void DecodeNameSectionWithItasca(const CustomSections& customs,
                                    ModuleMetadata* moduleMeta,
                                    UniqueCharsVector* warnings);
