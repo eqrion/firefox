@@ -621,9 +621,11 @@ def load_wpt_tests(xul_tester, requested_paths, excluded_paths, update_manifest=
     recognized_prefs = set([
         "wasm_js_promise_integration",
         "experimental.wasm_esm_integration",
+        "wasm_components",
     ])
     nightly_only_prefs = set([
         "experimental.wasm_esm_integration",
+        "wasm_components",
     ])
 
     def resolve(test_path, script):

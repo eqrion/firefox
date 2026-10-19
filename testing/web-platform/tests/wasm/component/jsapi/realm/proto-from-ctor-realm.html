@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Prototype from constructor realm for component interfaces</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script src="/wasm/component/jsapi/harness/component-helpers.js"></script>
+<iframe></iframe>
+<script>
+// When `newTarget.prototype` is not an object, the created object's prototype
+// comes from newTarget's realm, per GetPrototypeFromConstructor.
+const other = document.querySelector("iframe").contentWindow;
+
+function newTargetFromOtherRealm() {
+  const C = new other.Function();
+  C.prototype = null;
+  return C;
+}
+
+promise_test(async () => {
+  const bytes = await componentBytes("realm/empty");
+  const component = Reflect.construct(WebAssembly.Component, [bytes], newTargetFromOtherRealm());
+  assert_equals(Object.getPrototypeOf(component), other.WebAssembly.Component.prototype);
+}, "WebAssembly.Component");
+
+promise_test(async () => {
+  const component = await compileComponent("realm/empty");
+  const instance = Reflect.construct(WebAssembly.ComponentInstance, [component], newTargetFromOtherRealm());
+  assert_equals(Object.getPrototypeOf(instance), other.WebAssembly.ComponentInstance.prototype);
+}, "WebAssembly.ComponentInstance");
+
+test(() => {
+  const error = Reflect.construct(WebAssembly.ComponentError, ["message", 1], newTargetFromOtherRealm());
+  assert_equals(Object.getPrototypeOf(error), other.WebAssembly.ComponentError.prototype);
+}, "WebAssembly.ComponentError");
+
+promise_test(async () => {
+  const component = await compileComponent("realm/empty");
+  const instance = Reflect.construct(other.WebAssembly.ComponentInstance, [component], newTargetFromOtherRealm());
+  assert_equals(Object.getPrototypeOf(instance), other.WebAssembly.ComponentInstance.prototype);
+}, "WebAssembly.ComponentInstance from another realm accepts a Component from this realm");
+</script>

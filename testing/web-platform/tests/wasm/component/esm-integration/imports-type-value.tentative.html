@@ -1,0 +1,22 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Bare type and value imports take the default export</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script type="importmap">
+{ "imports": { "Elem": "./resources/elem.mjs", "greeting": "./resources/greeting.mjs" } }
+</script>
+<script type="module">
+import Elem from "./resources/elem.mjs";
+
+promise_test(async () => {
+  const { tagOf } = await import("./resources/type-value-import.wasm");
+  assert_equals(tagOf(new Elem()), 7);
+  assert_throws_js(TypeError, () => tagOf({}));
+}, "a bare resource type import takes the default export as its constructor");
+
+promise_test(async () => {
+  const ns = await import("./resources/type-value-import.wasm");
+  assert_equals(ns.greeting, "hello");
+}, "a value import takes the default export and a value export is a binding");
+</script>

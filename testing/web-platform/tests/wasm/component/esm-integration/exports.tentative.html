@@ -1,0 +1,37 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Component exports become module namespace bindings</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script src="/wasm/component/jsapi/harness/assertions.js"></script>
+<script type="module">
+import * as ns from "./resources/greeter.wasm";
+import { answer, Counter, math } from "./resources/greeter.wasm";
+
+test(() => {
+  assert_array_equals(Object.keys(ns), ["Counter", "answer", "math"]);
+  assert_false("default" in ns, "no default binding");
+}, "one binding per JSName of each export, and no default");
+
+test(() => {
+  assert_equals(answer(), 42);
+  assert_equals(ns.answer, answer);
+  assert_builtin_function(answer, { name: "answer", length: 0 }, "answer");
+}, "an exported function is a named binding");
+
+test(() => {
+  assert_guest_class(Counter, { name: "Counter", length: 1, methods: [["get", 0]] });
+  assert_equals(new Counter(5).get(), 5);
+}, "an exported resource type is a class binding");
+
+test(() => {
+  assert_exports_object(math, ["double"], "math");
+  assert_equals(math.double(21), 42);
+}, "an exported instance is a binding holding its exports object");
+
+promise_test(async () => {
+  const dynamic = await import("./resources/greeter.wasm");
+  assert_equals(dynamic, ns, "the module is instantiated once");
+  assert_equals(dynamic.answer, answer);
+}, "dynamic import() returns the same namespace");
+</script>

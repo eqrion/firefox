@@ -1,0 +1,94 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Objects created by conversions belong to the component realm</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script src="/wasm/component/jsapi/harness/component-helpers.js"></script>
+<script src="/wasm/component/jsapi/harness/assertions.js"></script>
+<iframe></iframe>
+<script>
+// The component realm is the realm of the WebAssembly namespace the
+// component was instantiated through. Here that is the iframe's, while the
+// caller lives in the top-level realm.
+const other = document.querySelector("iframe").contentWindow;
+
+let exports;
+promise_setup(async () => {
+  window.marker = () => 1;
+  other.marker = () => 2;
+  const bytes = await componentBytes("realm/conversion");
+  const component = new other.WebAssembly.Component(bytes, { builtins: ["js/global"] });
+  exports = new other.WebAssembly.ComponentInstance(component).exports;
+});
+
+promise_test(async () => {
+  assert_equals(Object.getPrototypeOf(exports), null);
+  assert_equals(Object.getPrototypeOf(exports.makeList), other.Function.prototype);
+  assert_not_equals(other.Function.prototype, Function.prototype, "realms differ");
+}, "exported functions come from the component realm");
+
+promise_test(async () => {
+  const list = exports.makeList();
+  assert_equals(Object.getPrototypeOf(list), other.Uint32Array.prototype);
+  assert_equals(Object.getPrototypeOf(list.buffer), other.ArrayBuffer.prototype);
+  assert_array_equals(Array.from(list), [1, 2, 3]);
+}, "list<u32> becomes a Uint32Array of the component realm");
+
+promise_test(async () => {
+  const bytes = exports.makeBytes();
+  assert_equals(Object.getPrototypeOf(bytes), other.Uint8Array.prototype);
+  assert_equals(Object.getPrototypeOf(bytes.buffer), other.ArrayBuffer.prototype);
+  assert_array_equals(Array.from(bytes), [10, 11]);
+}, "list<u8> becomes a Uint8Array of the component realm");
+
+promise_test(async () => {
+  const map = exports.makeMap();
+  assert_equals(Object.getPrototypeOf(map), other.Map.prototype);
+  assert_equals(map.get("a"), 5);
+}, "map<K, V> becomes a Map of the component realm");
+
+promise_test(async () => {
+  let thrown;
+  try {
+    exports.fail();
+  } catch (e) {
+    thrown = e;
+  }
+  assert_equals(Object.getPrototypeOf(thrown), other.WebAssembly.ComponentError.prototype);
+  assert_equals(thrown.data, "err");
+}, "ComponentError comes from the component realm");
+
+promise_test(async () => {
+  const { Counter } = exports;
+  assert_equals(Object.getPrototypeOf(Counter), other.Function.prototype);
+  assert_equals(Object.getPrototypeOf(Counter.prototype), other.Object.prototype);
+  const counter = new Counter();
+  assert_equals(Object.getPrototypeOf(counter), Counter.prototype);
+}, "guest resource classes come from the component realm");
+
+promise_test(async () => {
+  assert_equals(exports.callMarker(), 2);
+}, "wasm:js/global resolves to the component realm's global object");
+
+promise_test(async () => {
+  const bytes = await componentBytes("values/u32");
+  const component = new other.WebAssembly.Component(bytes);
+  const { roundtrip } = new other.WebAssembly.ComponentInstance(component, { echo: x => x }).exports;
+  let thrown;
+  try {
+    roundtrip(1n);
+  } catch (e) {
+    thrown = e;
+  }
+  assert_equals(Object.getPrototypeOf(thrown), other.TypeError.prototype);
+  assert_not_equals(other.TypeError.prototype, TypeError.prototype, "realms differ");
+}, "TypeErrors thrown by a conversion come from the component realm");
+
+promise_test(async () => {
+  const bytes = await componentBytes("realm/conversion");
+  const component = new WebAssembly.Component(bytes, { builtins: ["js/global"] });
+  const local = new WebAssembly.ComponentInstance(component).exports;
+  assert_equals(Object.getPrototypeOf(local.makeList()), Array.prototype);
+  assert_equals(local.callMarker(), 1);
+}, "instantiating through this realm's WebAssembly uses this realm");
+</script>

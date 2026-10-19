@@ -1,0 +1,14 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A non-resource type export has no binding</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script type="module">
+import * as ns from "./resources/type-export.wasm";
+
+test(() => {
+  assert_array_equals(Object.keys(ns), []);
+  assert_false("point" in ns);
+  assert_false("Point" in ns);
+}, "a component exporting only a record type has an empty namespace");
+</script>

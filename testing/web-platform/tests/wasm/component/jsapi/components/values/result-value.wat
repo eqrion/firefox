@@ -1,0 +1,80 @@
+;; result<T, E> values that are not in return position: as a parameter, as a
+;; list element and as record fields, including payload-less variants.
+(component
+  (type $outcome-def (record
+    (field "res" (result (error string)))
+    (field "ok" (result u32))
+    (field "plain" (result))))
+  (import "outcome" (type $outcome (eq $outcome-def)))
+  (import "echo-param" (func $echo-param (param "x" (result u32 (error string))) (result (option (result u32 (error string))))))
+  (import "echo-list" (func $echo-list (param "x" (list (result u32 (error string)))) (result (list (result u32 (error string))))))
+  (import "echo-record" (func $echo-record (param "x" $outcome) (result $outcome)))
+
+  (core module $Memory
+    (memory (export "mem") 1)
+    (global $next (mut i32) (i32.const 16))
+    (func (export "realloc") (param $old i32) (param $old-size i32) (param $align i32) (param $new-size i32) (result i32)
+      (local $ptr i32) (local $pages i32)
+      (local.set $ptr
+        (i32.and
+          (i32.add (global.get $next) (i32.sub (local.get $align) (i32.const 1)))
+          (i32.sub (i32.const 0) (local.get $align))))
+      (global.set $next (i32.add (local.get $ptr) (local.get $new-size)))
+      (local.set $pages
+        (i32.sub
+          (i32.shr_u (i32.add (global.get $next) (i32.const 65535)) (i32.const 16))
+          (memory.size)))
+      (if (i32.gt_s (local.get $pages) (i32.const 0))
+        (then (drop (memory.grow (local.get $pages)))))
+      (if (local.get $old)
+        (then (memory.copy (local.get $ptr) (local.get $old) (select (local.get $old-size) (local.get $new-size) (i32.lt_u (local.get $old-size) (local.get $new-size))))))
+      (local.get $ptr)))
+  (core instance $memory (instantiate $Memory))
+
+  (core func $echo-param' (canon lower (func $echo-param) (memory (core memory $memory "mem")) (realloc (core func $memory "realloc"))))
+  (core func $echo-list' (canon lower (func $echo-list) (memory (core memory $memory "mem")) (realloc (core func $memory "realloc"))))
+  (core func $echo-record' (canon lower (func $echo-record) (memory (core memory $memory "mem")) (realloc (core func $memory "realloc"))))
+
+  (core module $M
+    (import "" "mem" (memory 1))
+    (import "" "realloc" (func $realloc (param i32 i32 i32 i32) (result i32)))
+    (import "" "echo-param" (func $echo-param (param i32 i32 i32 i32)))
+    (import "" "echo-list" (func $echo-list (param i32 i32 i32)))
+    (import "" "echo-record" (func $echo-record (param i32 i32 i32 i32 i32 i32 i32)))
+    (func (export "roundtrip-param") (param i32 i32 i32) (result i32)
+      (local $ret i32)
+      (local.set $ret (call $realloc (i32.const 0) (i32.const 0) (i32.const 8) (i32.const 256)))
+      (call $echo-param (local.get 0) (local.get 1) (local.get 2) (local.get $ret))
+      (local.get $ret))
+    (func (export "roundtrip-list") (param i32 i32) (result i32)
+      (local $ret i32)
+      (local.set $ret (call $realloc (i32.const 0) (i32.const 0) (i32.const 8) (i32.const 256)))
+      (call $echo-list (local.get 0) (local.get 1) (local.get $ret))
+      (local.get $ret))
+    (func (export "roundtrip-record") (param i32 i32 i32 i32 i32 i32) (result i32)
+      (local $ret i32)
+      (local.set $ret (call $realloc (i32.const 0) (i32.const 0) (i32.const 8) (i32.const 256)))
+      (call $echo-record (local.get 0) (local.get 1) (local.get 2) (local.get 3) (local.get 4) (local.get 5) (local.get $ret))
+      (local.get $ret))
+  )
+  (core instance $m (instantiate $M (with "" (instance
+    (export "mem" (memory $memory "mem"))
+    (export "realloc" (func $memory "realloc"))
+    (export "echo-param" (func $echo-param'))
+    (export "echo-list" (func $echo-list'))
+    (export "echo-record" (func $echo-record'))
+  ))))
+
+  (func $roundtrip-param (param "x" (result u32 (error string))) (result (option (result u32 (error string))))
+    (canon lift (core func $m "roundtrip-param")
+      (memory (core memory $memory "mem")) (realloc (core func $memory "realloc"))))
+  (export "roundtrip-param" (func $roundtrip-param))
+  (func $roundtrip-list (param "x" (list (result u32 (error string)))) (result (list (result u32 (error string))))
+    (canon lift (core func $m "roundtrip-list")
+      (memory (core memory $memory "mem")) (realloc (core func $memory "realloc"))))
+  (export "roundtrip-list" (func $roundtrip-list))
+  (func $roundtrip-record (param "x" $outcome) (result $outcome)
+    (canon lift (core func $m "roundtrip-record")
+      (memory (core memory $memory "mem")) (realloc (core func $memory "realloc"))))
+  (export "roundtrip-record" (func $roundtrip-record))
+)

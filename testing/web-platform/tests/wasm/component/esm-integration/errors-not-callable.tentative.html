@@ -1,0 +1,12 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A function import whose default export is not callable is a LinkError</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script type="importmap">
+{ "imports": { "log": "./resources/not-callable.mjs" } }
+</script>
+<script type="module">
+promise_test(t => promise_rejects_js(t, WebAssembly.LinkError, import("./resources/logger.wasm")),
+             "a non-callable default export for a function import rejects with LinkError");
+</script>

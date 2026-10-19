@@ -1,0 +1,13 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>An import with external-id uses it as the module specifier</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script type="module">
+// No import map: `./log-module.js` resolves relative to the component URL.
+promise_test(async () => {
+  const { run } = await import("./resources/logger-external-id.wasm");
+  assert_equals(run(), 1);
+  assert_array_equals(globalThis.logged, ["hello"]);
+}, "external-id is resolved as a module specifier relative to the component");
+</script>

@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Components load as modules in workers</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>
+promise_test(async () => {
+  const worker = new Worker("./resources/worker.mjs", { type: "module" });
+  const result = await new Promise((resolve, reject) => {
+    worker.onmessage = e => resolve(e.data);
+    worker.onerror = e => reject(new Error(e.message));
+  });
+  assert_array_equals(result, [42, 3, 42]);
+}, "a module worker can import a component");
+</script>
