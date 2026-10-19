@@ -5031,10 +5031,161 @@ enum class ComponentNameFragmentKind {
   }
 }
 
-[[nodiscard]] static bool DecodeComponentName(Decoder& d, const char* thing,
-                                              ComponentName* name) {
+static bool IsSemverChar(uint8_t c, bool digitsOnly) {
+  return ('0' <= c && c <= '9') ||
+         (!digitsOnly &&
+          (('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || c == '-'));
+}
+
+// Decodes one of the dot-separated identifiers of a semantic version, which are
+// non-empty. The identifiers of the major, minor, and patch version are
+// `digitsOnly`.
+[[nodiscard]] static bool DecodeSemverIdentifier(Decoder& d, bool digitsOnly,
+                                                 bool* isNumeric,
+                                                 bool* hasLeadingZero) {
+  const uint8_t* start = d.currentPosition();
+  *isNumeric = true;
+  uint8_t c;
+  while (d.peekByte(&c) && IsSemverChar(c, digitsOnly)) {
+    *isNumeric = *isNumeric && '0' <= c && c <= '9';
+    MOZ_RELEASE_ASSERT(d.readBytes(1));
+  }
+  size_t length = d.currentPosition() - start;
+  *hasLeadingZero = length > 1 && start[0] == '0';
+  return length > 0;
+}
+
+// Decodes a `valid semver`, as defined by Semantic Versioning 2.0.
+[[nodiscard]] static bool DecodeSemver(Decoder& d, const char* thing) {
+  bool isNumeric;
+  bool hasLeadingZero;
+  for (uint32_t i = 0; i < 3; i++) {
+    if ((i > 0 && !d.readLiteral(".")) ||
+        !DecodeSemverIdentifier(d, /*digitsOnly=*/true, &isNumeric,
+                                &hasLeadingZero) ||
+        hasLeadingZero) {
+      return d.failf("invalid version in %s name", thing);
+    }
+  }
+  if (d.readLiteral("-")) {
+    do {
+      if (!DecodeSemverIdentifier(d, /*digitsOnly=*/false, &isNumeric,
+                                  &hasLeadingZero) ||
+          (isNumeric && hasLeadingZero)) {
+        return d.failf("invalid version in %s name", thing);
+      }
+    } while (d.readLiteral("."));
+  }
+  if (d.readLiteral("+")) {
+    do {
+      if (!DecodeSemverIdentifier(d, /*digitsOnly=*/false, &isNumeric,
+                                  &hasLeadingZero)) {
+        return d.failf("invalid version in %s name", thing);
+      }
+    } while (d.readLiteral("."));
+  }
+  return true;
+}
+
+// Decodes an `interfacename`.
+[[nodiscard]] static bool DecodeComponentInterfaceName(Decoder& d,
+                                                       const char* thing) {
+  if (!DecodeComponentLabel(d, thing, /*allowUppercase=*/false)) {
+    return false;
+  }
+  if (!d.readLiteral(":")) {
+    return d.failf("invalid character in %s name", thing);
+  }
+  if (!DecodeComponentLabel(d, thing, /*allowUppercase=*/false)) {
+    return false;
+  }
+  if (d.peekLiteral(":")) {
+    // TODO(wasm-cm): Support nested namespaces and packages.
+    return d.failf("nested namespaces in %s names are not supported", thing);
+  }
+  if (!d.readLiteral("/")) {
+    return d.failf("expected projection in %s name", thing);
+  }
+  if (!DecodeComponentLabel(d, thing, /*allowUppercase=*/true)) {
+    return false;
+  }
+  if (d.peekLiteral("/")) {
+    // TODO(wasm-cm): Support nested namespaces and packages.
+    return d.failf("nested projections in %s names are not supported", thing);
+  }
+  if (d.readLiteral("@") && !DecodeSemver(d, thing)) {
+    return false;
+  }
+  return true;
+}
+
+// Decodes a `plainname`, and its attributes. `attributesLength` is the length
+// of the attributes prefix, and `resourceNameLength` is the length of the
+// resource name for [constructor], [method], and [static] names.
+[[nodiscard]] static bool DecodeComponentPlainName(
+    Decoder& d, const char* thing, ComponentNameAttributes* attrs,
+    uint8_t* attributesLength, uint32_t* resourceNameLength) {
   using Attr = ComponentNameAttribute;
 
+  const uint8_t* beforeAttributes = d.currentPosition();
+
+  // [constructor]/[method]/[static] must come first and are mutually
+  // exclusive
+  if (d.readLiteral("[constructor]")) {
+    *attrs += Attr::Constructor;
+  } else if (d.readLiteral("[method]")) {
+    *attrs += Attr::Method;
+  } else if (d.readLiteral("[static]")) {
+    *attrs += Attr::Static;
+  }
+
+  // Then we can see [get] or [set]
+  if (d.readLiteral("[get]")) {
+    *attrs += Attr::Get;
+  } else if (d.readLiteral("[set]")) {
+    *attrs += Attr::Set;
+  }
+
+  const uint8_t* afterAttributes = d.currentPosition();
+  MOZ_ASSERT(afterAttributes - beforeAttributes <=
+             std::numeric_limits<uint8_t>::max());
+  *attributesLength = afterAttributes - beforeAttributes;
+
+  if (attrs->contains(Attr::Constructor)) {
+    if (attrs->contains(Attr::Get) || attrs->contains(Attr::Set)) {
+      return d.fail("cannot use [get] or [set] with [constructor]");
+    }
+    if (!DecodeComponentLabel(d, thing, /*allowUppercase=*/true)) {
+      return false;
+    }
+    *resourceNameLength = d.currentPosition() - afterAttributes;
+  } else if (attrs->contains(Attr::Method) || attrs->contains(Attr::Static)) {
+    if (!DecodeComponentLabel(d, thing, /*allowUppercase=*/true)) {
+      return false;
+    }
+    *resourceNameLength = d.currentPosition() - afterAttributes;
+    if (d.done()) {
+      return d.failf("%s name ended unexpectedly", thing);
+    } else if (!d.readLiteral(".")) {
+      return d.failf("invalid character in %s name", thing);
+    }
+    if (!DecodeComponentLabel(d, thing, /*allowUppercase=*/true)) {
+      return false;
+    }
+  } else {
+    if (!DecodeComponentLabel(d, thing, /*allowUppercase=*/true)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+// Decodes an import or export name, or, if not `allowInterfaceName`, a
+// `plainname`.
+[[nodiscard]] static bool DecodeComponentName(Decoder& d, const char* thing,
+                                              ComponentName* name,
+                                              bool allowInterfaceName) {
   uint32_t len;
   if (!d.readVarU32(&len)) {
     return d.fail("expected name");
@@ -5078,63 +5229,18 @@ enum class ComponentNameFragmentKind {
     // "cli"), and "projection" (e.g. "/stdout") are required, while the
     // version (e.g. "@0.3.0") is optional.
     //
-    // We can't distinguish up front between a plain or interface name (unless
-    // there is an annotation like "[constructor]"), so parsing must be ready
-    // to accommodate either.
-    //
-    // TODO(wasm-cm): Today we reject interface names entirely; the parser
-    // does not recognize the symbols used to delimit namespaces, projections,
-    // or versions.
-
-    const uint8_t* beforeAttributes = d.currentPosition();
-
-    // [constructor]/[method]/[static] must come first and are mutually
-    // exclusive
-    if (d.readLiteral("[constructor]")) {
-      attrs += Attr::Constructor;
-    } else if (d.readLiteral("[method]")) {
-      attrs += Attr::Method;
-    } else if (d.readLiteral("[static]")) {
-      attrs += Attr::Static;
+    // Only interface names contain a colon.
+    mozilla::Span<const uint8_t> bytes(d.currentPosition(), len);
+    bool isInterfaceName =
+        std::find(bytes.begin(), bytes.end(), ':') != bytes.end();
+    if (isInterfaceName && !allowInterfaceName) {
+      return d.failf("invalid character in %s name", thing);
     }
-
-    // Then we can see [get] or [set]
-    if (d.readLiteral("[get]")) {
-      attrs += Attr::Get;
-    } else if (d.readLiteral("[set]")) {
-      attrs += Attr::Set;
-    }
-
-    const uint8_t* afterAttributes = d.currentPosition();
-    MOZ_ASSERT(afterAttributes - beforeAttributes <=
-               std::numeric_limits<decltype(attributesLength)>::max());
-    attributesLength = afterAttributes - beforeAttributes;
-
-    if (attrs.contains(Attr::Constructor)) {
-      if (attrs.contains(Attr::Get) || attrs.contains(Attr::Set)) {
-        return d.fail("cannot use [get] or [set] with [constructor]");
-      }
-      if (!DecodeComponentLabel(d, thing, /*allowUppercase=*/true)) {
-        return false;
-      }
-      resourceNameLength = d.currentPosition() - afterAttributes;
-    } else if (attrs.contains(Attr::Method) || attrs.contains(Attr::Static)) {
-      if (!DecodeComponentLabel(d, thing, /*allowUppercase=*/true)) {
-        return false;
-      }
-      resourceNameLength = d.currentPosition() - afterAttributes;
-      if (d.done()) {
-        return d.failf("%s name ended unexpectedly", thing);
-      } else if (!d.readLiteral(".")) {
-        return d.failf("invalid character in %s name", thing);
-      }
-      if (!DecodeComponentLabel(d, thing, /*allowUppercase=*/true)) {
-        return false;
-      }
-    } else {
-      if (!DecodeComponentLabel(d, thing, /*allowUppercase=*/true)) {
-        return false;
-      }
+    if (isInterfaceName
+            ? !DecodeComponentInterfaceName(d, thing)
+            : !DecodeComponentPlainName(d, thing, &attrs, &attributesLength,
+                                        &resourceNameLength)) {
+      return false;
     }
 
     if (!d.done()) {
@@ -5156,7 +5262,7 @@ enum class ComponentNameFragmentKind {
                                                           const char* thing,
                                                           CacheableName* name) {
   ComponentName nameEx;
-  if (!DecodeComponentName(d, thing, &nameEx)) {
+  if (!DecodeComponentName(d, thing, &nameEx, /*allowInterfaceName=*/false)) {
     return false;
   }
   if (!nameEx.attributes.isEmpty()) {
@@ -6804,7 +6910,7 @@ static bool ValidateComponentNameAnnotations(
   return true;
 }
 
-enum class ComponentImportFlagsRaw : uint8_t {
+enum class ComponentExternNameFlagsRaw : uint8_t {
   // Strangely, the binary encoding currently allows either 0x00 or 0x01 for the
   // flags. Both do exactly the same thing. This is supposed to be cleaned up
   // eventually.
@@ -6813,26 +6919,34 @@ enum class ComponentImportFlagsRaw : uint8_t {
   VersionSuffix = 0x02,
 };
 
+// Decodes the name of an import or export (`importname'` or `exportname'`),
+// where `thing` is "import" or "export".
+[[nodiscard]] static bool DecodeComponentExternName(Decoder& d,
+                                                    const char* thing,
+                                                    ComponentName* name) {
+  uint8_t flags;
+  if (!d.readFixedU8(&flags)) {
+    return d.failf("expected %s flags", thing);
+  }
+
+  switch (flags) {
+    case uint8_t(ComponentExternNameFlagsRaw::Plain1):
+    case uint8_t(ComponentExternNameFlagsRaw::Plain2):
+      break;
+    case uint8_t(ComponentExternNameFlagsRaw::VersionSuffix):
+      // TODO(wasm-cm): Support semver?
+      return d.failf("version suffixes on %ss are not allowed", thing);
+    default:
+      return d.failf("invalid %s flags %#x", thing, flags);
+  }
+
+  return DecodeComponentName(d, thing, name, /*allowInterfaceName=*/true);
+}
+
 static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
                                   StronglyUniqueNameSet& nameDedup) {
-  uint8_t importFlags;
-  if (!d.readFixedU8(&importFlags)) {
-    return d.fail("expected import flags");
-  }
-
-  switch (importFlags) {
-    case uint8_t(ComponentImportFlagsRaw::Plain1):
-    case uint8_t(ComponentImportFlagsRaw::Plain2):
-      break;
-    case uint8_t(ComponentImportFlagsRaw::VersionSuffix):
-      // TODO(wasm-cm): Support semver?
-      return d.fail("version suffixes on imports are not allowed");
-    default:
-      return d.failf("invalid import flags %#x", importFlags);
-  }
-
   ComponentName importName;
-  if (!DecodeComponentName(d, "import", &importName)) {
+  if (!DecodeComponentExternName(d, "import", &importName)) {
     return false;
   }
 
@@ -6871,33 +6985,10 @@ static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
   return c->addImport(ComponentImport(std::move(importName), externDesc));
 }
 
-enum class ComponentExportFlagsRaw : uint8_t {
-  // As with imports, 0x00 and 0x01 are equivalent flags For Now.
-  Plain1 = 0x00,
-  Plain2 = 0x01,
-  VersionSuffix = 0x02,
-};
-
 [[nodiscard]] static bool DecodeComponentExport(
     Decoder& d, MutableComponent& c, StronglyUniqueNameSet& nameDedup) {
-  uint8_t exportFlags;
-  if (!d.readFixedU8(&exportFlags)) {
-    return d.fail("expected export flags");
-  }
-
-  switch (exportFlags) {
-    case uint8_t(ComponentImportFlagsRaw::Plain1):
-    case uint8_t(ComponentImportFlagsRaw::Plain2):
-      break;
-    case uint8_t(ComponentImportFlagsRaw::VersionSuffix):
-      // TODO(wasm-cm): Support semver?
-      return d.fail("version suffixes on exports are not allowed");
-    default:
-      return d.failf("invalid export flags %#x", exportFlags);
-  }
-
   ComponentName exportName;
-  if (!DecodeComponentName(d, "export", &exportName)) {
+  if (!DecodeComponentExternName(d, "export", &exportName)) {
     return false;
   }
 

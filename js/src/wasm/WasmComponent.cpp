@@ -35,7 +35,8 @@ static bool NameIsProbablyValid(mozilla::Span<const char> name) {
   for (char c : name) {
     bool validChar = ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') ||
                      ('0' <= c && c <= '9') || c == '-' || c == '.' ||
-                     c == '[' || c == ']';
+                     c == '[' || c == ']' || c == ':' || c == '/' || c == '@' ||
+                     c == '+';
     if (!validChar) {
       return false;
     }
@@ -80,8 +81,9 @@ bool wasm::CanonicalizeName(mozilla::Span<const char> name,
   }
   if (dotIndex >= 0) {
     MOZ_ASSERT(lastAttrEndIndex < dotIndex);
-    mozilla::Span<char> beforeDot(&buf[lastAttrEndIndex + 1], &buf[dotIndex]);
-    mozilla::Span<char> afterDot(&buf[dotIndex + 1], buf.end());
+    mozilla::Span<char> beforeDot(buf.begin() + lastAttrEndIndex + 1,
+                                  buf.begin() + dotIndex);
+    mozilla::Span<char> afterDot(buf.begin() + dotIndex + 1, buf.end());
     if (beforeDot == afterDot) {
       memmove(buf.begin(), beforeDot.Elements(), beforeDot.LengthBytes());
       buf.shrinkTo(beforeDot.LengthBytes());
@@ -228,6 +230,12 @@ static mozilla::Span<const char> ComponentLabelOf(const ComponentName& name) {
 
 JSAtom* wasm::ComponentJSName(JSContext* cx, const ComponentName& name,
                               bool isType) {
+  mozilla::Span<const char> bytes = name.name.utf8Bytes();
+  bool isInterfaceName =
+      std::find(bytes.begin(), bytes.end(), ':') != bytes.end();
+  if (isInterfaceName) {
+    return ComponentLabelToJS(cx, bytes, ComponentJSCase::Verbatim);
+  }
   return ComponentLabelToJS(
       cx, ComponentLabelOf(name),
       isType ? ComponentJSCase::Pascal : ComponentJSCase::Camel);

@@ -159,3 +159,45 @@ invalidFuncName("[get][get]foo", /invalid character/);
 invalidFuncName("[get][set]foo", /invalid character/);
 invalidFuncName("[set][set]foo", /invalid character/);
 invalidFuncName("[set][get]foo", /invalid character/);
+
+// ----------------------------------------------------------------------------
+// Interface names
+
+validFuncName("wasi:http/handler");
+validFuncName("my-ns:my-pkg/my-IFACE");
+validFuncName("wasi:clocks/wall-clock@0.2.0");
+validFuncName("a:b/c@10.20.30");
+validFuncName("a:b/c@1.0.0-rc.1");
+validFuncName("a:b/c@1.0.0-0.3.7");
+validFuncName("a:b/c@1.0.0-x-y-z.--");
+validFuncName("a:b/c@1.0.0+build.001");
+validFuncName("a:b/c@1.0.0-alpha+sha.5114f85");
+
+// The namespace and package are lowercase words.
+invalidFuncName("WASI:http/handler", /unexpected uppercase/);
+invalidFuncName("wasi:HTTP/handler", /unexpected uppercase/);
+invalidFuncName("0wasi:http/handler", /start with a letter/);
+
+// The projection is required, and nesting is not supported.
+invalidFuncName("wasi:http", /expected projection/);
+invalidFuncName("wasi:http/", /ended unexpectedly/);
+invalidFuncName("wasi:http:types/handler", /nested namespaces/);
+invalidFuncName("wasi:http/types/handler", /nested projections/);
+
+// Annotations are not allowed.
+invalidFuncName("[method]wasi:http/handler", /invalid character/);
+invalidFuncName("wasi:http/[get]handler", /invalid character/);
+
+// Versions must be valid semantic versions.
+invalidFuncName("a:b/c@", /invalid version/);
+invalidFuncName("a:b/c@1", /invalid version/);
+invalidFuncName("a:b/c@1.0", /invalid version/);
+invalidFuncName("a:b/c@01.0.0", /invalid version/);
+invalidFuncName("a:b/c@1.0.0-", /invalid version/);
+invalidFuncName("a:b/c@1.0.0-01", /invalid version/);
+invalidFuncName("a:b/c@1.0.0-a..b", /invalid version/);
+invalidFuncName("a:b/c@1.0.0+", /invalid version/);
+invalidFuncName("a:b/c@1.0.0@2", /invalid characters/);
+
+// Only import and export names can be interface names.
+invalidName("wasi:http/handler", /invalid character/);
