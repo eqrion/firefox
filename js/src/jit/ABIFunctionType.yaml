@@ -316,6 +316,9 @@
 - ret: General
   args: [General, Float32, General, General]
 
+- ret: General
+  args: [General, Int64, Int32]
+
 # Functions that return Int64 are tricky because SpiderMonkey's ReturnRegI64
 # does not match the ABI int64 return register on x86.  Wasm only!
 - ret: Int64
@@ -323,6 +326,9 @@
 
 - ret: Int64
   args: [General, General]
+
+- ret: Int64
+  args: [General, General, Int32]
 
 - ret: Int64
   args: [Int32, Int32, Int32, Int32]

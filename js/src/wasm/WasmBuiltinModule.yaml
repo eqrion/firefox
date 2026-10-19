@@ -498,3 +498,139 @@
   uses_memory: false
 
 #endif // ENABLE_WASM_JSPI
+
+#if defined(ENABLE_WASM_COMPONENTS)
+# Builtins for component adapters. See [SMDOC] Component adapters.
+- op: ComponentToInteger
+  symbolic_address:
+    name: ComponentToInteger
+    type: Args_Int64_GeneralGeneralInt32
+    needs_thunk: true
+  entry: ComponentToInteger
+  export: componentToInteger
+  params:
+    - 'externref'
+    - 'i32'
+  result: 'i64'
+  fail_mode: FailOnInstanceFlag
+  uses_memory: false
+
+- op: ComponentToFloat
+  symbolic_address:
+    name: ComponentToFloat
+    type: Args_Double_IntInt
+    needs_thunk: true
+  entry: ComponentToFloat
+  export: componentToFloat
+  params:
+    - 'externref'
+  result: 'f64'
+  fail_mode: FailOnInstanceFlag
+  uses_memory: false
+
+- op: ComponentToBool
+  symbolic_address:
+    name: ComponentToBool
+    type: Args_Int32_GeneralGeneral
+    needs_thunk: true
+  entry: ComponentToBool
+  export: componentToBool
+  params:
+    - 'externref'
+  result: 'i32'
+  fail_mode: Infallible
+  uses_memory: false
+
+- op: ComponentToChar
+  symbolic_address:
+    name: ComponentToChar
+    type: Args_Int32_GeneralGeneral
+    needs_thunk: true
+  entry: ComponentToChar
+  export: componentToChar
+  params:
+    - 'externref'
+  result: 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentBoolToJS
+  symbolic_address:
+    name: ComponentBoolToJS
+    type: Args_General_GeneralInt32
+    needs_thunk: true
+  entry: ComponentBoolToJS
+  export: componentBoolToJS
+  params:
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: ComponentInt64ToJS
+  symbolic_address:
+    name: ComponentInt64ToJS
+    type: Args_General_GeneralInt64Int32
+    needs_thunk: true
+  entry: ComponentInt64ToJS
+  export: componentInt64ToJS
+  params:
+    - 'i64'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: ComponentFloatToJS
+  symbolic_address:
+    name: ComponentFloatToJS
+    type: Args_Int_IntDouble
+    needs_thunk: true
+  entry: ComponentFloatToJS
+  export: componentFloatToJS
+  params:
+    - 'f64'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: ComponentCharToJS
+  symbolic_address:
+    name: ComponentCharToJS
+    type: Args_General_GeneralInt32
+    needs_thunk: true
+  entry: ComponentCharToJS
+  export: componentCharToJS
+  params:
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: ComponentIntegerToJS
+  symbolic_address:
+    name: ComponentIntegerToJS
+    type: Args_General_GeneralInt32Int32
+    needs_thunk: true
+  entry: ComponentIntegerToJS
+  export: componentIntegerToJS
+  params:
+    - 'i32'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: ComponentTrap
+  symbolic_address:
+    name: ComponentTrap
+    type: Args_Int32_GeneralInt32
+    needs_thunk: true
+  entry: ComponentTrap
+  export: componentTrap
+  params:
+    - 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+#endif // ENABLE_WASM_COMPONENTS
