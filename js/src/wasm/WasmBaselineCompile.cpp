@@ -6776,6 +6776,9 @@ bool BaseCompiler::emitInstanceCall(const SymbolicAddressSignature& builtin) {
       case MIRType::Float32:
         t = ValType::F32;
         break;
+      case MIRType::Double:
+        t = ValType::F64;
+        break;
       case MIRType::WasmAnyRef:
         t = RefType::extern_();
         break;
