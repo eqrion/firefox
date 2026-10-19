@@ -379,6 +379,23 @@ bool FinalizationRegistryObject::register_(JSContext* cx, unsigned argc,
     return false;
   }
 
+  if (!registerTarget(cx, registry, target, heldValue, unregisterToken)) {
+    return false;
+  }
+
+  // 8. Return undefined.
+  args.rval().setUndefined();
+  return true;
+}
+
+/* static */
+bool FinalizationRegistryObject::registerTarget(
+    JSContext* cx, HandleFinalizationRegistryObject registry,
+    HandleValue targetArg, HandleValue heldValue, HandleValue unregisterToken) {
+  MOZ_ASSERT(CanBeHeldWeakly(targetArg));
+  MOZ_ASSERT(unregisterToken.isUndefined() || CanBeHeldWeakly(unregisterToken));
+  RootedValue target(cx, targetArg);
+
   bool isPermanent = false;
   if (target.isObject()) {
     // Fully unwrap the target to register it with the GC.
@@ -424,9 +441,7 @@ bool FinalizationRegistryObject::register_(JSContext* cx, unsigned argc,
     }
   }
 
-  // 8. Return undefined.
   registrationGuard.release();
-  args.rval().setUndefined();
   return true;
 }
 
@@ -528,6 +543,19 @@ bool FinalizationRegistryObject::unregister(JSContext* cx, unsigned argc,
     return false;
   }
 
+  // 5-6.
+  bool removed = unregisterTarget(registry, unregisterToken);
+
+  // 7. Return removed.
+  args.rval().setBoolean(removed);
+  return true;
+}
+
+/* static */
+bool FinalizationRegistryObject::unregisterTarget(
+    HandleFinalizationRegistryObject registry, HandleValue unregisterToken) {
+  MOZ_ASSERT(CanBeHeldWeakly(unregisterToken));
+
   // 5. Let removed be false.
   bool removed = false;
 
@@ -549,10 +577,7 @@ bool FinalizationRegistryObject::unregister(JSContext* cx, unsigned argc,
     }
     map->remove(unregisterToken);
   }
-
-  // 7. Return removed.
-  args.rval().setBoolean(removed);
-  return true;
+  return removed;
 }
 
 /* static */
