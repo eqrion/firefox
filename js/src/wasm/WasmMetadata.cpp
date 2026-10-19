@@ -384,9 +384,20 @@ bool ModuleMetadata::addImportedFunc(ValTypeVector&& params,
                                      ValTypeVector&& results,
                                      CacheableName&& importModName,
                                      CacheableName&& importFieldName) {
+  uint32_t typeIndex = codeMeta->types->length();
+  FuncType funcType(std::move(params), std::move(results));
+  if (!codeMeta->types->addType(std::move(funcType))) {
+    return false;
+  }
+  return addImportedFuncWithType(typeIndex, std::move(importModName),
+                                 std::move(importFieldName));
+}
+
+bool ModuleMetadata::addImportedFuncWithType(uint32_t funcTypeIndex,
+                                             CacheableName&& importModName,
+                                             CacheableName&& importFieldName) {
   MOZ_ASSERT(codeMeta->numFuncImports == codeMeta->funcs.length());
-  if (!addDefinedFunc(std::move(params), std::move(results), false,
-                      mozilla::Nothing())) {
+  if (!addDefinedFuncWithType(funcTypeIndex)) {
     return false;
   }
   codeMeta->numFuncImports++;
