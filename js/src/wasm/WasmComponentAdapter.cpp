@@ -59,6 +59,8 @@ class ValueLoc {
   uint32_t offset() const { return offset_; }
 };
 
+using ValueLocVector = Vector<ValueLoc, 8, SystemAllocPolicy>;
+
 // The core wasm types a component value is flattened to, stored in locals.
 using FlatLocals = Vector<uint32_t, 2, SystemAllocPolicy>;
 
@@ -95,6 +97,8 @@ class MOZ_STACK_CLASS AdapterBuilder {
   explicit AdapterBuilder(JSContext* cx) : cx_(cx), imports_(cx) {}
 
   [[nodiscard]] bool init(Handle<WasmComponentInstanceObject*> instanceObj);
+
+  JSContext* cx() const { return cx_; }
 
   // Imports a wasm function with its own type. Function imports must all be
   // added before the adapter function.
@@ -170,6 +174,10 @@ class MOZ_STACK_CLASS AdapterBuilder {
     op(Op::Br);
     varU32(depth);
   }
+  void brIf(uint32_t depth) {
+    op(Op::BrIf);
+    varU32(depth);
+  }
 
   void trap(AdapterTrap reason);
 
@@ -179,6 +187,10 @@ class MOZ_STACK_CLASS AdapterBuilder {
   void callGuest(uint32_t funcIndex, mozilla::Maybe<ValType> result,
                  F emitArgs);
 
+  // Pushes a JS value, which is imported as an immutable externref global. A
+  // value is only imported once.
+  [[nodiscard]] bool pushValue(HandleValue value);
+
   // Pushes a scalar from `loc`.
   void emitGetScalar(ComponentTypeKind kind, const ValueLoc& loc);
   // Stores the scalar on the stack to `loc`.
@@ -187,6 +199,13 @@ class MOZ_STACK_CLASS AdapterBuilder {
   void emitGetI32(const ValueLoc& loc, uint32_t index);
   // Stores the i32 in local `value` at `index` of a value made of i32s.
   void emitSetI32(const ValueLoc& loc, uint32_t index, uint32_t value);
+
+  // Emits a loop over `i` from 0 to `count`, where `elemPtr` is `ptr` plus
+  // `i * elemSize`, with `emitBody` emitting the body.
+  template <typename F>
+  [[nodiscard]] bool emitListLoop(uint32_t ptr, uint32_t count,
+                                  uint32_t elemSize, uint32_t i,
+                                  uint32_t elemPtr, F emitBody);
 
   // Traps unless `ptr` is aligned for `type` and all of `type` fits in memory.
   void emitCheckPointer(const ComponentType& type, uint32_t ptr);
@@ -408,6 +427,32 @@ void AdapterBuilder::callGuest(uint32_t funcIndex,
   end();
 }
 
+bool AdapterBuilder::pushValue(HandleValue value) {
+  ValVector& values = imports_.get().globalValues;
+  for (size_t i = 0; i < values.length(); i++) {
+    if (values[i].ref().toJSValue() == value) {
+      globalGet(i);
+      return true;
+    }
+  }
+
+  Rooted<AnyRef> ref(cx_);
+  if (!AnyRef::fromJSValue(cx_, value, &ref)) {
+    return false;
+  }
+  uint32_t globalIndex = codeMeta_->globals.length();
+  GlobalType type(ValType(RefType::extern_()), /*isMutable=*/false);
+  if (!codeMeta_->globals.append(GlobalDesc(type, globalIndex)) ||
+      !moduleMeta_->imports.emplaceBack(CacheableName(), CacheableName(),
+                                        DefinitionKind::Global) ||
+      !values.append(Val(ValType(RefType::extern_()), ref.get()))) {
+    ReportOutOfMemory(cx_);
+    return false;
+  }
+  globalGet(globalIndex);
+  return true;
+}
+
 // How a scalar is loaded from and stored to memory, and its flat type.
 struct ScalarLayout {
   Op load;
@@ -489,8 +534,40 @@ void AdapterBuilder::emitSetI32(const ValueLoc& loc, uint32_t index,
   memoryAccess(Op::I32Store, 2, loc.offset() + 4 * index);
 }
 
+template <typename F>
+bool AdapterBuilder::emitListLoop(uint32_t ptr, uint32_t count,
+                                  uint32_t elemSize, uint32_t i,
+                                  uint32_t elemPtr, F emitBody) {
+  i32Const(0);
+  localSet(i);
+  localGet(ptr);
+  localSet(elemPtr);
+  block(Op::Block);
+  block(Op::Loop);
+  localGet(i);
+  localGet(count);
+  op(Op::I32GeU);
+  brIf(1);
+  if (!emitBody()) {
+    return false;
+  }
+  localGet(elemPtr);
+  i32Const(int32_t(elemSize));
+  op(Op::I32Add);
+  localSet(elemPtr);
+  localGet(i);
+  i32Const(1);
+  op(Op::I32Add);
+  localSet(i);
+  br(0);
+  end();
+  end();
+  return true;
+}
+
 void AdapterBuilder::emitCheckPointer(const ComponentType& type, uint32_t ptr) {
   localGet(ptr);
+  i32Const(1);
   i32Const(int32_t(CanonElemSize(type)));
   i32Const(int32_t(CanonAlignment(type)));
   callBuiltin(Id::ComponentCheckRange);
@@ -519,6 +596,22 @@ static bool IsSupportedAdapterType(const ComponentType& type) {
     case ComponentTypeKind::F64:
     case ComponentTypeKind::Char:
     case ComponentTypeKind::String:
+      return true;
+    case ComponentTypeKind::List:
+      return IsSupportedAdapterType(type.asList());
+    case ComponentTypeKind::Tuple:
+      for (const ComponentType& item : type.asTuple()) {
+        if (!IsSupportedAdapterType(item)) {
+          return false;
+        }
+      }
+      return true;
+    case ComponentTypeKind::Record:
+      for (const ComponentRecordField& field : type.asRecord()) {
+        if (!IsSupportedAdapterType(field.type)) {
+          return false;
+        }
+      }
       return true;
     default:
       return IsIntegerKind(type.kind());
@@ -551,6 +644,43 @@ static bool IsSupportedAdapterType(const ComponentType& type) {
                                     ValTypeVector* flat) {
   bool hasStringsOrLists, tooDeep;
   return FlattenType(type, flat, &hasStringsOrLists, &tooDeep, 0);
+}
+
+// Computes the location of each field of a tuple or record at `loc`.
+[[nodiscard]] static bool GetFieldLocs(const ComponentTypeVector& fieldTypes,
+                                       const ValueLoc& loc,
+                                       ValueLocVector* fieldLocs) {
+  uint32_t offset = 0;
+  size_t flatIndex = 0;
+  for (const ComponentType& fieldType : fieldTypes) {
+    if (loc.inMemory()) {
+      offset = CanonAlignTo(offset, CanonAlignment(fieldType));
+      if (!fieldLocs->append(
+              ValueLoc::memory(loc.ptrLocal(), loc.offset() + offset))) {
+        return false;
+      }
+      offset += CanonElemSize(fieldType);
+    } else {
+      ValTypeVector flatTypes;
+      if (!FlatTypes(fieldType, &flatTypes) ||
+          !fieldLocs->append(ValueLoc::flat(
+              loc.flatLocals().Subspan(flatIndex, flatTypes.length())))) {
+        return false;
+      }
+      flatIndex += flatTypes.length();
+    }
+  }
+  return true;
+}
+
+[[nodiscard]] static bool GetRecordFieldTypes(const ComponentType& type,
+                                              ComponentTypeVector* types) {
+  for (const ComponentRecordField& field : type.asRecord()) {
+    if (!types->append(field.type)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 namespace {
@@ -587,11 +717,13 @@ class MOZ_STACK_CLASS LiftLowerBuilder : public AdapterBuilder {
  private:
   // Emits ToComponentValue for the JS value in local `jsValue`, storing the
   // component value to `loc`.
-  void emitToComponentValue(const ComponentType& type, uint32_t jsValue,
-                            const ValueLoc& loc);
+  [[nodiscard]] bool emitToComponentValue(const ComponentType& type,
+                                          uint32_t jsValue,
+                                          const ValueLoc& loc);
   // Emits ToJSValue for the component value at `loc`, leaving the JS value on
   // the stack.
-  void emitToJSValue(const ComponentType& type, const ValueLoc& loc);
+  [[nodiscard]] bool emitToJSValue(const ComponentType& type,
+                                   const ValueLoc& loc);
 
   // Calls realloc, with `emitOld` emitting its first two arguments, and stores
   // the result in local `ptr`.
@@ -605,7 +737,27 @@ class MOZ_STACK_CLASS LiftLowerBuilder : public AdapterBuilder {
   void emitReallocate(uint32_t oldSize, int32_t alignment, uint32_t newSize,
                       uint32_t ptr);
 
+  // Pushes the JS name of a label.
+  [[nodiscard]] bool emitName(const CacheableName& label,
+                              ComponentJSCase jsCase);
+
   void emitStoreString(uint32_t jsValue, const ValueLoc& loc);
+
+  [[nodiscard]] bool emitToComponentValueList(const ComponentType& type,
+                                              uint32_t jsValue,
+                                              const ValueLoc& loc);
+  [[nodiscard]] bool emitToJSValueList(const ComponentType& type,
+                                       const ValueLoc& loc);
+  [[nodiscard]] bool emitToComponentValueTuple(const ComponentType& type,
+                                               uint32_t jsValue,
+                                               const ValueLoc& loc);
+  [[nodiscard]] bool emitToJSValueTuple(const ComponentType& type,
+                                        const ValueLoc& loc);
+  [[nodiscard]] bool emitToComponentValueRecord(const ComponentType& type,
+                                                uint32_t jsValue,
+                                                const ValueLoc& loc);
+  [[nodiscard]] bool emitToJSValueRecord(const ComponentType& type,
+                                         const ValueLoc& loc);
 };
 
 }  // namespace
@@ -705,6 +857,7 @@ void LiftLowerBuilder::emitStoreString(uint32_t jsValue, const ValueLoc& loc) {
           localGet(ptr);
           localGet(byteLength);
           i32Const(1);
+          i32Const(1);
           callBuiltin(Id::ComponentCheckRange);
         }
         end();
@@ -764,7 +917,247 @@ void LiftLowerBuilder::emitStoreString(uint32_t jsValue, const ValueLoc& loc) {
   emitSetI32(loc, 1, length);
 }
 
-void LiftLowerBuilder::emitToComponentValue(const ComponentType& type,
+bool LiftLowerBuilder::emitName(const CacheableName& label,
+                                ComponentJSCase jsCase) {
+  JSAtom* atom = ComponentLabelToJS(cx(), label.utf8Bytes(), jsCase);
+  if (!atom) {
+    return false;
+  }
+  RootedValue name(cx(), StringValue(atom));
+  return pushValue(name);
+}
+
+// ToComponentValue for a tuple: as for a list, which must have exactly as many
+// elements as the tuple.
+bool LiftLowerBuilder::emitToComponentValueTuple(const ComponentType& type,
+                                                 uint32_t jsValue,
+                                                 const ValueLoc& loc) {
+  const ComponentTypeVector& itemTypes = type.asTuple();
+  ValueLocVector itemLocs;
+  if (!GetFieldLocs(itemTypes, loc, &itemLocs)) {
+    return false;
+  }
+  uint32_t array = addLocal(ValType(RefType::extern_()));
+  localGet(jsValue);
+  i32Const(0);
+  callBuiltin(Id::ComponentIterableToArray);
+  localSet(array);
+  localGet(array);
+  i32Const(int32_t(itemTypes.length()));
+  callBuiltin(Id::ComponentCheckArrayLength);
+  for (size_t i = 0; i < itemTypes.length(); i++) {
+    uint32_t item = addLocal(ValType(RefType::extern_()));
+    localGet(array);
+    i32Const(int32_t(i));
+    callBuiltin(Id::ComponentArrayGet);
+    localSet(item);
+    if (!emitToComponentValue(itemTypes[i], item, itemLocs[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool LiftLowerBuilder::emitToJSValueTuple(const ComponentType& type,
+                                          const ValueLoc& loc) {
+  const ComponentTypeVector& itemTypes = type.asTuple();
+  ValueLocVector itemLocs;
+  if (!GetFieldLocs(itemTypes, loc, &itemLocs)) {
+    return false;
+  }
+  uint32_t array = addLocal(ValType(RefType::extern_()));
+  i32Const(int32_t(itemTypes.length()));
+  callBuiltin(Id::ComponentNewArray);
+  localSet(array);
+  for (size_t i = 0; i < itemTypes.length(); i++) {
+    localGet(array);
+    i32Const(int32_t(i));
+    if (!emitToJSValue(itemTypes[i], itemLocs[i])) {
+      return false;
+    }
+    callBuiltin(Id::ComponentArraySet);
+  }
+  localGet(array);
+  return true;
+}
+
+// The JS-API's ToComponentValueRecord.
+bool LiftLowerBuilder::emitToComponentValueRecord(const ComponentType& type,
+                                                  uint32_t jsValue,
+                                                  const ValueLoc& loc) {
+  const ComponentRecordFieldVector& fields = type.asRecord();
+  ComponentTypeVector fieldTypes;
+  ValueLocVector fieldLocs;
+  if (!GetRecordFieldTypes(type, &fieldTypes) ||
+      !GetFieldLocs(fieldTypes, loc, &fieldLocs)) {
+    return false;
+  }
+  localGet(jsValue);
+  callBuiltin(Id::ComponentCheckObject);
+  for (size_t i = 0; i < fields.length(); i++) {
+    uint32_t field = addLocal(ValType(RefType::extern_()));
+    localGet(jsValue);
+    if (!emitName(fields[i].name, ComponentJSCase::Camel)) {
+      return false;
+    }
+    callBuiltin(Id::ComponentGetField);
+    localSet(field);
+    if (!emitToComponentValue(fields[i].type, field, fieldLocs[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// The JS-API's ToJSValueRecord.
+bool LiftLowerBuilder::emitToJSValueRecord(const ComponentType& type,
+                                           const ValueLoc& loc) {
+  const ComponentRecordFieldVector& fields = type.asRecord();
+  ComponentTypeVector fieldTypes;
+  ValueLocVector fieldLocs;
+  if (!GetRecordFieldTypes(type, &fieldTypes) ||
+      !GetFieldLocs(fieldTypes, loc, &fieldLocs)) {
+    return false;
+  }
+  uint32_t record = addLocal(ValType(RefType::extern_()));
+  callBuiltin(Id::ComponentNewRecord);
+  localSet(record);
+  for (size_t i = 0; i < fields.length(); i++) {
+    localGet(record);
+    if (!emitName(fields[i].name, ComponentJSCase::Camel) ||
+        !emitToJSValue(fields[i].type, fieldLocs[i])) {
+      return false;
+    }
+    callBuiltin(Id::ComponentDefineField);
+  }
+  localGet(record);
+  return true;
+}
+
+// ToComponentValue for a list, with the canonical ABI's store_list.
+bool LiftLowerBuilder::emitToComponentValueList(const ComponentType& type,
+                                                uint32_t jsValue,
+                                                const ValueLoc& loc) {
+  ComponentType elemType = type.asList();
+  uint32_t elemSize = CanonElemSize(elemType);
+  uint32_t alignment = CanonAlignment(elemType);
+  uint32_t ptr = addLocal(ValType::I32);
+  uint32_t length = addLocal(ValType::I32);
+  uint32_t byteLength = addLocal(ValType::I32);
+  block(Op::Block);
+
+  // A typed array of the list's scalar type is copied directly.
+  int32_t kind = int32_t(elemType.kind());
+  if (ScalarListArrayType(elemType.kind())) {
+    localGet(jsValue);
+    i32Const(kind);
+    callBuiltin(Id::ComponentIsScalarArray);
+    block(Op::If);
+    {
+      localGet(jsValue);
+      i32Const(kind);
+      callBuiltin(Id::ComponentScalarArrayLength);
+      localSet(length);
+      localGet(length);
+      i32Const(int32_t(elemSize));
+      op(Op::I32Mul);
+      localSet(byteLength);
+      emitAllocate(int32_t(alignment), byteLength, ptr);
+      localGet(jsValue);
+      localGet(ptr);
+      localGet(length);
+      callBuiltin(Id::ComponentCopyScalars);
+      br(1);
+    }
+    end();
+  }
+
+  uint32_t array = addLocal(ValType(RefType::extern_()));
+  uint32_t i = addLocal(ValType::I32);
+  uint32_t elemPtr = addLocal(ValType::I32);
+  uint32_t elem = addLocal(ValType(RefType::extern_()));
+  localGet(jsValue);
+  i32Const(int32_t(elemSize));
+  callBuiltin(Id::ComponentIterableToArray);
+  localSet(array);
+  localGet(array);
+  callBuiltin(Id::ComponentArrayLength);
+  localSet(length);
+  localGet(length);
+  i32Const(int32_t(elemSize));
+  op(Op::I32Mul);
+  localSet(byteLength);
+  emitAllocate(int32_t(alignment), byteLength, ptr);
+  localGet(ptr);
+  localGet(length);
+  i32Const(int32_t(elemSize));
+  i32Const(int32_t(alignment));
+  callBuiltin(Id::ComponentCheckRange);
+  if (!emitListLoop(ptr, length, elemSize, i, elemPtr, [&]() {
+        localGet(array);
+        localGet(i);
+        callBuiltin(Id::ComponentArrayGet);
+        localSet(elem);
+        return emitToComponentValue(elemType, elem,
+                                    ValueLoc::memory(elemPtr, 0));
+      })) {
+    return false;
+  }
+  end();
+
+  emitSetI32(loc, 0, ptr);
+  emitSetI32(loc, 1, length);
+  return true;
+}
+
+// ToJSValue for a list, with the canonical ABI's load_list.
+bool LiftLowerBuilder::emitToJSValueList(const ComponentType& type,
+                                         const ValueLoc& loc) {
+  ComponentType elemType = type.asList();
+
+  // A list of scalars becomes a typed array.
+  if (ScalarListArrayType(elemType.kind())) {
+    emitGetI32(loc, 0);
+    emitGetI32(loc, 1);
+    i32Const(int32_t(elemType.kind()));
+    callBuiltin(Id::ComponentScalarListToJS);
+    return true;
+  }
+
+  uint32_t elemSize = CanonElemSize(elemType);
+  uint32_t ptr = addLocal(ValType::I32);
+  uint32_t length = addLocal(ValType::I32);
+  uint32_t array = addLocal(ValType(RefType::extern_()));
+  uint32_t i = addLocal(ValType::I32);
+  uint32_t elemPtr = addLocal(ValType::I32);
+  emitGetI32(loc, 0);
+  localSet(ptr);
+  emitGetI32(loc, 1);
+  localSet(length);
+  localGet(ptr);
+  localGet(length);
+  i32Const(int32_t(elemSize));
+  i32Const(int32_t(CanonAlignment(elemType)));
+  callBuiltin(Id::ComponentCheckRange);
+  localGet(length);
+  callBuiltin(Id::ComponentNewArray);
+  localSet(array);
+  if (!emitListLoop(ptr, length, elemSize, i, elemPtr, [&]() {
+        localGet(array);
+        localGet(i);
+        if (!emitToJSValue(elemType, ValueLoc::memory(elemPtr, 0))) {
+          return false;
+        }
+        callBuiltin(Id::ComponentArraySet);
+        return true;
+      })) {
+    return false;
+  }
+  localGet(array);
+  return true;
+}
+
+bool LiftLowerBuilder::emitToComponentValue(const ComponentType& type,
                                             uint32_t jsValue,
                                             const ValueLoc& loc) {
   ComponentTypeKind kind = type.kind();
@@ -773,14 +1166,14 @@ void LiftLowerBuilder::emitToComponentValue(const ComponentType& type,
       localGet(jsValue);
       callBuiltin(Id::ComponentToBool);
       emitSetScalar(kind, loc);
-      return;
+      return true;
     case ComponentTypeKind::S64:
     case ComponentTypeKind::U64:
       localGet(jsValue);
       i32Const(int32_t(kind));
       callBuiltin(Id::ComponentToInteger);
       emitSetScalar(kind, loc);
-      return;
+      return true;
     case ComponentTypeKind::F32:
     case ComponentTypeKind::F64:
       localGet(jsValue);
@@ -789,15 +1182,21 @@ void LiftLowerBuilder::emitToComponentValue(const ComponentType& type,
         op(Op::F32DemoteF64);
       }
       emitSetScalar(kind, loc);
-      return;
+      return true;
     case ComponentTypeKind::Char:
       localGet(jsValue);
       callBuiltin(Id::ComponentToChar);
       emitSetScalar(kind, loc);
-      return;
+      return true;
     case ComponentTypeKind::String:
       emitStoreString(jsValue, loc);
-      return;
+      return true;
+    case ComponentTypeKind::List:
+      return emitToComponentValueList(type, jsValue, loc);
+    case ComponentTypeKind::Tuple:
+      return emitToComponentValueTuple(type, jsValue, loc);
+    case ComponentTypeKind::Record:
+      return emitToComponentValueRecord(type, jsValue, loc);
     default:
       MOZ_ASSERT(IsIntegerKind(kind));
       localGet(jsValue);
@@ -805,49 +1204,55 @@ void LiftLowerBuilder::emitToComponentValue(const ComponentType& type,
       callBuiltin(Id::ComponentToInteger);
       op(Op::I32WrapI64);
       emitSetScalar(kind, loc);
-      return;
+      return true;
   }
 }
 
-void LiftLowerBuilder::emitToJSValue(const ComponentType& type,
+bool LiftLowerBuilder::emitToJSValue(const ComponentType& type,
                                      const ValueLoc& loc) {
   ComponentTypeKind kind = type.kind();
   switch (kind) {
     case ComponentTypeKind::Bool:
       emitGetScalar(kind, loc);
       callBuiltin(Id::ComponentBoolToJS);
-      return;
+      return true;
     case ComponentTypeKind::S64:
     case ComponentTypeKind::U64:
       emitGetScalar(kind, loc);
       i32Const(int32_t(kind));
       callBuiltin(Id::ComponentInt64ToJS);
-      return;
+      return true;
     case ComponentTypeKind::F32:
       emitGetScalar(kind, loc);
       op(Op::F64PromoteF32);
       callBuiltin(Id::ComponentFloatToJS);
-      return;
+      return true;
     case ComponentTypeKind::F64:
       emitGetScalar(kind, loc);
       callBuiltin(Id::ComponentFloatToJS);
-      return;
+      return true;
     case ComponentTypeKind::Char:
       emitGetScalar(kind, loc);
       callBuiltin(Id::ComponentCharToJS);
-      return;
+      return true;
     case ComponentTypeKind::String:
       emitGetI32(loc, 0);
       emitGetI32(loc, 1);
       i32Const(int32_t(stringEncoding_));
       callBuiltin(Id::ComponentStringToJS);
-      return;
+      return true;
+    case ComponentTypeKind::List:
+      return emitToJSValueList(type, loc);
+    case ComponentTypeKind::Tuple:
+      return emitToJSValueTuple(type, loc);
+    case ComponentTypeKind::Record:
+      return emitToJSValueRecord(type, loc);
     default:
       MOZ_ASSERT(IsIntegerKind(kind));
       emitGetScalar(kind, loc);
       i32Const(int32_t(kind));
       callBuiltin(Id::ComponentIntegerToJS);
-      return;
+      return true;
   }
 }
 
@@ -869,12 +1274,13 @@ bool LiftLowerBuilder::emitLiftAdapter(const ComponentFuncType& funcType,
     const ComponentType& type = funcType.paramTypes[i];
     ValTypeVector flatTypes;
     size_t start = flatArgs.length();
-    if (!FlatTypes(type, &flatTypes) || !addFlatLocals(flatTypes, &flatArgs)) {
+    if (!FlatTypes(type, &flatTypes) || !addFlatLocals(flatTypes, &flatArgs) ||
+        !emitToComponentValue(
+            type, i,
+            ValueLoc::flat(
+                mozilla::Span<const uint32_t>(flatArgs).From(start)))) {
       return false;
     }
-    emitToComponentValue(
-        type, i,
-        ValueLoc::flat(mozilla::Span<const uint32_t>(flatArgs).From(start)));
   }
 
   // Results with more than one flat value are returned through a pointer.
@@ -910,7 +1316,9 @@ bool LiftLowerBuilder::emitLiftAdapter(const ComponentFuncType& funcType,
     if (useRetPtr) {
       emitCheckPointer(*funcType.resultType, calleeResult);
     }
-    emitToJSValue(*funcType.resultType, loc);
+    if (!emitToJSValue(*funcType.resultType, loc)) {
+      return false;
+    }
     localSet(jsResult);
   }
 
@@ -962,10 +1370,10 @@ bool LiftLowerBuilder::emitLowerAdapter(const ComponentFuncType& funcType,
       }
     }
     uint32_t jsParam = addLocal(ValType(RefType::extern_()));
-    if (!jsParams.append(jsParam)) {
+    if (!jsParams.append(jsParam) ||
+        !emitToJSValue(type, ValueLoc::flat(flat))) {
       return false;
     }
-    emitToJSValue(type, ValueLoc::flat(flat));
     localSet(jsParam);
   }
 
@@ -1000,7 +1408,9 @@ bool LiftLowerBuilder::emitLowerAdapter(const ComponentFuncType& funcType,
     if (useRetPtr) {
       emitCheckPointer(*funcType.resultType, retPtr);
     }
-    emitToComponentValue(*funcType.resultType, jsResult, loc);
+    if (!emitToComponentValue(*funcType.resultType, jsResult, loc)) {
+      return false;
+    }
   }
   if (flatResultType) {
     localGet(flatResult);

@@ -393,6 +393,10 @@ mozilla::Maybe<FuncType> FlattenFuncType(const ComponentFuncType& funcType,
 uint32_t CanonAlignment(const ComponentType& type);
 uint32_t CanonElemSize(const ComponentType& type);
 
+inline uint32_t CanonAlignTo(uint32_t offset, uint32_t alignment) {
+  return (offset + alignment - 1) / alignment * alignment;
+}
+
 // The size in bytes of the discriminant of a variant with `numCases` cases.
 uint32_t CanonDiscriminantSize(size_t numCases);
 

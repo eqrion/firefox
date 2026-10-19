@@ -824,10 +824,6 @@ mozilla::Maybe<FuncType> wasm::FlattenFuncType(
   return mozilla::Some(FuncType(std::move(params), std::move(results)));
 }
 
-static uint32_t AlignTo(uint32_t offset, uint32_t alignment) {
-  return (offset + alignment - 1) / alignment * alignment;
-}
-
 uint32_t wasm::CanonDiscriminantSize(size_t numCases) {
   MOZ_ASSERT(numCases > 0);
   if (numCases <= 1 << 8) {
@@ -948,10 +944,10 @@ uint32_t wasm::CanonElemSize(const ComponentType& type) {
     case ComponentTypeKind::Tuple: {
       uint32_t size = 0;
       ForEachFieldType(type, [&](const ComponentType& fieldType) {
-        size =
-            AlignTo(size, CanonAlignment(fieldType)) + CanonElemSize(fieldType);
+        size = CanonAlignTo(size, CanonAlignment(fieldType)) +
+               CanonElemSize(fieldType);
       });
-      return AlignTo(size, CanonAlignment(type));
+      return CanonAlignTo(size, CanonAlignment(type));
     }
     case ComponentTypeKind::Variant:
     case ComponentTypeKind::Enum:
@@ -964,10 +960,10 @@ uint32_t wasm::CanonElemSize(const ComponentType& type) {
               maxCaseSize = std::max(maxCaseSize, CanonElemSize(*t));
             }
           });
-      uint32_t size = AlignTo(CanonDiscriminantSize(numCases),
-                              CanonMaxCaseAlignment(type)) +
+      uint32_t size = CanonAlignTo(CanonDiscriminantSize(numCases),
+                                   CanonMaxCaseAlignment(type)) +
                       maxCaseSize;
-      return AlignTo(size, CanonAlignment(type));
+      return CanonAlignTo(size, CanonAlignment(type));
     }
     case ComponentTypeKind::Flags:
       return CanonFlagsSize(type.asFlags().length());

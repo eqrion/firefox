@@ -636,12 +636,202 @@
 - op: ComponentCheckRange
   symbolic_address:
     name: ComponentCheckRange
-    type: Args_Int32_GeneralInt32Int32Int32
+    type: Args_Int32_GeneralInt32Int32Int32Int32
     needs_thunk: true
   entry: ComponentCheckRange
   export: componentCheckRange
   params:
     - 'i32'
+    - 'i32'
+    - 'i32'
+    - 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentIterableToArray
+  symbolic_address:
+    name: ComponentIterableToArray
+    type: Args_General_GeneralGeneralInt32
+    needs_thunk: true
+  entry: ComponentIterableToArray
+  export: componentIterableToArray
+  params:
+    - 'externref'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: ComponentArrayLength
+  symbolic_address:
+    name: ComponentArrayLength
+    type: Args_Int32_GeneralGeneral
+    needs_thunk: true
+  entry: ComponentArrayLength
+  export: componentArrayLength
+  params:
+    - 'externref'
+  result: 'i32'
+  fail_mode: Infallible
+  uses_memory: false
+
+- op: ComponentCheckArrayLength
+  symbolic_address:
+    name: ComponentCheckArrayLength
+    type: Args_Int32_GeneralGeneralInt32
+    needs_thunk: true
+  entry: ComponentCheckArrayLength
+  export: componentCheckArrayLength
+  params:
+    - 'externref'
+    - 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentArrayGet
+  symbolic_address:
+    name: ComponentArrayGet
+    type: Args_General_GeneralGeneralInt32
+    needs_thunk: true
+  entry: ComponentArrayGet
+  export: componentArrayGet
+  params:
+    - 'externref'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: ComponentNewArray
+  symbolic_address:
+    name: ComponentNewArray
+    type: Args_General_GeneralInt32
+    needs_thunk: true
+  entry: ComponentNewArray
+  export: componentNewArray
+  params:
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: ComponentArraySet
+  symbolic_address:
+    name: ComponentArraySet
+    type: Args_Int32_GeneralGeneralInt32General
+    needs_thunk: true
+  entry: ComponentArraySet
+  export: componentArraySet
+  params:
+    - 'externref'
+    - 'i32'
+    - 'externref'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentCheckObject
+  symbolic_address:
+    name: ComponentCheckObject
+    type: Args_Int32_GeneralGeneral
+    needs_thunk: true
+  entry: ComponentCheckObject
+  export: componentCheckObject
+  params:
+    - 'externref'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentGetField
+  symbolic_address:
+    name: ComponentGetField
+    type: Args_General3
+    needs_thunk: true
+  entry: ComponentGetField
+  export: componentGetField
+  params:
+    - 'externref'
+    - 'externref'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: ComponentNewRecord
+  symbolic_address:
+    name: ComponentNewRecord
+    type: Args_General1
+    needs_thunk: true
+  entry: ComponentNewRecord
+  export: componentNewRecord
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: ComponentDefineField
+  symbolic_address:
+    name: ComponentDefineField
+    type: Args_Int32_GeneralGeneralGeneralGeneral
+    needs_thunk: true
+  entry: ComponentDefineField
+  export: componentDefineField
+  params:
+    - 'externref'
+    - 'externref'
+    - 'externref'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentScalarListToJS
+  symbolic_address:
+    name: ComponentScalarListToJS
+    type: Args_General_GeneralInt32Int32Int32
+    needs_thunk: true
+  entry: ComponentScalarListToJS
+  export: componentScalarListToJS
+  params:
+    - 'i32'
+    - 'i32'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: ComponentIsScalarArray
+  symbolic_address:
+    name: ComponentIsScalarArray
+    type: Args_Int32_GeneralGeneralInt32
+    needs_thunk: true
+  entry: ComponentIsScalarArray
+  export: componentIsScalarArray
+  params:
+    - 'externref'
+    - 'i32'
+  result: 'i32'
+  fail_mode: Infallible
+  uses_memory: false
+
+- op: ComponentScalarArrayLength
+  symbolic_address:
+    name: ComponentScalarArrayLength
+    type: Args_Int32_GeneralGeneralInt32
+    needs_thunk: true
+  entry: ComponentScalarArrayLength
+  export: componentScalarArrayLength
+  params:
+    - 'externref'
+    - 'i32'
+  result: 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentCopyScalars
+  symbolic_address:
+    name: ComponentCopyScalars
+    type: Args_Int32_GeneralGeneralInt32Int32
+    needs_thunk: true
+  entry: ComponentCopyScalars
+  export: componentCopyScalars
+  params:
+    - 'externref'
     - 'i32'
     - 'i32'
   fail_mode: FailOnNegI32

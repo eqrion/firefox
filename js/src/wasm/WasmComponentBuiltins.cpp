@@ -8,11 +8,16 @@
 
 #ifdef ENABLE_WASM_COMPONENTS
 
+#  include <cmath>
+
 #  include "builtin/String.h"
 #  include "js/Conversions.h"
+#  include "js/experimental/TypedData.h"
 #  include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #  include "util/Unicode.h"
 #  include "vm/BigIntType.h"
+#  include "vm/Iteration.h"
+#  include "vm/TypedArrayObject.h"
 #  include "wasm/WasmBuiltins.h"
 #  include "wasm/WasmInstance.h"
 #  include "wasm/WasmJS.h"
@@ -22,6 +27,37 @@
 
 using namespace js;
 using namespace js::wasm;
+
+// The canonical ABI's canonical NaNs.
+static constexpr uint32_t CanonicalFloat32NaN = 0x7fc00000;
+static constexpr uint64_t CanonicalFloat64NaN = 0x7ff8000000000000;
+
+mozilla::Maybe<Scalar::Type> wasm::ScalarListArrayType(ComponentTypeKind kind) {
+  switch (kind) {
+    case ComponentTypeKind::S8:
+      return mozilla::Some(Scalar::Int8);
+    case ComponentTypeKind::U8:
+      return mozilla::Some(Scalar::Uint8);
+    case ComponentTypeKind::S16:
+      return mozilla::Some(Scalar::Int16);
+    case ComponentTypeKind::U16:
+      return mozilla::Some(Scalar::Uint16);
+    case ComponentTypeKind::S32:
+      return mozilla::Some(Scalar::Int32);
+    case ComponentTypeKind::U32:
+      return mozilla::Some(Scalar::Uint32);
+    case ComponentTypeKind::S64:
+      return mozilla::Some(Scalar::BigInt64);
+    case ComponentTypeKind::U64:
+      return mozilla::Some(Scalar::BigUint64);
+    case ComponentTypeKind::F32:
+      return mozilla::Some(Scalar::Float32);
+    case ComponentTypeKind::F64:
+      return mozilla::Some(Scalar::Float64);
+    default:
+      return mozilla::Nothing();
+  }
+}
 
 static ComponentInstance& InstanceFromCtx(HandleObject ctx) {
   return ctx->as<WasmComponentInstanceObject>().instance();
@@ -248,12 +284,296 @@ static bool CheckAlignment(Instance* instance, uint32_t ptr,
 }
 
 int32_t wasm::ComponentCheckRange(Instance* instance, int32_t ptr,
-                                  int32_t length, int32_t alignment) {
+                                  int32_t count, int32_t elemSize,
+                                  int32_t alignment) {
   MOZ_ASSERT(SASigComponentCheckRange.failureMode == FailureMode::FailOnNegI32);
   if (!CheckAlignment(instance, uint32_t(ptr), uint32_t(alignment)) ||
-      !GetMemoryRange(instance, uint32_t(ptr), uint32_t(length))) {
+      !GetMemoryRange(instance, uint32_t(ptr),
+                      uint64_t(uint32_t(count)) * uint32_t(elemSize))) {
     return -1;
   }
+  return 0;
+}
+
+void* wasm::ComponentIterableToArray(Instance* instance, void* valueRef,
+                                     int32_t elemSize) {
+  MOZ_ASSERT(SASigComponentIterableToArray.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  if (!value.isObject()) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_NOT_ITERABLE,
+                              "value");
+    return AnyRef::invalid().forCompiledCode();
+  }
+  Rooted<ArrayObject*> array(cx, IterableToArray(cx, value));
+  if (!array) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  // The list's size in bytes must fit in a 32-bit memory.
+  if (uint64_t(array->length()) * uint32_t(elemSize) > UINT32_MAX) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_WASM_COMPONENT_LIST_TOO_LONG);
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue arrayValue(cx, ObjectValue(*array));
+  return ExternRefForCompiledCode(cx, arrayValue);
+}
+
+static ArrayObject& ArrayFromRef(void* arrayRef) {
+  return AnyRef::fromCompiledCode(arrayRef).toJSObject().as<ArrayObject>();
+}
+
+int32_t wasm::ComponentArrayLength(Instance* instance, void* arrayRef) {
+  MOZ_ASSERT(SASigComponentArrayLength.failureMode == FailureMode::Infallible);
+  return int32_t(ArrayFromRef(arrayRef).length());
+}
+
+int32_t wasm::ComponentCheckArrayLength(Instance* instance, void* arrayRef,
+                                        int32_t length) {
+  MOZ_ASSERT(SASigComponentCheckArrayLength.failureMode ==
+             FailureMode::FailOnNegI32);
+  if (ArrayFromRef(arrayRef).length() != uint32_t(length)) {
+    JS_ReportErrorNumberASCII(instance->cx(), GetErrorMessage, nullptr,
+                              JSMSG_WASM_COMPONENT_BAD_LENGTH);
+    return -1;
+  }
+  return 0;
+}
+
+void* wasm::ComponentArrayGet(Instance* instance, void* arrayRef,
+                              int32_t index) {
+  MOZ_ASSERT(SASigComponentArrayGet.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  // The array is from ComponentIterableToArray, so its elements are dense.
+  RootedValue value(cx,
+                    ArrayFromRef(arrayRef).getDenseElement(uint32_t(index)));
+  return ExternRefForCompiledCode(cx, value);
+}
+
+void* wasm::ComponentNewArray(Instance* instance, int32_t length) {
+  MOZ_ASSERT(SASigComponentNewArray.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  ArrayObject* array = NewDenseFullyAllocatedArray(cx, uint32_t(length));
+  if (!array) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue value(cx, ObjectValue(*array));
+  return ExternRefForCompiledCode(cx, value);
+}
+
+int32_t wasm::ComponentArraySet(Instance* instance, void* arrayRef,
+                                int32_t index, void* valueRef) {
+  MOZ_ASSERT(SASigComponentArraySet.failureMode == FailureMode::FailOnNegI32);
+  JSContext* cx = instance->cx();
+  Rooted<ArrayObject*> array(cx, &ArrayFromRef(arrayRef));
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  if (!DefineDataElement(cx, array, uint32_t(index), value)) {
+    return -1;
+  }
+  return 0;
+}
+
+int32_t wasm::ComponentCheckObject(Instance* instance, void* valueRef) {
+  MOZ_ASSERT(SASigComponentCheckObject.failureMode ==
+             FailureMode::FailOnNegI32);
+  if (!AnyRef::fromCompiledCode(valueRef).toJSValue().isObject()) {
+    JS_ReportErrorNumberASCII(instance->cx(), GetErrorMessage, nullptr,
+                              JSMSG_OBJECT_REQUIRED, "value");
+    return -1;
+  }
+  return 0;
+}
+
+void* wasm::ComponentGetField(Instance* instance, void* objectRef,
+                              void* nameRef) {
+  MOZ_ASSERT(SASigComponentGetField.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedObject obj(cx, &AnyRef::fromCompiledCode(objectRef).toJSObject());
+  RootedId name(
+      cx,
+      AtomToId(
+          &AnyRef::fromCompiledCode(nameRef).toJSValue().toString()->asAtom()));
+  RootedValue value(cx);
+  if (!GetProperty(cx, obj, obj, name, &value)) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  return ExternRefForCompiledCode(cx, value);
+}
+
+void* wasm::ComponentNewRecord(Instance* instance) {
+  MOZ_ASSERT(SASigComponentNewRecord.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  JSObject* obj = NewPlainObjectWithProto(cx, nullptr);
+  if (!obj) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue value(cx, ObjectValue(*obj));
+  return ExternRefForCompiledCode(cx, value);
+}
+
+int32_t wasm::ComponentDefineField(Instance* instance, void* objectRef,
+                                   void* nameRef, void* valueRef) {
+  MOZ_ASSERT(SASigComponentDefineField.failureMode ==
+             FailureMode::FailOnNegI32);
+  JSContext* cx = instance->cx();
+  RootedObject obj(cx, &AnyRef::fromCompiledCode(objectRef).toJSObject());
+  RootedId name(
+      cx,
+      AtomToId(
+          &AnyRef::fromCompiledCode(nameRef).toJSValue().toString()->asAtom()));
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  if (!DefineDataProperty(cx, obj, name, value, JSPROP_ENUMERATE)) {
+    return -1;
+  }
+  return 0;
+}
+
+static JSObject* NewScalarArray(JSContext* cx, Scalar::Type type,
+                                size_t length) {
+  switch (type) {
+#  define NEW_ARRAY(ExternalType, NativeType, Name) \
+    case Scalar::Name:                              \
+      return JS_New##Name##Array(cx, length);
+    JS_FOR_EACH_TYPED_ARRAY(NEW_ARRAY)
+#  undef NEW_ARRAY
+    default:
+      MOZ_CRASH("not a typed array type");
+  }
+}
+
+// Replaces NaNs with the canonical NaN, as the canonical ABI does when it
+// loads a float.
+template <typename T, typename Bits>
+static void CanonicalizeNaNs(T* elems, size_t length, Bits canonicalNaN) {
+  for (size_t i = 0; i < length; i++) {
+    if (std::isnan(elems[i])) {
+      elems[i] = mozilla::BitwiseCast<T>(canonicalNaN);
+    }
+  }
+}
+
+void* wasm::ComponentScalarListToJS(Instance* instance, int32_t ptr,
+                                    int32_t length, int32_t kind) {
+  MOZ_ASSERT(SASigComponentScalarListToJS.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  Scalar::Type type = *ScalarListArrayType(ComponentTypeKind(kind));
+  size_t elemSize = Scalar::byteSize(type);
+  uint64_t byteLength = uint64_t(uint32_t(length)) * elemSize;
+  if (!CheckAlignment(instance, uint32_t(ptr), elemSize)) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  const uint8_t* src = GetMemoryRange(instance, uint32_t(ptr), byteLength);
+  if (!src) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  // Memory is not moved by GC, so `src` stays valid while allocating.
+  JSObject* obj = NewScalarArray(cx, type, uint32_t(length));
+  if (!obj) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  TypedArrayObject& array = obj->as<TypedArrayObject>();
+  void* dst = array.dataPointerUnshared();
+  memcpy(dst, src, byteLength);
+  if (type == Scalar::Float32) {
+    CanonicalizeNaNs(static_cast<float*>(dst), uint32_t(length),
+                     CanonicalFloat32NaN);
+  } else if (type == Scalar::Float64) {
+    CanonicalizeNaNs(static_cast<double*>(dst), uint32_t(length),
+                     CanonicalFloat64NaN);
+  }
+  RootedValue value(cx, ObjectValue(array));
+  return ExternRefForCompiledCode(cx, value);
+}
+
+// Gets a value as a typed array of the given type, or null.
+static TypedArrayObject* AsScalarArray(const Value& value, int32_t kind) {
+  if (!value.isObject() || !value.toObject().is<TypedArrayObject>()) {
+    return nullptr;
+  }
+  TypedArrayObject& array = value.toObject().as<TypedArrayObject>();
+  return array.type() == *ScalarListArrayType(ComponentTypeKind(kind))
+             ? &array
+             : nullptr;
+}
+
+int32_t wasm::ComponentIsScalarArray(Instance* instance, void* valueRef,
+                                     int32_t kind) {
+  MOZ_ASSERT(SASigComponentIsScalarArray.failureMode ==
+             FailureMode::Infallible);
+  return !!AsScalarArray(AnyRef::fromCompiledCode(valueRef).toJSValue(), kind);
+}
+
+// Gets the length of a typed array, or throws if its buffer is detached, it is
+// out of bounds, or its elements wouldn't fit in a 32-bit memory.
+static bool GetScalarArrayLength(JSContext* cx, TypedArrayObject* array,
+                                 uint32_t* length) {
+  mozilla::Maybe<size_t> maybeLength = array->length();
+  if (!maybeLength) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_TYPED_ARRAY_DETACHED);
+    return false;
+  }
+  if (*maybeLength > INT32_MAX ||
+      uint64_t(*maybeLength) * array->bytesPerElement() > UINT32_MAX) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_WASM_COMPONENT_LIST_TOO_LONG);
+    return false;
+  }
+  *length = *maybeLength;
+  return true;
+}
+
+int32_t wasm::ComponentScalarArrayLength(Instance* instance, void* valueRef,
+                                         int32_t kind) {
+  MOZ_ASSERT(SASigComponentScalarArrayLength.failureMode ==
+             FailureMode::FailOnNegI32);
+  uint32_t length;
+  if (!GetScalarArrayLength(
+          instance->cx(),
+          AsScalarArray(AnyRef::fromCompiledCode(valueRef).toJSValue(), kind),
+          &length)) {
+    return -1;
+  }
+  return int32_t(length);
+}
+
+int32_t wasm::ComponentCopyScalars(Instance* instance, void* valueRef,
+                                   int32_t ptr, int32_t length) {
+  MOZ_ASSERT(SASigComponentCopyScalars.failureMode ==
+             FailureMode::FailOnNegI32);
+  JSContext* cx = instance->cx();
+  TypedArrayObject& array = AnyRef::fromCompiledCode(valueRef)
+                                .toJSValue()
+                                .toObject()
+                                .as<TypedArrayObject>();
+
+  // realloc can run JS that changes the array after its length was read.
+  uint32_t currentLength;
+  if (!GetScalarArrayLength(cx, &array, &currentLength)) {
+    return -1;
+  }
+  if (currentLength != uint32_t(length)) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_WASM_COMPONENT_BAD_LENGTH);
+    return -1;
+  }
+  size_t elemSize = array.bytesPerElement();
+  uint64_t byteLength = uint64_t(uint32_t(length)) * elemSize;
+  if (!CheckAlignment(instance, uint32_t(ptr), elemSize)) {
+    return -1;
+  }
+  uint8_t* dst = GetMemoryRange(instance, uint32_t(ptr), byteLength);
+  if (!dst) {
+    return -1;
+  }
+  // The array could be a view of the memory itself.
+  memmove(dst, array.dataPointerEither().unwrap(), byteLength);
   return 0;
 }
 

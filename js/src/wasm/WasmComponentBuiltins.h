@@ -9,6 +9,9 @@
 
 #ifdef ENABLE_WASM_COMPONENTS
 
+#  include "mozilla/Maybe.h"
+
+#  include "js/ScalarType.h"
 #  include "wasm/WasmComponent.h"
 
 // The builtin module functions that component adapters call, for anything that
@@ -27,6 +30,10 @@ enum class AdapterTrap : int32_t {
 
 // The tag on the length of a latin1+utf16 string that is stored as UTF-16.
 static constexpr uint32_t UTF16Tag = 1u << 31;
+
+// The class of the typed array that a list of scalars of type `kind` is
+// represented by, if it is represented by one.
+mozilla::Maybe<Scalar::Type> ScalarListArrayType(ComponentTypeKind kind);
 
 // ToComponentValue for an integer of type `kind`, a ComponentTypeKind, as its
 // sign- or zero-extended bits.
@@ -49,9 +56,51 @@ void* ComponentCharToJS(Instance* instance, int32_t value);
 // Records that the current call has entered the guest.
 void ComponentEnterGuest(Instance* instance, void* ctxRef);
 
-// Traps unless [ptr, ptr + length) is in memory and ptr is aligned.
-int32_t ComponentCheckRange(Instance* instance, int32_t ptr, int32_t length,
-                            int32_t alignment);
+// Traps unless `count` elements of `elemSize` bytes at `ptr` are in memory,
+// and ptr is aligned.
+int32_t ComponentCheckRange(Instance* instance, int32_t ptr, int32_t count,
+                            int32_t elemSize, int32_t alignment);
+
+// The first part of ToComponentValueList: iterates a JS value to a new dense
+// array, whose elements are then converted. Throws if the list would be larger
+// than 32-bit memory, given its elements' size.
+void* ComponentIterableToArray(Instance* instance, void* valueRef,
+                               int32_t elemSize);
+int32_t ComponentArrayLength(Instance* instance, void* arrayRef);
+// Throws unless the array has exactly `length` elements.
+int32_t ComponentCheckArrayLength(Instance* instance, void* arrayRef,
+                                  int32_t length);
+void* ComponentArrayGet(Instance* instance, void* arrayRef, int32_t index);
+
+// Creates the JS array for a list or tuple, whose elements are then set.
+void* ComponentNewArray(Instance* instance, int32_t length);
+int32_t ComponentArraySet(Instance* instance, void* arrayRef, int32_t index,
+                          void* valueRef);
+
+// ToComponentValueRecord: ComponentCheckObject throws unless the value is an
+// object, and ComponentGetField gets a field. `nameRef` is an atom.
+int32_t ComponentCheckObject(Instance* instance, void* valueRef);
+void* ComponentGetField(Instance* instance, void* objectRef, void* nameRef);
+
+// ToJSValueRecord: creates a null-prototype object, and defines its fields.
+void* ComponentNewRecord(Instance* instance);
+int32_t ComponentDefineField(Instance* instance, void* objectRef, void* nameRef,
+                             void* valueRef);
+
+// ToJSValue for a list of scalars of type `kind`, a ComponentTypeKind, as a
+// typed array.
+void* ComponentScalarListToJS(Instance* instance, int32_t ptr, int32_t length,
+                              int32_t kind);
+
+// ToComponentValueScalarList for a typed array of the list's scalar type
+// `kind`: ComponentIsScalarArray tests for one, ComponentScalarArrayLength gets
+// its length, and ComponentCopyScalars copies it to memory.
+int32_t ComponentIsScalarArray(Instance* instance, void* valueRef,
+                               int32_t kind);
+int32_t ComponentScalarArrayLength(Instance* instance, void* valueRef,
+                                   int32_t kind);
+int32_t ComponentCopyScalars(Instance* instance, void* valueRef, int32_t ptr,
+                             int32_t length);
 
 // The steps of storing a JS string with the canonical ABI's store_string.
 // ComponentToString converts a JS value to a string, and the rest take that
