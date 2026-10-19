@@ -316,6 +316,12 @@ fn convert_directive(
             )?;
         }
 
+        // (assert_invalid_custom ...) or (assert_malformed_custom ...): Errors
+        // in custom sections don't affect the module, so it must compile.
+        AssertInvalidCustom { module, .. } | AssertMalformedCustom { module, .. } => {
+            writejs!("{};", compile_to_js(module, wast)?)?;
+        }
+
         // (assert_unlinkable ...)
         AssertUnlinkable {
             span: _,
