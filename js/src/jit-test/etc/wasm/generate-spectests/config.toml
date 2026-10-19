@@ -269,6 +269,100 @@ excluded_tests = [
   "^table",
 ]
 
+[[repos]]
+name = "component-model"
+url = "https://github.com/WebAssembly/component-model"
+branch = "main"
+test_dir = "test"
+excluded_tests = [
+  # Uses text syntax that our version of wast cannot parse
+  "^big-interleaving-test.wast.js",
+  "^forward.wast.js",
+  "^post-return.wast.js",
+
+  # Failing: needs component exports
+  "^strings.wast.js",
+  "^tags.wast.js",
+
+  # Failing: needs interface names
+  "^extern-names.wast.js",
+
+  # Failing: needs nested components
+  "^abi.wast.js",
+  "^alignment.wast.js",
+  "^annotated-names.wast.js",
+  "^async-calls-sync.wast.js",
+  "^borrows.wast.js",
+  "^cancel-and-exclusive-lock.wast.js",
+  "^cancel-delivery.wast.js",
+  "^cancel-instance-wide-resume.wast.js",
+  "^cancel-not-delivered.wast.js",
+  "^cancel-stream.wast.js",
+  "^cancel-subtask.wast.js",
+  "^cancel-yield-loop.wast.js",
+  "^closed-stream.wast.js",
+  "^concat.wast.js",
+  "^cross-abi-calls.wast.js",
+  "^cross-task-future.wast.js",
+  "^deadlock.wast.js",
+  "^drop-cross-task-borrow.wast.js",
+  "^drop-stream.wast.js",
+  "^drop-subtask.wast.js",
+  "^drop-waitable-set.wast.js",
+  "^during-sync-call-may-block-if-other-ready-threads.wast.js",
+  "^during-sync-call-no-sibling-resume.wast.js",
+  "^empty-wait.wast.js",
+  "^futures-must-write.wast.js",
+  "^handle-table.wast.js",
+  "^indicies.wast.js",
+  "^instantiation.wast.js",
+  "^kebab.wast.js",
+  "^link-time-virtualization.wast.js",
+  "^multiple-resources.wast.js",
+  "^numerics.wast.js",
+  "^partial-stream-copies.wast.js",
+  "^passing-resources.wast.js",
+  "^realloc.wast.js",
+  "^reentrance.wast.js",
+  "^resources.wast.js",
+  "^shared-everything-dynamic-linking.wast.js",
+  "^switch-to-ready-callback.wast.js",
+  "^sync-barges-in.wast.js",
+  "^sync-streams.wast.js",
+  "^transcode.wast.js",
+  "^trap-if-block-and-sync.wast.js",
+  "^trap-if-done.wast.js",
+  "^trap-if-sync-and-waitable-set.wast.js",
+  "^unit.wast.js",
+  "^variants.wast.js",
+  "^zero-length.wast.js",
+
+  # Failing: needs core type definitions
+  "^core-modules.wast.js",
+  "^during-sync-scheduling-candidates.wast.js",
+  "^outer-alias.wast.js",
+
+  # Failing: needs async
+  "^builtin-trap-poisons-instance.wast.js",
+  "^dont-block-start.wast.js",
+  "^during-sync-call-exclusive-resume.wast.js",
+  "^future-completion-order.wast.js",
+  "^idle-drop.wast.js",
+  "^max-value-size.wast.js",
+  "^same-component-stream-future.wast.js",
+  "^self-switch-traps.wast.js",
+  "^trap-if-transfer-in-waitable-set.wast.js",
+  "^wait-during-callback.wast.js",
+
+  # Failing: needs version suffixes
+  "^attributes.wast.js",
+
+  # Failing: missing validation
+  "^binary.wast.js",
+  "^external-visibility.wast.js",
+]
+directive = "; skip-if: !wasmComponentsEnabled(); test-also=-P wasm_components; test-also=--wasm-compiler=baseline -P wasm_components; test-also=--wasm-compiler=optimizing -P wasm_components"
+
 # Example proposal config:
 #
 # [[repos]]

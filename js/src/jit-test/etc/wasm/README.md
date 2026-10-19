@@ -46,6 +46,11 @@ proposal it is based off of and removing tests that have not changed.
 The import tool relies on `config.toml` for the list of proposals to import,
 and `config-lock.toml` for a list of commits to use for each proposal.
 
+Tests are read from `test/core` by default. Repos that keep their tests
+elsewhere, like the component model, can set `test_dir`. Tests in
+subdirectories are flattened into a single directory, and are included or
+excluded by the name of the generated `.wast.js` file.
+
 The lock file makes test importing deterministic and controllable. This is
 useful as proposals often make inconvenient and breaking changes.
 

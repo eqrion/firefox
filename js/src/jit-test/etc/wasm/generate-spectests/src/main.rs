@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
@@ -33,6 +34,15 @@ impl Config {
     }
 }
 
+impl Repo {
+    fn test_dirs(&self) -> Vec<&str> {
+        match &self.test_dir {
+            Some(dir) => vec![dir],
+            None => vec!["test/core", "test/custom"],
+        }
+    }
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Repo {
     name: String,
@@ -41,6 +51,10 @@ struct Repo {
     branch: Option<String>,
     #[serde(default)]
     parent: Option<String>,
+    // The directory containing `.wast` tests, searched recursively. Defaults to
+    // `test/core` and `test/custom`.
+    #[serde(default)]
+    test_dir: Option<String>,
     #[serde(default)]
     directive: Option<String>,
     #[serde(default)]
@@ -393,7 +407,7 @@ fn build_repo(repo: &Repo, config: &Config, lock: &Lock) -> Result<Status> {
     // Try to build the test suite on this commit. This may fail due to merging
     // with a parent repo, in which case we will try again in an unmerged state.
     let mut build_error = None;
-    if let Err(err) = try_build_tests(&exclude) {
+    if let Err(err) = try_build_tests(repo, &exclude) {
         warn!("Failed to build tests: {:?}", err);
         build_error = Some(format!("{:?}", err));
     }
@@ -435,7 +449,7 @@ fn build_repo(repo: &Repo, config: &Config, lock: &Lock) -> Result<Status> {
     let mut num_wast_tests = 0;
     let mut num_js_tests = 0;
     if !repo.skip_wast {
-        for dir in &["test/core", "test/custom"] {
+        for dir in repo.test_dirs() {
             num_wast_tests += copy_tests(repo, dir, "../tests", "wast", &include, &exclude);
         }
     }
@@ -486,34 +500,51 @@ fn try_merge_parent(repo: &Repo, commit_base_hash: &str) -> Result<Merge> {
     )
 }
 
-fn try_build_tests(exclude: &RegexSet) -> Result<()> {
+fn try_build_tests(repo: &Repo, exclude: &RegexSet) -> Result<()> {
     let _ = fs::remove_dir_all("./js");
     fs::create_dir("./js")?;
 
-    for path in &find(&["./test/core/", "./test/custom/"]) {
+    // Tests in subdirectories are flattened into a single directory, and are
+    // excluded by the name of the generated test. If multiple tests would
+    // generate the same name, the one closest to the test directory wins.
+    let mut tests: HashMap<String, PathBuf> = HashMap::new();
+    for path in find(&repo.test_dirs()) {
         if path.extension() != Some(OsStr::new("wast")) {
             continue;
         }
 
-        let stripped_path = path;
-        let stripped_path = stripped_path
-            .strip_prefix("./test/core/")
-            .unwrap_or(&stripped_path);
-        let stripped_path = stripped_path
-            .strip_prefix("./test/custom/")
-            .unwrap_or(&stripped_path);
-        let stripped_path_str = stripped_path.to_str().unwrap();
-        if exclude.is_match(stripped_path_str) {
+        let test_name = path.with_extension("wast.js");
+        let test_name = test_name.file_name().unwrap().to_str().unwrap().to_owned();
+        if exclude.is_match(&test_name) {
             continue;
         }
+        match tests.get(&test_name) {
+            Some(existing) if existing.components().count() <= path.components().count() => {
+                warn!(
+                    "Skipping {} in favor of {}",
+                    path.display(),
+                    existing.display()
+                );
+            }
+            Some(existing) => {
+                warn!(
+                    "Skipping {} in favor of {}",
+                    existing.display(),
+                    path.display()
+                );
+                tests.insert(test_name, path);
+            }
+            None => {
+                tests.insert(test_name, path);
+            }
+        }
+    }
 
-        let source = std::fs::read_to_string(&path)?;
-        let script = wast2js::convert(&path, &source)?;
+    for (test_name, path) in &tests {
+        let source = std::fs::read_to_string(path)?;
+        let script = wast2js::convert(path, &source)?;
 
-        std::fs::write(
-            Path::new("./js").join(&path.with_extension("wast.js").file_name().unwrap()),
-            &script,
-        )?;
+        std::fs::write(Path::new("./js").join(test_name), &script)?;
     }
 
     fs::create_dir("./js/harness")?;
@@ -581,23 +612,14 @@ fn copy_directives(repo: &Repo, config: &Config) -> Result<()> {
 
 fn find_tests_changed(repo: &Repo) -> Result<Vec<String>> {
     let files_changed = if let Some(parent) = repo.parent.as_ref() {
-        run(
-            "git",
-            &[
-                "diff",
-                "--name-only",
-                &repo.name,
-                &parent,
-                "--",
-                "test/core",
-                "test/custom",
-            ],
-        )?
-        .lines()
-        .map(|x| PathBuf::from(x))
-        .collect()
+        let mut args = vec!["diff", "--name-only", &repo.name, parent, "--"];
+        args.extend(repo.test_dirs());
+        run("git", &args)?
+            .lines()
+            .map(|x| PathBuf::from(x))
+            .collect()
     } else {
-        find(&["test/core", "test/custom"])
+        find(&repo.test_dirs())
     };
 
     let mut tests_changed = Vec::new();

@@ -15,6 +15,7 @@
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use regex::Regex;
+use std::collections::HashSet;
 use std::fmt::Write;
 use std::path::Path;
 use std::str;
@@ -49,21 +50,14 @@ pub fn convert<P: AsRef<Path>>(path: P, wast: &str) -> Result<String> {
     writeln!(&mut out, "{}", LICENSE)?;
     writeln!(&mut out, "// {}", filename.display())?;
 
-    let mut current_instance: Option<usize> = None;
+    let mut state = State::default();
 
     for directive in ast.directives {
         let sp = directive.span();
         let (line, col) = sp.linecol_in(wast);
         writeln!(&mut out, "")?;
         convert_directive(
-            directive,
-            &mut current_instance,
-            filename,
-            line,
-            col,
-            wast,
-            &mut out,
-            None,
+            directive, &mut state, filename, line, col, wast, &mut out, None,
         )
         .with_context(|| {
             format!(
@@ -78,9 +72,83 @@ pub fn convert<P: AsRef<Path>>(path: P, wast: &str) -> Result<String> {
     Ok(out)
 }
 
+/// Tracks the JS variables holding instances and definitions, so that
+/// directives can refer to the current instance and treat components
+/// differently from core modules.
+#[derive(Default)]
+struct State {
+    // The number of anonymous instance variables (`$0`, `$1`, ...) created.
+    num_instances: usize,
+    // The name of the JS variable (without the `$`) holding the current
+    // instance, which is the most recently created one.
+    current_instance: Option<String>,
+    // Names of JS variables (without the `$`) holding components or component
+    // instances.
+    components: HashSet<String>,
+    // Names of JS variables (without the `$`) that have been declared. Scripts
+    // may reuse identifiers, which JS does not allow for `let`.
+    declared: HashSet<String>,
+}
+
+impl State {
+    // Returns the JS to bind a value to the variable `$name`.
+    fn bind(&mut self, name: &str) -> String {
+        if self.declared.insert(name.to_string()) {
+            format!("let ${}", name)
+        } else {
+            format!("${}", name)
+        }
+    }
+
+    fn next_instance(&mut self) -> usize {
+        self.num_instances += 1;
+        self.num_instances - 1
+    }
+
+    fn set_current_instance(&mut self, name: &str, is_component: bool) {
+        self.current_instance = Some(name.to_string());
+        self.set_is_component(name, is_component);
+    }
+
+    fn set_is_component(&mut self, name: &str, is_component: bool) {
+        if is_component {
+            self.components.insert(name.to_string());
+        } else {
+            self.components.remove(name);
+        }
+    }
+
+    fn is_component(&self, name: &str) -> bool {
+        self.components.contains(name)
+    }
+
+    // Resolves an optional instance identifier to a JS variable name, without
+    // the `$`.
+    fn instance_name(&self, id: Option<wast::token::Id>) -> String {
+        id.map(js_var)
+            .unwrap_or_else(|| self.current_instance.clone().unwrap())
+    }
+}
+
+// Returns the JS variable name, without the `$`, for a text format identifier.
+// Identifiers may contain characters that JS doesn't allow, which are replaced
+// by their hex code point.
+fn js_var(id: wast::token::Id) -> String {
+    id.name()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c.to_string()
+            } else {
+                format!("_{:x}_", c as u32)
+            }
+        })
+        .collect()
+}
+
 fn convert_directive(
     directive: wast::WastDirective,
-    current_instance: &mut Option<usize>,
+    state: &mut State,
     filename: &Path,
     line: usize,
     col: usize,
@@ -113,52 +181,88 @@ fn convert_directive(
     // For full definitions of these directives, see
     // https://github.com/WebAssembly/spec/blob/main/interpreter/README.md#scripts
     match directive {
-        // (module $M? ...): Instantiate a module with an optional identifier.
-        Module(wast::QuoteWat::Wat(wast::Wat::Module(module))) => {
-            let next_instance = current_instance.map(|x| x + 1).unwrap_or(0);
-            let module_text = module_to_js_string(&module, wast)?;
+        // (module $M? ...) or (component $C? ...): Instantiate a module or
+        // component with an optional identifier.
+        Module(wast::QuoteWat::Wat(wat)) => {
+            let next_instance = state.next_instance();
+            let is_component = matches!(wat, wast::Wat::Component(_));
+            let (text, id) = wat_to_js_string(&wat, wast)?;
+            let func = if is_component {
+                "instantiateComponent"
+            } else {
+                "instantiate"
+            };
 
-            writejs!("let ${} = instantiate(`{}`);", next_instance, module_text)?;
-            if let Some(id) = module.id {
-                writejs!("let ${} = ${};", id.name(), next_instance)?;
+            writejs!("let ${} = {}(`{}`);", next_instance, func, text)?;
+            if let Some(id) = id {
+                let var = js_var(id);
+                writejs!("{} = ${};", state.bind(&var), next_instance)?;
+                state.set_is_component(&var, is_component);
             }
 
-            *current_instance = Some(next_instance);
+            state.set_current_instance(&next_instance.to_string(), is_component);
         }
         // (module quote "..."): Instantiate a module using the given literal text.
         // Identifiers are not supported.
         Module(wast::QuoteWat::QuoteModule(_, source)) => {
-            let next_instance = current_instance.map(|x| x + 1).unwrap_or(0);
+            let next_instance = state.next_instance();
             let module_text = quote_module_to_js_string(source)?;
 
             writejs!("let ${} = instantiate(`{}`);", next_instance, module_text)?;
 
-            *current_instance = Some(next_instance);
+            state.set_current_instance(&next_instance.to_string(), false);
         }
-        Module(..) => bail!("unsupported module definition"),
+        // (component quote "..."): Instantiate a component using the given
+        // literal text.
+        Module(wast::QuoteWat::QuoteComponent(_, source)) => {
+            let next_instance = state.next_instance();
+            let component_text = quote_component_to_js_string(source)?;
 
-        // (module definition $M ...): Define and validate, but do not instantiate, a module
-        ModuleDefinition(wast::QuoteWat::Wat(wast::Wat::Module(module))) => {
-            let module_text = module_definition_to_js_string(&module, wast)?;
-            if let Some(id) = module.id {
-                writejs!("let ${} = module(`{}`);", id.name(), module_text)?;
+            writejs!(
+                "let ${} = instantiateComponent(`{}`);",
+                next_instance,
+                component_text
+            )?;
+
+            state.set_current_instance(&next_instance.to_string(), true);
+        }
+
+        // (module definition $M ...) or (component definition $C ...): Define
+        // and validate, but do not instantiate, a module or component
+        ModuleDefinition(wast::QuoteWat::Wat(wat)) => {
+            let is_component = matches!(wat, wast::Wat::Component(_));
+            let func = if is_component { "component" } else { "module" };
+            let id = match &wat {
+                wast::Wat::Module(m) => m.id,
+                wast::Wat::Component(c) => c.id,
+            };
+            let text = definition_to_js_string(wat.span(), wast)?;
+            if let Some(id) = id {
+                let var = js_var(id);
+                writejs!("{} = {}(`{}`);", state.bind(&var), func, text)?;
+                state.set_is_component(&var, is_component);
             } else {
-                writejs!("let _anon_{} = module(`{}`);", line, module_text)?;
+                writejs!("let _anon_{} = {}(`{}`);", line, func, text)?;
             }
         }
         ModuleDefinition(..) => bail!("unsupported module definition...definition"),
 
-        // (module instance $I $M): Instantiate a specific module
+        // (module instance $I $M) or (component instance $I $C): Instantiate a
+        // specific module or component, which becomes the current instance
         ModuleInstance {
             span: _,
             instance: Some(instance),
             module: Some(module),
         } => {
-            writejs!(
-                "let ${} = instantiateFromModule(${});",
-                instance.name(),
-                module.name()
-            )?;
+            let (instance, module) = (js_var(instance), js_var(module));
+            let is_component = state.is_component(&module);
+            let func = if is_component {
+                "instantiateFromComponent"
+            } else {
+                "instantiateFromModule"
+            };
+            writejs!("{} = {}(${});", state.bind(&instance), func, module)?;
+            state.set_current_instance(&instance, is_component);
         }
         ModuleInstance { .. } => bail!("unsupported module instance definition"),
 
@@ -170,7 +274,7 @@ fn convert_directive(
         } => {
             writejs!(
                 "register(${}, `{}`);",
-                current_instance.unwrap(),
+                state.current_instance.as_ref().unwrap(),
                 escape_template_name_string(name)
             )?;
         }
@@ -182,14 +286,14 @@ fn convert_directive(
         } => {
             writejs!(
                 "register(${}, `{}`);",
-                thing.name(),
+                js_var(thing),
                 escape_template_name_string(name)
             )?;
         }
 
         // (invoke $M? "a" ...args): Call an exported function
         Invoke(i) => {
-            let invoke_node = invoke_to_js(current_instance, i)?;
+            let (invoke_node, _) = invoke_to_js(state, i)?;
             writejs!("{};", invoke_node.output(0))?;
         }
 
@@ -199,12 +303,17 @@ fn convert_directive(
             exec,
             results,
         } => {
-            let exec_node = execute_to_js(current_instance, exec, wast)?;
+            let (exec_node, is_component) = execute_to_js(state, exec, wast)?;
             let expected_node = to_js_value_array(&results, assert_expression_to_js_value)?;
+            let name = if is_component {
+                "assert_return_component"
+            } else {
+                "assert_return"
+            };
             writejs!(
                 "{};",
                 JSNode::Assert {
-                    name: "assert_return".to_string(),
+                    name: name.to_string(),
                     exec: exec_node,
                     expected: expected_node,
                 }
@@ -218,7 +327,7 @@ fn convert_directive(
             exec,
             message,
         } => {
-            let exec_node = execute_to_js(current_instance, exec, wast)?;
+            let (exec_node, _) = execute_to_js(state, exec, wast)?;
             let expected_node = Box::new(JSNode::Raw(format!(
                 "`{}`",
                 escape_template_name_string(message)
@@ -240,7 +349,7 @@ fn convert_directive(
             call,
             message,
         } => {
-            let exec_node = invoke_to_js(current_instance, call)?;
+            let (exec_node, _) = invoke_to_js(state, call)?;
             let expected_node = Box::new(JSNode::Raw(format!(
                 "`{}`",
                 escape_template_name_string(message)
@@ -262,12 +371,7 @@ fn convert_directive(
             module,
             message,
         } => {
-            let text = match module {
-                wast::QuoteWat::Wat(wast::Wat::Module(m)) => module_to_js_string(&m, wast)?,
-                wast::QuoteWat::QuoteModule(_, source) => quote_module_to_js_string(source)?,
-                other => bail!("unsupported {:?} in assert_invalid", other),
-            };
-            let exec = Box::new(JSNode::Raw(format!("instantiate(`{}`)", text)));
+            let exec = Box::new(JSNode::Raw(compile_to_js(module, wast)?));
             let expected_node = Box::new(JSNode::Raw(format!(
                 "`{}`",
                 escape_template_name_string(message)
@@ -289,18 +393,16 @@ fn convert_directive(
             span: _,
             message,
         } => {
-            let text = match module {
-                wast::QuoteWat::Wat(wast::Wat::Module(m)) => module_to_js_string(&m, wast)?,
-                wast::QuoteWat::QuoteModule(_, source) => match quote_module_to_js_string(source) {
-                    Ok(t) => t,
-                    Err(err) => {
-                        writejs!("// ignoring badly-encoded assert_malformed: {:?}", err)?;
-                        return Ok(());
-                    }
-                },
-                other => bail!("unsupported {:?} in assert_malformed", other),
+            let is_quote = !matches!(module, wast::QuoteWat::Wat(_));
+            let exec = match compile_to_js(module, wast) {
+                Ok(exec) => exec,
+                Err(err) if is_quote => {
+                    writejs!("// ignoring badly-encoded assert_malformed: {:?}", err)?;
+                    return Ok(());
+                }
+                Err(err) => return Err(err),
             };
-            let exec = Box::new(JSNode::Raw(format!("instantiate(`{}`)", text)));
+            let exec = Box::new(JSNode::Raw(exec));
             let expected_node = Box::new(JSNode::Raw(format!(
                 "`{}`",
                 escape_template_name_string(message)
@@ -328,11 +430,7 @@ fn convert_directive(
             module,
             message,
         } => {
-            let text = match module {
-                wast::Wat::Module(module) => module_to_js_string(&module, wast)?,
-                other => bail!("unsupported {:?} in assert_unlinkable", other),
-            };
-            let exec = Box::new(JSNode::Raw(format!("instantiate(`{}`)", text)));
+            let exec = Box::new(JSNode::Raw(instantiate_to_js(&module, wast)?));
             let expected_node = Box::new(JSNode::Raw(format!(
                 "`{}`",
                 escape_template_name_string(message)
@@ -351,7 +449,7 @@ fn convert_directive(
         AssertException { span: _, exec } => {
             // This assert doesn't have a second parameter, so we don't bother
             // formatting it using an Assert node.
-            let exec_node = execute_to_js(current_instance, exec, wast)?;
+            let (exec_node, _) = execute_to_js(state, exec, wast)?;
             writejs!("assert_exception(() => {});", exec_node.output(0))?;
         }
         AssertSuspension {
@@ -359,7 +457,7 @@ fn convert_directive(
             exec,
             message,
         } => {
-            let exec_node = execute_to_js(current_instance, exec, wast)?;
+            let (exec_node, _) = execute_to_js(state, exec, wast)?;
             let expected_node = Box::new(JSNode::Raw(format!(
                 "`{}`",
                 escape_template_name_string(message)
@@ -376,24 +474,26 @@ fn convert_directive(
         }
         Thread(thread) => {
             let (shared_module, shared_module_name) = match thread.shared_module {
-                Some(m) => (format!("${}", m.name()), format!("${}", m.name())),
+                Some(m) => (format!("${}", js_var(m)), format!("${}", js_var(m))),
                 None => ("null".to_string(), "__nomodule".to_string()),
             };
 
             writejs!(
                 "let ${} = new Thread({}, \"{}\", `",
-                thread.name.name(),
+                js_var(thread.name),
                 shared_module,
                 shared_module_name,
             )?;
 
+            // The thread runs in a separate global, with its own declarations.
+            let outer_declared = std::mem::take(&mut state.declared);
             for directive in thread.directives {
                 let sp = directive.span();
                 let (line, col) = sp.linecol_in(wast);
                 writejs!("")?;
                 convert_directive(
                     directive,
-                    current_instance,
+                    state,
                     filename,
                     line,
                     col,
@@ -410,11 +510,12 @@ fn convert_directive(
                     )
                 })?;
             }
+            state.declared = outer_declared;
 
             writejs!("`);")?;
         }
         Wait { span: _, thread } => {
-            writejs!("${}.wait();", thread.name())?;
+            writejs!("${}.wait();", js_var(thread))?;
         }
 
         AssertInvalidCustom {
@@ -455,7 +556,7 @@ fn assert_bad_custom_to_js(
     wast: &str,
 ) -> Result<String> {
     let (text, text_is_malformed) = match module {
-        wast::QuoteWat::Wat(wast::Wat::Module(m)) => (module_to_js_string(&m, wast)?, false),
+        wast::QuoteWat::Wat(wat @ wast::Wat::Module(_)) => (wat_to_js_string(&wat, wast)?.0, false),
         wast::QuoteWat::QuoteModule(_, source) => {
             let text = quote_text(source)?;
             let parses = match wast::parser::ParseBuffer::new(&text) {
@@ -532,8 +633,8 @@ fn span_to_offset(span: wast::token::Span, text: &str) -> Result<usize> {
 }
 
 fn closed_module(module: &str) -> Result<&str> {
-    if !module.starts_with("module") {
-        bail!("expected module source");
+    if !module.starts_with("module") && !module.starts_with("component") {
+        bail!("expected module or component source");
     }
 
     let mut lexer = wast::lexer::Lexer::new(module);
@@ -561,16 +662,25 @@ fn closed_module(module: &str) -> Result<&str> {
     return Ok(&module[0..i]);
 }
 
-fn module_to_js_string(module: &wast::core::Module, wast: &str) -> Result<String> {
-    let offset = span_to_offset(module.span, wast)?;
-    let opened_module = &wast[offset..];
-    if !opened_module.starts_with("module") {
-        return Ok(escape_template_module_string(opened_module));
+// Gets the escaped source text of a module or component, along with its
+// identifier.
+fn wat_to_js_string<'a>(
+    wat: &wast::Wat<'a>,
+    wast: &str,
+) -> Result<(String, Option<wast::token::Id<'a>>)> {
+    let id = match wat {
+        wast::Wat::Module(m) => m.id,
+        wast::Wat::Component(c) => c.id,
+    };
+    let offset = span_to_offset(wat.span(), wast)?;
+    let opened = &wast[offset..];
+    if !opened.starts_with("module") && !opened.starts_with("component") {
+        return Ok((escape_template_module_string(opened), id));
     }
-    Ok(escape_template_module_string(&format!(
-        "({}",
-        closed_module(opened_module)?
-    )))
+    Ok((
+        escape_template_module_string(&format!("({}", closed_module(opened)?)),
+        id,
+    ))
 }
 
 fn quote_text(quotes: Vec<(wast::token::Span, &[u8])>) -> Result<String> {
@@ -586,15 +696,25 @@ fn quote_module_to_js_string(quotes: Vec<(wast::token::Span, &[u8])>) -> Result<
     Ok(escape_template_module_string(&quote_text(quotes)?))
 }
 
-fn module_definition_to_js_string(module: &wast::core::Module, wast: &str) -> Result<String> {
-    let offset = span_to_offset(module.span, wast)?;
-    let opened_module = &wast[offset..];
+// Unlike modules, a bare list of component fields is not a valid component, so
+// the quoted text must be wrapped.
+fn quote_component_to_js_string(quotes: Vec<(wast::token::Span, &[u8])>) -> Result<String> {
+    Ok(format!(
+        "(component {})",
+        quote_module_to_js_string(quotes)?
+    ))
+}
 
-    // strip "module definition $M" down to just "module", keeping whatever
-    // whitespace follows
-    let pattern = r"^module\s+definition(\s+\$[a-zA-Z_$][a-zA-Z0-9_$]*)?";
+fn definition_to_js_string(span: wast::token::Span, wast: &str) -> Result<String> {
+    let offset = span_to_offset(span, wast)?;
+    let opened = &wast[offset..];
+
+    // strip "module definition $M" down to "module $M", and likewise for
+    // components. The identifier must be kept, as components may refer to
+    // themselves by name in outer aliases.
+    let pattern = r"^(module|component)\s+definition";
     let re = Regex::new(pattern).expect("Invalid regex pattern");
-    let without_definition = re.replace(opened_module, "module");
+    let without_definition = re.replace(opened, "$1");
 
     Ok(escape_template_module_string(&format!(
         "({}",
@@ -602,42 +722,86 @@ fn module_definition_to_js_string(module: &wast::core::Module, wast: &str) -> Re
     )))
 }
 
-fn invoke_to_js(current_instance: &Option<usize>, i: wast::WastInvoke) -> Result<Box<JSNode>> {
-    let instance = i
-        .module
-        .map(|x| format!("${}", x.name()))
-        .unwrap_or_else(|| format!("${}", current_instance.unwrap()));
-    let body = to_js_value_array(&i.args, arg_to_js_value)?;
-
-    Ok(Box::new(JSNode::Invoke {
-        instance: instance,
-        name: escape_template_name_string(i.name),
-        body: body,
-    }))
+// Gets a JS expression that compiles (and for modules, instantiates) the given
+// module or component, for asserting that it is invalid or malformed.
+fn compile_to_js(module: wast::QuoteWat, wast: &str) -> Result<String> {
+    Ok(match module {
+        wast::QuoteWat::Wat(wat @ wast::Wat::Module(_)) => {
+            format!("instantiate(`{}`)", wat_to_js_string(&wat, wast)?.0)
+        }
+        wast::QuoteWat::Wat(wat @ wast::Wat::Component(_)) => {
+            format!("component(`{}`)", wat_to_js_string(&wat, wast)?.0)
+        }
+        wast::QuoteWat::QuoteModule(_, source) => {
+            format!("instantiate(`{}`)", quote_module_to_js_string(source)?)
+        }
+        wast::QuoteWat::QuoteComponent(_, source) => {
+            format!("component(`{}`)", quote_component_to_js_string(source)?)
+        }
+    })
 }
 
+// Gets a JS expression that instantiates the given module or component.
+fn instantiate_to_js(wat: &wast::Wat, wast: &str) -> Result<String> {
+    let func = match wat {
+        wast::Wat::Module(_) => "instantiate",
+        wast::Wat::Component(_) => "instantiateComponent",
+    };
+    Ok(format!("{}(`{}`)", func, wat_to_js_string(wat, wast)?.0))
+}
+
+// Returns the JS for an invocation, and whether it invokes a component.
+fn invoke_to_js(state: &State, i: wast::WastInvoke) -> Result<(Box<JSNode>, bool)> {
+    let instance_name = state.instance_name(i.module);
+    let instance = format!("${}", instance_name);
+    let name = escape_template_name_string(i.name);
+    let body = to_js_value_array(&i.args, arg_to_js_value)?;
+
+    if state.is_component(&instance_name) {
+        return Ok((
+            Box::new(JSNode::Call {
+                name: "invokeComponent".to_string(),
+                args: vec![
+                    Box::new(JSNode::Raw(instance)),
+                    Box::new(JSNode::Raw(format!("`{}`", name))),
+                    body,
+                ],
+            }),
+            true,
+        ));
+    }
+
+    Ok((
+        Box::new(JSNode::Invoke {
+            instance: instance,
+            name: name,
+            body: body,
+        }),
+        false,
+    ))
+}
+
+// Returns the JS for an execution, and whether it involves a component.
 fn execute_to_js(
-    current_instance: &Option<usize>,
+    state: &State,
     exec: wast::WastExecute,
     wast: &str,
-) -> Result<Box<JSNode>> {
+) -> Result<(Box<JSNode>, bool)> {
     match exec {
-        wast::WastExecute::Invoke(invoke) => invoke_to_js(current_instance, invoke),
-        wast::WastExecute::Wat(module) => {
-            let text = match module {
-                wast::Wat::Module(module) => module_to_js_string(&module, wast)?,
-                other => bail!("unsupported {:?} at execute_to_js", other),
-            };
-            Ok(Box::new(JSNode::Raw(format!("instantiate(`{}`)", text))))
+        wast::WastExecute::Invoke(invoke) => invoke_to_js(state, invoke),
+        wast::WastExecute::Wat(wat) => {
+            let is_component = matches!(wat, wast::Wat::Component(_));
+            Ok((
+                Box::new(JSNode::Raw(instantiate_to_js(&wat, wast)?)),
+                is_component,
+            ))
         }
         wast::WastExecute::Get { module, global, .. } => {
-            let instanceish = module
-                .map(|x| format!("{}", x.name()))
-                .unwrap_or_else(|| format!("{}", current_instance.unwrap()));
-            Ok(Box::new(JSNode::Raw(format!(
-                "get(${}, `{}`)",
-                instanceish, global
-            ))))
+            let instanceish = state.instance_name(module);
+            Ok((
+                Box::new(JSNode::Raw(format!("get(${}, `{}`)", instanceish, global))),
+                false,
+            ))
         }
     }
 }
@@ -862,13 +1026,108 @@ fn assert_expression_to_js_value(v: &wast::WastRet<'_>) -> Result<String> {
 
     Ok(match &v {
         Core(x) => return_value_to_js_value(x)?,
+        Component(x) => component_value_to_js(x)?,
         other => bail!("couldn't convert {:?} to a js assertion value", other),
+    })
+}
+
+// Converts a component model value to a call of the harness's `cv` value
+// constructors, which choose the JS representation.
+fn component_value_to_js(v: &wast::component::WastVal<'_>) -> Result<String> {
+    use wast::component::WastVal as V;
+
+    let call = |name: &str, arg: String| format!("cv.{}({})", name, arg);
+    let string = |s: &str| format!("`{}`", escape_template_name_string(s));
+    let list = |vals: &[V<'_>]| -> Result<String> {
+        let vals = vals
+            .iter()
+            .map(component_value_to_js)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(format!("[{}]", vals.join(", ")))
+    };
+    let payload = |val: &Option<Box<V<'_>>>| -> Result<String> {
+        match val {
+            Some(val) => component_value_to_js(val),
+            None => Ok(String::new()),
+        }
+    };
+
+    Ok(match v {
+        V::Bool(x) => call("bool", x.to_string()),
+        V::U8(x) => call("u8", x.to_string()),
+        V::S8(x) => call("s8", x.to_string()),
+        V::U16(x) => call("u16", x.to_string()),
+        V::S16(x) => call("s16", x.to_string()),
+        V::U32(x) => call("u32", x.to_string()),
+        V::S32(x) => call("s32", x.to_string()),
+        V::U64(x) => call("u64", format!("{}n", x)),
+        V::S64(x) => call("s64", format!("{}n", x)),
+        V::F32(x) => {
+            let x = f32::from_bits(x.bits);
+            call(
+                "f32",
+                if x.is_nan() {
+                    "NaN".to_string()
+                } else {
+                    f32_to_js_value(x)
+                },
+            )
+        }
+        V::F64(x) => {
+            let x = f64::from_bits(x.bits);
+            call(
+                "f64",
+                if x.is_nan() {
+                    "NaN".to_string()
+                } else {
+                    f64_to_js_value(x)
+                },
+            )
+        }
+        V::Char(x) => call("char", string(&x.to_string())),
+        V::String(x) => call("string", string(x)),
+        V::List(vals) => call("list", list(vals)?),
+        V::Tuple(vals) => call("tuple", list(vals)?),
+        V::Record(fields) => {
+            let fields = fields
+                .iter()
+                .map(|(name, val)| {
+                    Ok(format!(
+                        "[{}, {}]",
+                        string(name),
+                        component_value_to_js(val)?
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            call("record", format!("[{}]", fields.join(", ")))
+        }
+        V::Variant(case, val) => {
+            let val = payload(val)?;
+            if val.is_empty() {
+                call("variant", string(case))
+            } else {
+                call("variant", format!("{}, {}", string(case), val))
+            }
+        }
+        V::Enum(case) => call("enum", string(case)),
+        V::Option(None) => "cv.none()".to_string(),
+        V::Option(Some(val)) => call("some", component_value_to_js(val)?),
+        V::Result(Ok(val)) => call("ok", payload(val)?),
+        V::Result(Err(val)) => call("err", payload(val)?),
+        V::Flags(flags) => {
+            let flags: Vec<String> = flags.iter().map(|x| string(x)).collect();
+            call("flags", format!("[{}]", flags.join(", ")))
+        }
     })
 }
 
 fn arg_to_js_value(v: &wast::WastArg<'_>) -> Result<String> {
     use wast::core::WastArgCore::*;
     use wast::WastArg::Core;
+
+    if let wast::WastArg::Component(x) = v {
+        return component_value_to_js(x);
+    }
 
     Ok(match &v {
         Core(I32(x)) => format!("{}", *x),
