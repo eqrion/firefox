@@ -5234,6 +5234,8 @@ enum class ComponentTypeKindRaw : uint8_t {
   Result = 0x6a,
   Own = 0x69,
   Borrow = 0x68,
+  FixedList = 0x67,
+  Map = 0x63,
 
   Func = 0x40,
   AsyncFunc = 0x43,
@@ -5384,6 +5386,49 @@ enum class ComponentTypeKindRaw : uint8_t {
         return false;
       }
       if (!ComponentType::list(std::move(type), &t)) {
+        return false;
+      }
+    } break;
+
+    case uint8_t(ComponentTypeKindRaw::FixedList): {
+      ComponentFixedListType fixedList;
+      if (!DecodeComponentValType(d, c, &fixedList.elemType)) {
+        return false;
+      }
+      if (!d.readVarU32(&fixedList.length)) {
+        return d.fail("expected length of fixed-length list");
+      }
+      if (fixedList.length == 0) {
+        return d.fail("fixed-length list must not be empty");
+      }
+      if (!ComponentType::fixedList(std::move(fixedList), &t)) {
+        return false;
+      }
+    } break;
+
+    case uint8_t(ComponentTypeKindRaw::Map): {
+      ComponentMapType map;
+      if (!DecodeComponentValType(d, c, &map.keyType) ||
+          !DecodeComponentValType(d, c, &map.valueType)) {
+        return false;
+      }
+      switch (map.keyType.kind()) {
+        case ComponentTypeKind::Bool:
+        case ComponentTypeKind::S8:
+        case ComponentTypeKind::U8:
+        case ComponentTypeKind::S16:
+        case ComponentTypeKind::U16:
+        case ComponentTypeKind::S32:
+        case ComponentTypeKind::U32:
+        case ComponentTypeKind::S64:
+        case ComponentTypeKind::U64:
+        case ComponentTypeKind::Char:
+        case ComponentTypeKind::String:
+          break;
+        default:
+          return d.fail("invalid map key type");
+      }
+      if (!ComponentType::map(std::move(map), &t)) {
         return false;
       }
     } break;

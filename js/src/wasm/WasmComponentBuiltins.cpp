@@ -8,14 +8,21 @@
 
 #ifdef ENABLE_WASM_COMPONENTS
 
+#  include "mozilla/Casting.h"
+
 #  include <cmath>
 
+#  include "jsfriendapi.h"
+
+#  include "builtin/MapObject.h"
 #  include "builtin/String.h"
+#  include "js/CallAndConstruct.h"
 #  include "js/Conversions.h"
 #  include "js/experimental/TypedData.h"
 #  include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #  include "util/Unicode.h"
 #  include "vm/BigIntType.h"
+#  include "vm/Interpreter.h"
 #  include "vm/Iteration.h"
 #  include "vm/TypedArrayObject.h"
 #  include "wasm/WasmBuiltins.h"
@@ -316,29 +323,42 @@ int32_t wasm::ComponentCheckRange(Instance* instance, int32_t ptr,
   return 0;
 }
 
-void* wasm::ComponentIterableToArray(Instance* instance, void* valueRef,
-                                     int32_t elemSize) {
-  MOZ_ASSERT(SASigComponentIterableToArray.failureMode ==
-             FailureMode::FailOnInvalidRef);
-  JSContext* cx = instance->cx();
-  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
-  if (!value.isObject()) {
-    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_NOT_ITERABLE,
-                              "value");
-    return AnyRef::invalid().forCompiledCode();
-  }
-  Rooted<ArrayObject*> array(cx, IterableToArray(cx, value));
+// Returns the array of a list's elements, or of a map's entries, as an
+// externref for a builtin that fails with FailOnInvalidRef. Throws if its size
+// in bytes doesn't fit in a 32-bit memory.
+static void* ListArrayRef(JSContext* cx, Handle<ArrayObject*> array,
+                          uint32_t elemSize) {
   if (!array) {
     return AnyRef::invalid().forCompiledCode();
   }
-  // The list's size in bytes must fit in a 32-bit memory.
-  if (uint64_t(array->length()) * uint32_t(elemSize) > UINT32_MAX) {
+  if (uint64_t(array->length()) * elemSize > UINT32_MAX) {
     JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                               JSMSG_WASM_COMPONENT_LIST_TOO_LONG);
     return AnyRef::invalid().forCompiledCode();
   }
   RootedValue arrayValue(cx, ObjectValue(*array));
   return ExternRefForCompiledCode(cx, arrayValue);
+}
+
+// The body of ComponentIterableToArray.
+static void* IterableToArrayRef(JSContext* cx, HandleValue value,
+                                uint32_t elemSize) {
+  if (!value.isObject()) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_NOT_ITERABLE,
+                              "value");
+    return AnyRef::invalid().forCompiledCode();
+  }
+  Rooted<ArrayObject*> array(cx, IterableToArray(cx, value));
+  return ListArrayRef(cx, array, elemSize);
+}
+
+void* wasm::ComponentIterableToArray(Instance* instance, void* valueRef,
+                                     int32_t elemSize) {
+  MOZ_ASSERT(SASigComponentIterableToArray.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  return IterableToArrayRef(cx, value, uint32_t(elemSize));
 }
 
 static ArrayObject& ArrayFromRef(void* arrayRef) {
@@ -414,12 +434,11 @@ void* wasm::ComponentGetField(Instance* instance, void* objectRef,
              FailureMode::FailOnInvalidRef);
   JSContext* cx = instance->cx();
   RootedObject obj(cx, &AnyRef::fromCompiledCode(objectRef).toJSObject());
-  RootedId name(
-      cx,
-      AtomToId(
-          &AnyRef::fromCompiledCode(nameRef).toJSValue().toString()->asAtom()));
+  RootedValue nameValue(cx, AnyRef::fromCompiledCode(nameRef).toJSValue());
+  RootedId name(cx);
   RootedValue value(cx);
-  if (!GetProperty(cx, obj, obj, name, &value)) {
+  if (!ToPropertyKey(cx, nameValue, &name) ||
+      !GetProperty(cx, obj, obj, name, &value)) {
     return AnyRef::invalid().forCompiledCode();
   }
   return ExternRefForCompiledCode(cx, value);
@@ -443,15 +462,144 @@ int32_t wasm::ComponentDefineField(Instance* instance, void* objectRef,
              FailureMode::FailOnNegI32);
   JSContext* cx = instance->cx();
   RootedObject obj(cx, &AnyRef::fromCompiledCode(objectRef).toJSObject());
-  RootedId name(
-      cx,
-      AtomToId(
-          &AnyRef::fromCompiledCode(nameRef).toJSValue().toString()->asAtom()));
+  RootedValue nameValue(cx, AnyRef::fromCompiledCode(nameRef).toJSValue());
   RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
-  if (!DefineDataProperty(cx, obj, name, value, JSPROP_ENUMERATE)) {
+  RootedId name(cx);
+  if (!ToPropertyKey(cx, nameValue, &name) ||
+      !DefineDataProperty(cx, obj, name, value, JSPROP_ENUMERATE)) {
     return -1;
   }
   return 0;
+}
+
+void* wasm::ComponentNewMap(Instance* instance) {
+  MOZ_ASSERT(SASigComponentNewMap.failureMode == FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  JSObject* map = MapObject::create(cx);
+  if (!map) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue value(cx, ObjectValue(*map));
+  return ExternRefForCompiledCode(cx, value);
+}
+
+int32_t wasm::ComponentMapSet(Instance* instance, void* mapRef, void* keyRef,
+                              void* valueRef) {
+  MOZ_ASSERT(SASigComponentMapSet.failureMode == FailureMode::FailOnNegI32);
+  JSContext* cx = instance->cx();
+  Rooted<MapObject*> map(
+      cx, &AnyRef::fromCompiledCode(mapRef).toJSObject().as<MapObject>());
+  RootedValue key(cx, AnyRef::fromCompiledCode(keyRef).toJSValue());
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  if (!map->set(cx, key, value)) {
+    return -1;
+  }
+  return 0;
+}
+
+// The spec's GetIteratorFromMethod and IteratorToList.
+static ArrayObject* IterateToArray(JSContext* cx, HandleObject obj,
+                                   HandleValue method) {
+  RootedValue iterator(cx);
+  if (!Call(cx, method, obj, &iterator)) {
+    return nullptr;
+  }
+  if (!iterator.isObject()) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_OBJECT_REQUIRED, "iterator");
+    return nullptr;
+  }
+  RootedObject iteratorObj(cx, &iterator.toObject());
+  RootedValue next(cx);
+  if (!GetProperty(cx, iteratorObj, iteratorObj, cx->names().next, &next)) {
+    return nullptr;
+  }
+
+  Rooted<ArrayObject*> array(cx, NewDenseEmptyArray(cx));
+  if (!array) {
+    return nullptr;
+  }
+  RootedValue result(cx);
+  RootedValue value(cx);
+  while (true) {
+    if (!Call(cx, next, iterator, &result)) {
+      return nullptr;
+    }
+    if (!result.isObject()) {
+      JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                                JSMSG_OBJECT_REQUIRED, "iterator result");
+      return nullptr;
+    }
+    RootedObject resultObj(cx, &result.toObject());
+    if (!GetProperty(cx, resultObj, resultObj, cx->names().done, &value)) {
+      return nullptr;
+    }
+    if (ToBoolean(value)) {
+      return array;
+    }
+    if (!GetProperty(cx, resultObj, resultObj, cx->names().value, &value) ||
+        !NewbornArrayPush(cx, array, value)) {
+      return nullptr;
+    }
+  }
+}
+
+void* wasm::ComponentGetIteratorMethod(Instance* instance, void* valueRef) {
+  MOZ_ASSERT(SASigComponentGetIteratorMethod.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  if (!value.isObject()) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_OBJECT_REQUIRED, "value");
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedObject obj(cx, &value.toObject());
+  RootedValue method(cx);
+  RootedId iteratorId(cx, PropertyKey::Symbol(cx->wellKnownSymbols().iterator));
+  if (!GetProperty(cx, obj, obj, iteratorId, &method)) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  return ExternRefForCompiledCode(cx, method);
+}
+
+void* wasm::ComponentIterableEntries(Instance* instance, void* valueRef,
+                                     void* methodRef, int32_t entrySize) {
+  MOZ_ASSERT(SASigComponentIterableEntries.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedObject obj(cx, &AnyRef::fromCompiledCode(valueRef).toJSObject());
+  RootedValue method(cx, AnyRef::fromCompiledCode(methodRef).toJSValue());
+  if (!IsCallable(method)) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_NOT_ITERABLE,
+                              "value");
+    return AnyRef::invalid().forCompiledCode();
+  }
+  Rooted<ArrayObject*> entries(cx, IterateToArray(cx, obj, method));
+  return ListArrayRef(cx, entries, uint32_t(entrySize));
+}
+
+void* wasm::ComponentObjectKeys(Instance* instance, void* valueRef,
+                                int32_t entrySize) {
+  MOZ_ASSERT(SASigComponentObjectKeys.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedObject obj(cx, &AnyRef::fromCompiledCode(valueRef).toJSObject());
+  RootedIdVector ids(cx);
+  if (!GetPropertyKeys(cx, obj, JSITER_OWNONLY, &ids)) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  Rooted<ArrayObject*> keys(cx, NewDenseEmptyArray(cx));
+  if (!keys) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  for (size_t i = 0; i < ids.length(); i++) {
+    JSString* str = IdToString(cx, ids[i]);
+    if (!str || !NewbornArrayPush(cx, keys, StringValue(str))) {
+      return AnyRef::invalid().forCompiledCode();
+    }
+  }
+  return ListArrayRef(cx, keys, uint32_t(entrySize));
 }
 
 void* wasm::ComponentNewVariant(Instance* instance, void* kindRef,
@@ -539,6 +687,19 @@ static JSObject* NewScalarArray(JSContext* cx, Scalar::Type type,
 #  define NEW_ARRAY(ExternalType, NativeType, Name) \
     case Scalar::Name:                              \
       return JS_New##Name##Array(cx, length);
+    JS_FOR_EACH_TYPED_ARRAY(NEW_ARRAY)
+#  undef NEW_ARRAY
+    default:
+      MOZ_CRASH("not a typed array type");
+  }
+}
+
+static JSObject* NewScalarArrayFromArray(JSContext* cx, Scalar::Type type,
+                                         HandleObject array) {
+  switch (type) {
+#  define NEW_ARRAY(ExternalType, NativeType, Name) \
+    case Scalar::Name:                              \
+      return JS_New##Name##ArrayFromArray(cx, array);
     JS_FOR_EACH_TYPED_ARRAY(NEW_ARRAY)
 #  undef NEW_ARRAY
     default:
@@ -675,6 +836,50 @@ int32_t wasm::ComponentCopyScalars(Instance* instance, void* valueRef,
   // The array could be a view of the memory itself.
   memmove(dst, array.dataPointerEither().unwrap(), byteLength);
   return 0;
+}
+
+void* wasm::ComponentScalarListToArray(Instance* instance, void* valueRef,
+                                       int32_t kind) {
+  MOZ_ASSERT(SASigComponentScalarListToArray.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  Rooted<TypedArrayObject*> typedArray(cx, AsScalarArray(value, kind));
+  if (!typedArray) {
+    return IterableToArrayRef(cx, value, 0);
+  }
+  uint32_t length;
+  if (!GetScalarArrayLength(cx, typedArray, &length)) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  Rooted<ArrayObject*> array(cx, NewDenseFullyAllocatedArray(cx, length));
+  if (!array) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue elem(cx);
+  for (uint32_t i = 0; i < length; i++) {
+    if (!GetElement(cx, typedArray, typedArray, i, &elem) ||
+        !DefineDataElement(cx, array, i, elem)) {
+      return AnyRef::invalid().forCompiledCode();
+    }
+  }
+  RootedValue arrayValue(cx, ObjectValue(*array));
+  return ExternRefForCompiledCode(cx, arrayValue);
+}
+
+void* wasm::ComponentArrayToScalarList(Instance* instance, void* arrayRef,
+                                       int32_t kind) {
+  MOZ_ASSERT(SASigComponentArrayToScalarList.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedObject array(cx, &ArrayFromRef(arrayRef));
+  JSObject* typedArray = NewScalarArrayFromArray(
+      cx, *ScalarListArrayType(ComponentTypeKind(kind)), array);
+  if (!typedArray) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue value(cx, ObjectValue(*typedArray));
+  return ExternRefForCompiledCode(cx, value);
 }
 
 void* wasm::ComponentToString(Instance* instance, void* valueRef) {

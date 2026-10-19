@@ -807,6 +807,73 @@
   fail_mode: FailOnNegI32
   uses_memory: false
 
+- op: ComponentNewMap
+  symbolic_address:
+    name: ComponentNewMap
+    type: Args_General1
+    needs_thunk: true
+  entry: ComponentNewMap
+  export: componentNewMap
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: ComponentMapSet
+  symbolic_address:
+    name: ComponentMapSet
+    type: Args_Int32_GeneralGeneralGeneralGeneral
+    needs_thunk: true
+  entry: ComponentMapSet
+  export: componentMapSet
+  params:
+    - 'externref'
+    - 'externref'
+    - 'externref'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentGetIteratorMethod
+  symbolic_address:
+    name: ComponentGetIteratorMethod
+    type: Args_General2
+    needs_thunk: true
+  entry: ComponentGetIteratorMethod
+  export: componentGetIteratorMethod
+  params:
+    - 'externref'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: ComponentIterableEntries
+  symbolic_address:
+    name: ComponentIterableEntries
+    type: Args_General_GeneralGeneralGeneralInt32
+    needs_thunk: true
+  entry: ComponentIterableEntries
+  export: componentIterableEntries
+  params:
+    - 'externref'
+    - 'externref'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: ComponentObjectKeys
+  symbolic_address:
+    name: ComponentObjectKeys
+    type: Args_General_GeneralGeneralInt32
+    needs_thunk: true
+  entry: ComponentObjectKeys
+  export: componentObjectKeys
+  params:
+    - 'externref'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
 - op: ComponentNewVariant
   symbolic_address:
     name: ComponentNewVariant
@@ -918,6 +985,34 @@
     - 'i32'
     - 'i32'
   fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentScalarListToArray
+  symbolic_address:
+    name: ComponentScalarListToArray
+    type: Args_General_GeneralGeneralInt32
+    needs_thunk: true
+  entry: ComponentScalarListToArray
+  export: componentScalarListToArray
+  params:
+    - 'externref'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: ComponentArrayToScalarList
+  symbolic_address:
+    name: ComponentArrayToScalarList
+    type: Args_General_GeneralGeneralInt32
+    needs_thunk: true
+  entry: ComponentArrayToScalarList
+  export: componentArrayToScalarList
+  params:
+    - 'externref'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
   uses_memory: false
 
 - op: ComponentToString

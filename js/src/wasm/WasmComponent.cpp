@@ -308,6 +308,27 @@ bool ComponentType::list(ComponentType&& elemType, ComponentType* type) {
   return true;
 }
 
+bool ComponentType::fixedList(ComponentFixedListType&& inner,
+                              ComponentType* type) {
+  ComponentTypeDef* def =
+      js_new<ComponentTypeDef>(ComponentTypeSchema(std::move(inner)));
+  if (!def) {
+    return false;
+  }
+  *type = ComponentType(ComponentTypeKind::FixedList, def);
+  return true;
+}
+
+bool ComponentType::map(ComponentMapType&& inner, ComponentType* type) {
+  ComponentTypeDef* def =
+      js_new<ComponentTypeDef>(ComponentTypeSchema(std::move(inner)));
+  if (!def) {
+    return false;
+  }
+  *type = ComponentType(ComponentTypeKind::Map, def);
+  return true;
+}
+
 bool ComponentType::tuple(ComponentTypeVector&& items, ComponentType* type) {
   ComponentTypeDef* def =
       js_new<ComponentTypeDef>(ComponentTypeSchema(std::move(items)));
@@ -424,6 +445,16 @@ const ComponentVariantCaseVector& ComponentType::asVariant() const {
 ComponentType ComponentType::asList() const {
   MOZ_RELEASE_ASSERT(kind() == ComponentTypeKind::List);
   return typeDef_->schema().as<ComponentType>();
+}
+
+const ComponentFixedListType& ComponentType::asFixedList() const {
+  MOZ_RELEASE_ASSERT(kind() == ComponentTypeKind::FixedList);
+  return typeDef_->schema().as<ComponentFixedListType>();
+}
+
+const ComponentMapType& ComponentType::asMap() const {
+  MOZ_RELEASE_ASSERT(kind() == ComponentTypeKind::Map);
+  return typeDef_->schema().as<ComponentMapType>();
 }
 
 const ComponentTypeVector& ComponentType::asTuple() const {
@@ -566,6 +597,14 @@ bool ComponentTypeDef::structurallyEqual(const ComponentTypeDef& a,
             b.schema().as<ComponentResultType>();
         return ComponentResultType::equals(aResult, bResult);
       },
+      [&](const ComponentFixedListType& aList) {
+        return b.schema().is<ComponentFixedListType>() &&
+               aList == b.schema().as<ComponentFixedListType>();
+      },
+      [&](const ComponentMapType& aMap) {
+        return b.schema().is<ComponentMapType>() &&
+               aMap == b.schema().as<ComponentMapType>();
+      },
       [&](const ComponentFuncType& aFunc) {
         if (!b.schema().is<ComponentFuncType>()) {
           return false;
@@ -627,6 +666,14 @@ HashNumber ComponentTypeHasher::hash(const ComponentType& t) {
     } break;
     case ComponentTypeKind::List: {
       hash = AddComponentTypeToHash(hash, t.asList());
+    } break;
+    case ComponentTypeKind::FixedList: {
+      hash = AddComponentTypeToHash(hash, t.asFixedList().elemType);
+      hash = mozilla::AddToHash(hash, t.asFixedList().length);
+    } break;
+    case ComponentTypeKind::Map: {
+      hash = AddComponentTypeToHash(hash, t.asMap().keyType);
+      hash = AddComponentTypeToHash(hash, t.asMap().valueType);
     } break;
     case ComponentTypeKind::Tuple: {
       const ComponentTypeVector& types = t.asTuple();
@@ -916,6 +963,7 @@ uint32_t wasm::CanonAlignment(const ComponentType& type) {
     case ComponentTypeKind::Char:
     case ComponentTypeKind::String:
     case ComponentTypeKind::List:
+    case ComponentTypeKind::Map:
     case ComponentTypeKind::Own:
     case ComponentTypeKind::Borrow:
       return 4;
@@ -923,6 +971,8 @@ uint32_t wasm::CanonAlignment(const ComponentType& type) {
     case ComponentTypeKind::U64:
     case ComponentTypeKind::F64:
       return 8;
+    case ComponentTypeKind::FixedList:
+      return CanonAlignment(type.asFixedList().elemType);
     case ComponentTypeKind::Record:
     case ComponentTypeKind::Tuple: {
       uint32_t alignment = 1;
@@ -950,7 +1000,16 @@ uint32_t wasm::CanonElemSize(const ComponentType& type) {
   switch (type.kind()) {
     case ComponentTypeKind::String:
     case ComponentTypeKind::List:
+    case ComponentTypeKind::Map:
       return 8;
+    case ComponentTypeKind::FixedList: {
+      // Saturate the size of a list too large for memory, which traps when
+      // loaded or stored.
+      const ComponentFixedListType& fixedList = type.asFixedList();
+      uint64_t size =
+          uint64_t(fixedList.length) * CanonElemSize(fixedList.elemType);
+      return uint32_t(std::min(size, uint64_t(UINT32_MAX)));
+    }
     case ComponentTypeKind::Record:
     case ComponentTypeKind::Tuple: {
       uint32_t size = 0;
@@ -1069,14 +1128,27 @@ bool wasm::FlattenType(const ComponentType& type, ValTypeVector* result,
     // Compound types have dedicated logic. Note that our data storage for some
     // types disagrees with the categories in the canonical ABI explainer, e.g.
     // we represent tuples as a vector of value types, not a record.
-    case ComponentTypeKind::List: {
+    case ComponentTypeKind::List:
+    case ComponentTypeKind::Map: {
       *hasStringsOrLists = true;
-      // This will have to change when support is added for fixed-length lists.
       if (!result->append(ValType::i32())) {
         return false;
       }
       if (!result->append(ValType::i32())) {
         return false;
+      }
+    } break;
+    case ComponentTypeKind::FixedList: {
+      // A fixed-length list is flattened to that many copies of its element.
+      // Only whether a flattening exceeds MaxFlatParams matters beyond that,
+      // so stop there rather than flatten a long list.
+      const ComponentFixedListType& fixedList = type.asFixedList();
+      for (uint32_t i = 0;
+           i < fixedList.length && result->length() <= MaxFlatParams; i++) {
+        if (!FlattenType(fixedList.elemType, result, hasStringsOrLists, tooDeep,
+                         depth)) {
+          return false;
+        }
       }
     } break;
     case ComponentTypeKind::Record: {

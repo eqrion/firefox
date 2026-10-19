@@ -96,6 +96,25 @@ void* ComponentNewRecord(Instance* instance);
 int32_t ComponentDefineField(Instance* instance, void* objectRef, void* nameRef,
                              void* valueRef);
 
+// ToJSValueMap: creates a Map and sets its entries.
+void* ComponentNewMap(Instance* instance);
+int32_t ComponentMapSet(Instance* instance, void* mapRef, void* keyRef,
+                        void* valueRef);
+
+// The first part of ToComponentValueMap: gets the entries of a map as an
+// array. ComponentGetIteratorMethod throws unless the value is an object, and
+// gets its Symbol.iterator method. If the method is not nullish,
+// ComponentIterableEntries iterates the entries, which are then converted like
+// a tuple of the key and value. Otherwise, if the keys are strings,
+// ComponentObjectKeys gets the object's own enumerable string-keyed
+// properties. Both throw if the entries would be larger than 32-bit memory,
+// given the size of an entry.
+void* ComponentGetIteratorMethod(Instance* instance, void* valueRef);
+void* ComponentIterableEntries(Instance* instance, void* valueRef,
+                               void* methodRef, int32_t entrySize);
+void* ComponentObjectKeys(Instance* instance, void* valueRef,
+                          int32_t entrySize);
+
 // ToJSValueVariant: creates a null-prototype object with the `kind` and, if
 // `hasValue`, the `value`.
 void* ComponentNewVariant(Instance* instance, void* kindRef, void* valueRef,
@@ -125,6 +144,15 @@ int32_t ComponentScalarArrayLength(Instance* instance, void* valueRef,
                                    int32_t kind);
 int32_t ComponentCopyScalars(Instance* instance, void* valueRef, int32_t ptr,
                              int32_t length);
+
+// For a list<T, N> of scalars of type `kind`: ComponentScalarListToArray gets
+// the elements of a typed array of type `kind` as an array, and otherwise
+// iterates the value like ComponentIterableToArray. ComponentArrayToScalarList
+// creates the typed array for an array of the elements.
+void* ComponentScalarListToArray(Instance* instance, void* valueRef,
+                                 int32_t kind);
+void* ComponentArrayToScalarList(Instance* instance, void* arrayRef,
+                                 int32_t kind);
 
 // The steps of storing a JS string with the canonical ABI's store_string.
 // ComponentToString converts a JS value to a string, and the rest take that
