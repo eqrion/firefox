@@ -27,7 +27,9 @@ namespace wasm {
 // A lifted function is a native JS function that calls its adapter. The
 // adapter takes one externref for each parameter, and:
 //
-//   1. Converts each parameter with ToComponentValue into flat locals.
+//   1. Converts each parameter with ToComponentValue into flat locals, or into
+//      memory allocated with realloc if there are more than MaxFlatParams flat
+//      values.
 //   2. Calls the lifted core function, trapping if it throws.
 //   3. Converts the result with ToJSValue, from its flat value or from the
 //      memory that the core function returned a pointer to.
@@ -40,7 +42,8 @@ namespace wasm {
 // A lowered function is its adapter, which has the flattened core function
 // type, and:
 //
-//   1. Converts each parameter with ToJSValue, from its flat values.
+//   1. Converts each parameter with ToJSValue, from its flat values or from the
+//      memory that the only flat parameter points to.
 //   2. Calls the host function with one externref for each parameter.
 //   3. Converts the result with ToComponentValue, into its flat value or into
 //      the memory that the last flat parameter points to.

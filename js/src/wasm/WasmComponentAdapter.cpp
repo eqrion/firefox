@@ -851,17 +851,33 @@ static bool IsSupportedAdapterType(const ComponentType& type) {
     supported = supported && IsSupportedAdapterType(type);
   }
 
+  if (!supported) {
+    JS_ReportErrorASCII(cx, "component function type is not supported yet");
+    return false;
+  }
+  return true;
+}
+
+// Gets the tuple of a function's params if the canonical ABI passes them in
+// memory, which it does if they have more than MaxFlatParams flat values.
+[[nodiscard]] static bool GetParamsInMemory(
+    const ComponentFuncType& funcType, mozilla::Maybe<ComponentType>* tuple) {
   ValTypeVector flatParams;
   bool hasStringsOrLists, tooDeep;
   if (!FlattenTypes(funcType.paramTypes, &flatParams, &hasStringsOrLists,
                     &tooDeep, 0)) {
-    ReportOutOfMemory(cx);
     return false;
   }
-  if (!supported || flatParams.length() > MaxFlatParams) {
-    JS_ReportErrorASCII(cx, "component function type is not supported yet");
+  if (flatParams.length() <= MaxFlatParams) {
+    return true;
+  }
+  ComponentTypeVector types;
+  ComponentType tupleType;
+  if (!types.appendAll(funcType.paramTypes) ||
+      !ComponentType::tuple(std::move(types), &tupleType)) {
     return false;
   }
+  tuple->emplace(std::move(tupleType));
   return true;
 }
 
@@ -2401,7 +2417,8 @@ bool LiftLowerBuilder::emitLoweredResultCall(const ComponentType& type,
 // and returns an externref if the function has a result:
 //
 //   (func (param externref)* (result externref)?
-//     ;; ToComponentValue for each parameter, into flat locals
+//     ;; ToComponentValue for each parameter, into flat locals, or into memory
+//     ;; allocated with realloc if there are more than MaxFlatParams of them
 //     ;; call $callee, trapping if it throws
 //     ;; ToJSValue for the result, from flat locals or the result pointer
 //     ;; call $post-return, if any
@@ -2409,18 +2426,46 @@ bool LiftLowerBuilder::emitLoweredResultCall(const ComponentType& type,
 bool LiftLowerBuilder::emitLiftAdapter(const ComponentFuncType& funcType,
                                        uint32_t calleeIndex,
                                        uint32_t postReturn) {
+  mozilla::Maybe<ComponentType> paramTuple;
+  if (!GetParamsInMemory(funcType, &paramTuple)) {
+    return false;
+  }
+
   uint32_t numParams = funcType.paramTypes.length();
   FlatLocals flatArgs;
-  for (uint32_t i = 0; i < numParams; i++) {
-    const ComponentType& type = funcType.paramTypes[i];
-    ValTypeVector flatTypes;
-    size_t start = flatArgs.length();
-    if (!FlatTypes(type, &flatTypes) || !addFlatLocals(flatTypes, &flatArgs) ||
-        !emitToComponentValue(
-            type, i,
-            ValueLoc::flat(
-                mozilla::Span<const uint32_t>(flatArgs).From(start)))) {
+  if (paramTuple) {
+    // The params are stored to memory allocated with realloc, whose pointer
+    // is the only argument.
+    uint32_t size = addLocal(ValType::I32);
+    uint32_t ptr = addLocal(ValType::I32);
+    ValueLocVector paramLocs;
+    if (!flatArgs.append(ptr) ||
+        !GetFieldLocs(funcType.paramTypes, ValueLoc::memory(ptr, 0),
+                      &paramLocs)) {
       return false;
+    }
+    i32Const(int32_t(CanonElemSize(*paramTuple)));
+    localSet(size);
+    emitAllocate(int32_t(CanonAlignment(*paramTuple)), size, ptr);
+    emitCheckPointer(*paramTuple, ptr);
+    for (uint32_t i = 0; i < numParams; i++) {
+      if (!emitToComponentValue(funcType.paramTypes[i], i, paramLocs[i])) {
+        return false;
+      }
+    }
+  } else {
+    for (uint32_t i = 0; i < numParams; i++) {
+      const ComponentType& type = funcType.paramTypes[i];
+      ValTypeVector flatTypes;
+      size_t start = flatArgs.length();
+      if (!FlatTypes(type, &flatTypes) ||
+          !addFlatLocals(flatTypes, &flatArgs) ||
+          !emitToComponentValue(
+              type, i,
+              ValueLoc::flat(
+                  mozilla::Span<const uint32_t>(flatArgs).From(start)))) {
+        return false;
+      }
     }
   }
 
@@ -2479,7 +2524,8 @@ bool LiftLowerBuilder::emitLiftAdapter(const ComponentFuncType& funcType,
 // calls the host function with one externref for each parameter:
 //
 //   (func (param flat-param)* (param $retptr i32)? (result flat-result)?
-//     ;; ToJSValue for each parameter, into externref locals
+//     ;; ToJSValue for each parameter, into externref locals. With more than
+//     ;; MaxFlatParams flat params, the only flat param points to them.
 //     block
 //       try_table (result flat-result)? (catch_all 0)
 //         (local.get js-param)*
@@ -2495,23 +2541,42 @@ bool LiftLowerBuilder::emitLiftAdapter(const ComponentFuncType& funcType,
 bool LiftLowerBuilder::emitLowerAdapter(const ComponentFuncType& funcType,
                                         const FuncType& coreType,
                                         uint32_t hostIndex) {
-  // The flattened parameters are the adapter's own parameters.
+  mozilla::Maybe<ComponentType> paramTuple;
+  if (!GetParamsInMemory(funcType, &paramTuple)) {
+    return false;
+  }
+
+  // The flattened parameters are the adapter's own parameters, or else the
+  // parameters are in memory at the adapter's first parameter.
   uint32_t nextFlatParam = 0;
-  Vector<uint32_t, 8, SystemAllocPolicy> jsParams;
-  for (const ComponentType& type : funcType.paramTypes) {
-    ValTypeVector flatTypes;
-    FlatLocals flat;
-    if (!FlatTypes(type, &flatTypes)) {
+  ValueLocVector paramLocs;
+  if (paramTuple) {
+    uint32_t ptr = nextFlatParam++;
+    if (!GetFieldLocs(funcType.paramTypes, ValueLoc::memory(ptr, 0),
+                      &paramLocs)) {
       return false;
     }
-    for (size_t i = 0; i < flatTypes.length(); i++) {
-      if (!flat.append(nextFlatParam++)) {
+    emitCheckPointer(*paramTuple, ptr);
+  }
+  Vector<uint32_t, 8, SystemAllocPolicy> jsParams;
+  for (size_t i = 0; i < funcType.paramTypes.length(); i++) {
+    const ComponentType& type = funcType.paramTypes[i];
+    FlatLocals flat;
+    if (!paramTuple) {
+      ValTypeVector flatTypes;
+      if (!FlatTypes(type, &flatTypes)) {
         return false;
+      }
+      for (size_t j = 0; j < flatTypes.length(); j++) {
+        if (!flat.append(nextFlatParam++)) {
+          return false;
+        }
       }
     }
     uint32_t jsParam = addLocal(ValType(RefType::extern_()));
     if (!jsParams.append(jsParam) ||
-        !emitToJSValue(type, ValueLoc::flat(flat))) {
+        !emitToJSValue(type,
+                       paramTuple ? paramLocs[i] : ValueLoc::flat(flat))) {
       return false;
     }
     localSet(jsParam);
