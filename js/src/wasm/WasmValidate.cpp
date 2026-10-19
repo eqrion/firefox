@@ -6285,11 +6285,15 @@ enum class CanonOptKindRaw : uint8_t {
         if (c.coreMemories().length() <= memoryIndex) {
           return d.failf("invalid memory index %d", memoryIndex);
         }
-        if (c.getCoreItemType(
+        Limits memory =
+            c.getCoreItemType(
                  ComponentSortIndex(ComponentSort::CoreMemory, memoryIndex))
-                .asMemory()
-                .addressType != AddressType::I32) {
+                .asMemory();
+        if (memory.addressType != AddressType::I32) {
           return d.fail("memory for canonical ABI must be 32-bit");
+        }
+        if (memory.shared == Shareable::True) {
+          return d.fail("memory for canonical ABI must not be shared");
         }
         opts->memoryIndex.emplace(memoryIndex);
       } break;
