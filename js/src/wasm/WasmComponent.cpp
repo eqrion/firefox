@@ -824,6 +824,159 @@ mozilla::Maybe<FuncType> wasm::FlattenFuncType(
   return mozilla::Some(FuncType(std::move(params), std::move(results)));
 }
 
+static uint32_t AlignTo(uint32_t offset, uint32_t alignment) {
+  return (offset + alignment - 1) / alignment * alignment;
+}
+
+uint32_t wasm::CanonDiscriminantSize(size_t numCases) {
+  MOZ_ASSERT(numCases > 0);
+  if (numCases <= 1 << 8) {
+    return 1;
+  }
+  if (numCases <= 1 << 16) {
+    return 2;
+  }
+  return 4;
+}
+
+static uint32_t CanonFlagsSize(size_t numLabels) {
+  MOZ_ASSERT(numLabels > 0 && numLabels <= 32);
+  return numLabels <= 8 ? 1 : numLabels <= 16 ? 2 : 4;
+}
+
+// Calls `f` with the type of each field of a record or tuple.
+template <typename F>
+static void ForEachFieldType(const ComponentType& type, F f) {
+  if (type.kind() == ComponentTypeKind::Record) {
+    for (const ComponentRecordField& field : type.asRecord()) {
+      f(field.type);
+    }
+  } else {
+    for (const ComponentType& item : type.asTuple()) {
+      f(item);
+    }
+  }
+}
+
+// Calls `f` with the payload type, if any, of each case of a variant-like type
+// (variant, enum, option, or result), and returns the number of cases.
+template <typename F>
+static size_t ForEachCaseType(const ComponentType& type, F f) {
+  switch (type.kind()) {
+    case ComponentTypeKind::Variant:
+      for (const ComponentVariantCase& c : type.asVariant()) {
+        f(c.type);
+      }
+      return type.asVariant().length();
+    case ComponentTypeKind::Enum:
+      return type.asEnum().length();
+    case ComponentTypeKind::Option:
+      f(mozilla::Some(type.asOption()));
+      return 2;
+    case ComponentTypeKind::Result: {
+      ComponentResultType result = type.asResult();
+      f(result.type);
+      f(result.errorType);
+      return 2;
+    }
+    default:
+      MOZ_CRASH("not a variant-like type");
+  }
+}
+
+static uint32_t CanonMaxCaseAlignment(const ComponentType& type) {
+  uint32_t alignment = 1;
+  ForEachCaseType(type, [&](const mozilla::Maybe<ComponentType>& caseType) {
+    if (caseType) {
+      alignment = std::max(alignment, CanonAlignment(*caseType));
+    }
+  });
+  return alignment;
+}
+
+uint32_t wasm::CanonAlignment(const ComponentType& type) {
+  switch (type.kind()) {
+    case ComponentTypeKind::Bool:
+    case ComponentTypeKind::S8:
+    case ComponentTypeKind::U8:
+      return 1;
+    case ComponentTypeKind::S16:
+    case ComponentTypeKind::U16:
+      return 2;
+    case ComponentTypeKind::S32:
+    case ComponentTypeKind::U32:
+    case ComponentTypeKind::F32:
+    case ComponentTypeKind::Char:
+    case ComponentTypeKind::String:
+    case ComponentTypeKind::List:
+    case ComponentTypeKind::Own:
+    case ComponentTypeKind::Borrow:
+      return 4;
+    case ComponentTypeKind::S64:
+    case ComponentTypeKind::U64:
+    case ComponentTypeKind::F64:
+      return 8;
+    case ComponentTypeKind::Record:
+    case ComponentTypeKind::Tuple: {
+      uint32_t alignment = 1;
+      ForEachFieldType(type, [&](const ComponentType& fieldType) {
+        alignment = std::max(alignment, CanonAlignment(fieldType));
+      });
+      return alignment;
+    }
+    case ComponentTypeKind::Variant:
+    case ComponentTypeKind::Enum:
+    case ComponentTypeKind::Option:
+    case ComponentTypeKind::Result: {
+      size_t numCases = ForEachCaseType(type, [](const auto&) {});
+      return std::max(CanonDiscriminantSize(numCases),
+                      CanonMaxCaseAlignment(type));
+    }
+    case ComponentTypeKind::Flags:
+      return CanonFlagsSize(type.asFlags().length());
+    default:
+      MOZ_CRASH("not a value type");
+  }
+}
+
+uint32_t wasm::CanonElemSize(const ComponentType& type) {
+  switch (type.kind()) {
+    case ComponentTypeKind::String:
+    case ComponentTypeKind::List:
+      return 8;
+    case ComponentTypeKind::Record:
+    case ComponentTypeKind::Tuple: {
+      uint32_t size = 0;
+      ForEachFieldType(type, [&](const ComponentType& fieldType) {
+        size =
+            AlignTo(size, CanonAlignment(fieldType)) + CanonElemSize(fieldType);
+      });
+      return AlignTo(size, CanonAlignment(type));
+    }
+    case ComponentTypeKind::Variant:
+    case ComponentTypeKind::Enum:
+    case ComponentTypeKind::Option:
+    case ComponentTypeKind::Result: {
+      uint32_t maxCaseSize = 0;
+      size_t numCases =
+          ForEachCaseType(type, [&](const mozilla::Maybe<ComponentType>& t) {
+            if (t) {
+              maxCaseSize = std::max(maxCaseSize, CanonElemSize(*t));
+            }
+          });
+      uint32_t size = AlignTo(CanonDiscriminantSize(numCases),
+                              CanonMaxCaseAlignment(type)) +
+                      maxCaseSize;
+      return AlignTo(size, CanonAlignment(type));
+    }
+    case ComponentTypeKind::Flags:
+      return CanonFlagsSize(type.asFlags().length());
+    default:
+      // Every other value type's size is its alignment.
+      return CanonAlignment(type);
+  }
+}
+
 bool wasm::FlattenTypes(const ComponentTypeVector& types, ValTypeVector* result,
                         bool* hasStringsOrLists, bool* tooDeep,
                         uint32_t depth) {
@@ -1678,6 +1831,42 @@ bool ComponentInstance::readImports(JSContext* cx, HandleObject importObj) {
   return true;
 }
 
+bool ComponentInstance::getCanonOptValues(
+    JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+    const ComponentCanonOpts& opts, CanonOptValues* values) {
+  values->stringEncoding = opts.stringEncoding;
+
+  RootedValue value(cx);
+  if (opts.memoryIndex) {
+    if (!getCoreItemJSValue(
+            cx, instanceObj,
+            ComponentSortIndex(ComponentSort::CoreMemory, *opts.memoryIndex),
+            &value)) {
+      return false;
+    }
+    values->memory = &value.toObject().as<WasmMemoryObject>();
+  }
+  if (opts.reallocIndex) {
+    if (!getCoreItemJSValue(
+            cx, instanceObj,
+            ComponentSortIndex(ComponentSort::CoreFunction, *opts.reallocIndex),
+            &value)) {
+      return false;
+    }
+    values->realloc = &value.toObject().as<JSFunction>();
+  }
+  if (opts.postReturnIndex) {
+    if (!getCoreItemJSValue(cx, instanceObj,
+                            ComponentSortIndex(ComponentSort::CoreFunction,
+                                               *opts.postReturnIndex),
+                            &value)) {
+      return false;
+    }
+    values->postReturn = &value.toObject().as<JSFunction>();
+  }
+  return true;
+}
+
 bool ComponentInstance::getLoweredFunc(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     uint32_t coreFuncIndex, const ComponentLoweredFuncDesc& lowered,
@@ -1696,11 +1885,13 @@ bool ComponentInstance::getLoweredFunc(
   }
 
   RootedObject host(cx, importValues_[func.itemIndex()]);
+  CanonOptValues opts(cx);
   RootedFunction result(cx);
-  if (!CreateLoweredFunction(
+  if (!getCanonOptValues(cx, instanceObj, lowered.canonOpts, &opts) ||
+      !CreateLoweredFunction(
           cx, instanceObj,
           component_->getTypeForFunc(lowered.funcIndex).asFunc(), coreFuncType,
-          host, &result)) {
+          host, opts, &result)) {
     return false;
   }
   loweredFuncs_[coreFuncIndex] = result;
@@ -1858,9 +2049,11 @@ bool ComponentInstance::createLiftedFunction(
     return false;
   }
   RootedFunction calleeFunc(cx, &callee.toObject().as<JSFunction>());
-  return CreateLiftedFunction(cx, instanceObj,
+  CanonOptValues opts(cx);
+  return getCanonOptValues(cx, instanceObj, lifted->canonOpts(), &opts) &&
+         CreateLiftedFunction(cx, instanceObj,
                               component_->getType(lifted->typeIndex()).asFunc(),
-                              calleeFunc, name, result);
+                              calleeFunc, opts, name, result);
 }
 
 bool ComponentInstance::createExportsObject(

@@ -621,6 +621,146 @@
   fail_mode: FailOnInvalidRef
   uses_memory: false
 
+- op: ComponentEnterGuest
+  symbolic_address:
+    name: ComponentEnterGuest
+    type: Args_Void_GeneralGeneral
+    needs_thunk: true
+  entry: ComponentEnterGuest
+  export: componentEnterGuest
+  params:
+    - 'externref'
+  fail_mode: Infallible
+  uses_memory: false
+
+- op: ComponentCheckRange
+  symbolic_address:
+    name: ComponentCheckRange
+    type: Args_Int32_GeneralInt32Int32Int32
+    needs_thunk: true
+  entry: ComponentCheckRange
+  export: componentCheckRange
+  params:
+    - 'i32'
+    - 'i32'
+    - 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentToString
+  symbolic_address:
+    name: ComponentToString
+    type: Args_General2
+    needs_thunk: true
+  entry: ComponentToString
+  export: componentToString
+  params:
+    - 'externref'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: ComponentStringLength
+  symbolic_address:
+    name: ComponentStringLength
+    type: Args_Int32_GeneralGeneral
+    needs_thunk: true
+  entry: ComponentStringLength
+  export: componentStringLength
+  params:
+    - 'externref'
+  result: 'i32'
+  fail_mode: Infallible
+  uses_memory: false
+
+- op: ComponentStoreASCII
+  symbolic_address:
+    name: ComponentStoreASCII
+    type: Args_Int32_GeneralGeneralInt32Int32
+    needs_thunk: true
+  entry: ComponentStoreASCII
+  export: componentStoreASCII
+  params:
+    - 'externref'
+    - 'i32'
+    - 'i32'
+  result: 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentStoreUTF8
+  symbolic_address:
+    name: ComponentStoreUTF8
+    type: Args_Int32_GeneralGeneralInt32Int32
+    needs_thunk: true
+  entry: ComponentStoreUTF8
+  export: componentStoreUTF8
+  params:
+    - 'externref'
+    - 'i32'
+    - 'i32'
+  result: 'i32'
+  fail_mode: FailOnInstanceFlag
+  uses_memory: false
+
+- op: ComponentStoreUTF16
+  symbolic_address:
+    name: ComponentStoreUTF16
+    type: Args_Int32_GeneralGeneralInt32Int32
+    needs_thunk: true
+  entry: ComponentStoreUTF16
+  export: componentStoreUTF16
+  params:
+    - 'externref'
+    - 'i32'
+    - 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentStoreLatin1
+  symbolic_address:
+    name: ComponentStoreLatin1
+    type: Args_Int32_GeneralGeneralInt32Int32
+    needs_thunk: true
+  entry: ComponentStoreLatin1
+  export: componentStoreLatin1
+  params:
+    - 'externref'
+    - 'i32'
+    - 'i32'
+  result: 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentStoreLatin1ToUTF16
+  symbolic_address:
+    name: ComponentStoreLatin1ToUTF16
+    type: Args_Int32_GeneralGeneralInt32Int32
+    needs_thunk: true
+  entry: ComponentStoreLatin1ToUTF16
+  export: componentStoreLatin1ToUTF16
+  params:
+    - 'externref'
+    - 'i32'
+    - 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentStringToJS
+  symbolic_address:
+    name: ComponentStringToJS
+    type: Args_General_GeneralInt32Int32Int32
+    needs_thunk: true
+  entry: ComponentStringToJS
+  export: componentStringToJS
+  params:
+    - 'i32'
+    - 'i32'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
 - op: ComponentTrap
   symbolic_address:
     name: ComponentTrap

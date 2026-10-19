@@ -388,6 +388,14 @@ mozilla::Maybe<FuncType> FlattenFuncType(const ComponentFuncType& funcType,
                                          CanonMode mode, bool* memoryRequired,
                                          bool* reallocRequired, bool* tooDeep);
 
+// The canonical ABI's alignment and elem_size of a value type in a 32-bit
+// memory.
+uint32_t CanonAlignment(const ComponentType& type);
+uint32_t CanonElemSize(const ComponentType& type);
+
+// The size in bytes of the discriminant of a variant with `numCases` cases.
+uint32_t CanonDiscriminantSize(size_t numCases);
+
 enum class ComponentNameAttribute : uint8_t {
   Constructor,
   Method,
@@ -1100,6 +1108,8 @@ class Component : public JS::WasmComponent {
 using MutableComponent = RefPtr<Component>;
 using SharedComponent = RefPtr<const Component>;
 
+struct CanonOptValues;
+
 class ComponentInstance {
   // The containing JS::Realm.
   JS::Realm* realm_;
@@ -1130,6 +1140,10 @@ class ComponentInstance {
   // Whether a call into this instance has trapped, which locks it down.
   bool trapped_ = false;
 
+  // Whether the current call into this instance has entered the guest, by
+  // calling any of its functions, after which any failure locks it down.
+  bool enteredGuest_ = false;
+
   // Only WasmComponentInstanceObject can call the private trace function.
   friend class js::WasmComponentInstanceObject;
   void tracePrivate(JSTracer* trc);
@@ -1139,6 +1153,9 @@ class ComponentInstance {
   [[nodiscard]] bool getCoreItemJSValue(
       JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
       ComponentSortIndex sortIndex, MutableHandleValue val);
+  [[nodiscard]] bool getCanonOptValues(
+      JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+      const ComponentCanonOpts& opts, CanonOptValues* values);
   [[nodiscard]] bool getLoweredFunc(
       JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
       uint32_t coreFuncIndex, const ComponentLoweredFuncDesc& lowered,
@@ -1178,6 +1195,9 @@ class ComponentInstance {
 
   bool trapped() const { return trapped_; }
   void setTrapped() { trapped_ = true; }
+
+  bool enteredGuest() const { return enteredGuest_; }
+  void setEnteredGuest(bool entered) { enteredGuest_ = entered; }
 
   // Gets the exports object of a core instance, or null if the index is out of
   // range.

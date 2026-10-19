@@ -15,12 +15,17 @@
 #  include "vm/BigIntType.h"
 #  include "wasm/WasmBuiltins.h"
 #  include "wasm/WasmInstance.h"
+#  include "wasm/WasmJS.h"
 
 #  include "vm/JSObject-inl.h"
 #  include "wasm/WasmInstance-inl.h"
 
 using namespace js;
 using namespace js::wasm;
+
+static ComponentInstance& InstanceFromCtx(HandleObject ctx) {
+  return ctx->as<WasmComponentInstanceObject>().instance();
+}
 
 // The canonical ABI's lift_flat_signed and lift_flat_unsigned, which keep only
 // the bits of the type's width.
@@ -213,6 +218,284 @@ void* wasm::ComponentCharToJS(Instance* instance, int32_t value) {
   }
   RootedValue jsValue(cx, StringValue(str));
   return ExternRefForCompiledCode(cx, jsValue);
+}
+
+void wasm::ComponentEnterGuest(Instance* instance, void* ctxRef) {
+  MOZ_ASSERT(SASigComponentEnterGuest.failureMode == FailureMode::Infallible);
+  JSContext* cx = instance->cx();
+  RootedObject ctx(cx, &AnyRef::fromCompiledCode(ctxRef).toJSObject());
+  InstanceFromCtx(ctx).setEnteredGuest(true);
+}
+
+// Gets [ptr, ptr + length) in memory 0, or traps if it is out of bounds.
+static uint8_t* GetMemoryRange(Instance* instance, uint32_t ptr,
+                               uint64_t length) {
+  uint64_t memoryLength = instance->memory(0)->volatileMemoryLength();
+  if (uint64_t(ptr) + length > memoryLength) {
+    ReportTrapError(instance->cx(), JSMSG_WASM_OUT_OF_BOUNDS);
+    return nullptr;
+  }
+  return instance->memoryBase(0).unwrap() + ptr;
+}
+
+static bool CheckAlignment(Instance* instance, uint32_t ptr,
+                           uint32_t alignment) {
+  if (ptr % alignment != 0) {
+    ReportTrapError(instance->cx(), JSMSG_WASM_UNALIGNED_ACCESS);
+    return false;
+  }
+  return true;
+}
+
+int32_t wasm::ComponentCheckRange(Instance* instance, int32_t ptr,
+                                  int32_t length, int32_t alignment) {
+  MOZ_ASSERT(SASigComponentCheckRange.failureMode == FailureMode::FailOnNegI32);
+  if (!CheckAlignment(instance, uint32_t(ptr), uint32_t(alignment)) ||
+      !GetMemoryRange(instance, uint32_t(ptr), uint32_t(length))) {
+    return -1;
+  }
+  return 0;
+}
+
+void* wasm::ComponentToString(Instance* instance, void* valueRef) {
+  MOZ_ASSERT(SASigComponentToString.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  JSString* str = ToString(cx, value);
+  if (!str) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue strValue(cx, StringValue(str));
+  return ExternRefForCompiledCode(cx, strValue);
+}
+
+int32_t wasm::ComponentStringLength(Instance* instance, void* strRef) {
+  MOZ_ASSERT(SASigComponentStringLength.failureMode == FailureMode::Infallible);
+  return int32_t(
+      AnyRef::fromCompiledCode(strRef).toJSValue().toString()->length());
+}
+
+static JSLinearString* LinearStringFromRef(JSContext* cx, void* strRef) {
+  return AnyRef::fromCompiledCode(strRef).toJSValue().toString()->ensureLinear(
+      cx);
+}
+
+int32_t wasm::ComponentStoreASCII(Instance* instance, void* strRef, int32_t ptr,
+                                  int32_t length) {
+  MOZ_ASSERT(SASigComponentStoreASCII.failureMode == FailureMode::FailOnNegI32);
+  JSLinearString* str = LinearStringFromRef(instance->cx(), strRef);
+  if (!str) {
+    return -1;
+  }
+  uint8_t* dst = GetMemoryRange(instance, uint32_t(ptr), uint32_t(length));
+  if (!dst) {
+    return -1;
+  }
+
+  JS::AutoCheckCannotGC nogc;
+  size_t i = 0;
+  for (; i < str->length(); i++) {
+    char16_t c = str->latin1OrTwoByteChar(i);
+    if (c >= 0x80) {
+      break;
+    }
+    dst[i] = uint8_t(c);
+  }
+  return int32_t(i);
+}
+
+int32_t wasm::ComponentStoreUTF8(Instance* instance, void* strRef, int32_t ptr,
+                                 int32_t length) {
+  MOZ_ASSERT(SASigComponentStoreUTF8.failureMode ==
+             FailureMode::FailOnInstanceFlag);
+  JSLinearString* str = LinearStringFromRef(instance->cx(), strRef);
+  if (!str) {
+    return instance->failBuiltin<int32_t>();
+  }
+  uint8_t* dst = GetMemoryRange(instance, uint32_t(ptr), uint32_t(length));
+  if (!dst) {
+    return instance->failBuiltin<int32_t>();
+  }
+
+  // This replaces lone surrogates with U+FFFD, as for a USVString. It also
+  // rewrites the ASCII prefix that ComponentStoreASCII already wrote, which is
+  // unobservable.
+  size_t written = JS::DeflateStringToUTF8Buffer(
+      str, mozilla::Span(reinterpret_cast<char*>(dst), uint32_t(length)));
+  MOZ_ASSERT(written == JS::GetDeflatedUTF8StringLength(str));
+  return int32_t(written);
+}
+
+int32_t wasm::ComponentStoreUTF16(Instance* instance, void* strRef, int32_t ptr,
+                                  int32_t length) {
+  MOZ_ASSERT(SASigComponentStoreUTF16.failureMode == FailureMode::FailOnNegI32);
+  JSLinearString* str = LinearStringFromRef(instance->cx(), strRef);
+  if (!str || !CheckAlignment(instance, uint32_t(ptr), 2)) {
+    return -1;
+  }
+  uint8_t* dst =
+      GetMemoryRange(instance, uint32_t(ptr), 2 * uint64_t(uint32_t(length)));
+  if (!dst) {
+    return -1;
+  }
+
+  // Replace lone surrogates with U+FFFD, as for a USVString.
+  JS::AutoCheckCannotGC nogc;
+  size_t n = str->length();
+  for (size_t i = 0; i < n; i++) {
+    char16_t c = str->latin1OrTwoByteChar(i);
+    if (unicode::IsLeadSurrogate(c) && i + 1 < n &&
+        unicode::IsTrailSurrogate(str->latin1OrTwoByteChar(i + 1))) {
+      mozilla::LittleEndian::writeUint16(dst + 2 * i, c);
+      i++;
+      c = str->latin1OrTwoByteChar(i);
+    } else if (unicode::IsSurrogate(c)) {
+      c = unicode::REPLACEMENT_CHARACTER;
+    }
+    mozilla::LittleEndian::writeUint16(dst + 2 * i, c);
+  }
+  return 0;
+}
+
+int32_t wasm::ComponentStoreLatin1(Instance* instance, void* strRef,
+                                   int32_t ptr, int32_t length) {
+  MOZ_ASSERT(SASigComponentStoreLatin1.failureMode ==
+             FailureMode::FailOnNegI32);
+  JSLinearString* str = LinearStringFromRef(instance->cx(), strRef);
+  if (!str || !CheckAlignment(instance, uint32_t(ptr), 2)) {
+    return -1;
+  }
+  uint8_t* dst = GetMemoryRange(instance, uint32_t(ptr), uint32_t(length));
+  if (!dst) {
+    return -1;
+  }
+
+  JS::AutoCheckCannotGC nogc;
+  size_t i = 0;
+  for (; i < str->length(); i++) {
+    char16_t c = str->latin1OrTwoByteChar(i);
+    if (c > JSString::MAX_LATIN1_CHAR) {
+      break;
+    }
+    dst[i] = uint8_t(c);
+  }
+  return int32_t(i);
+}
+
+int32_t wasm::ComponentStoreLatin1ToUTF16(Instance* instance, void* strRef,
+                                          int32_t ptr, int32_t latin1Length) {
+  MOZ_ASSERT(SASigComponentStoreLatin1ToUTF16.failureMode ==
+             FailureMode::FailOnNegI32);
+  JSLinearString* str = LinearStringFromRef(instance->cx(), strRef);
+  if (!str || !CheckAlignment(instance, uint32_t(ptr), 2)) {
+    return -1;
+  }
+  size_t length = str->length();
+  uint8_t* dst = GetMemoryRange(instance, uint32_t(ptr), 2 * uint64_t(length));
+  if (!dst) {
+    return -1;
+  }
+
+  // Inflate the Latin-1 prefix, which realloc moved to `ptr`, in place.
+  for (int32_t i = latin1Length - 1; i >= 0; i--) {
+    dst[2 * i] = dst[i];
+    dst[2 * i + 1] = 0;
+  }
+
+  // Then store the rest as UTF-16, replacing lone surrogates with U+FFFD as
+  // for a USVString.
+  JS::AutoCheckCannotGC nogc;
+  for (size_t i = latin1Length; i < length; i++) {
+    char16_t c = str->latin1OrTwoByteChar(i);
+    if (unicode::IsLeadSurrogate(c) && i + 1 < length &&
+        unicode::IsTrailSurrogate(str->latin1OrTwoByteChar(i + 1))) {
+      mozilla::LittleEndian::writeUint16(dst + 2 * i, c);
+      i++;
+      c = str->latin1OrTwoByteChar(i);
+    } else if (unicode::IsSurrogate(c)) {
+      c = unicode::REPLACEMENT_CHARACTER;
+    }
+    mozilla::LittleEndian::writeUint16(dst + 2 * i, c);
+  }
+  return 0;
+}
+
+// The canonical ABI's load_string_from_range, converted to a JS string.
+void* wasm::ComponentStringToJS(Instance* instance, int32_t ptr,
+                                int32_t taggedLength, int32_t encoding) {
+  MOZ_ASSERT(SASigComponentStringToJS.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+
+  uint32_t length = uint32_t(taggedLength);
+  bool isLatin1 = false;
+  uint32_t alignment = 2;
+  switch (ComponentStringEncoding(encoding)) {
+    case ComponentStringEncoding::UTF8:
+      alignment = 1;
+      break;
+    case ComponentStringEncoding::UTF16:
+      break;
+    case ComponentStringEncoding::Latin1PlusUTF16: {
+      isLatin1 = !(length & UTF16Tag);
+      length &= ~UTF16Tag;
+      break;
+    }
+  }
+  bool isUTF8 =
+      ComponentStringEncoding(encoding) == ComponentStringEncoding::UTF8;
+  uint64_t byteLength = isUTF8 || isLatin1 ? length : 2 * uint64_t(length);
+
+  constexpr uint64_t MaxStringByteLength = (1 << 28) - 1;
+  if (byteLength > MaxStringByteLength) {
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_STRING_TOO_LONG);
+    return AnyRef::invalid().forCompiledCode();
+  }
+  if (!CheckAlignment(instance, uint32_t(ptr), alignment)) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  const uint8_t* src = GetMemoryRange(instance, uint32_t(ptr), byteLength);
+  if (!src) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+
+  // Memory is not moved by GC, so it's safe to read while allocating.
+  JSLinearString* str;
+  if (isUTF8) {
+    auto chars = mozilla::Span(reinterpret_cast<const char*>(src), length);
+    if (!mozilla::IsUtf8(chars)) {
+      ReportTrapError(cx, JSMSG_WASM_COMPONENT_BAD_STRING);
+      return AnyRef::invalid().forCompiledCode();
+    }
+    str = NewStringCopyUTF8N(cx, JS::UTF8Chars(chars.data(), length));
+  } else if (isLatin1) {
+    str = NewStringCopyN<CanGC>(cx, reinterpret_cast<const Latin1Char*>(src),
+                                length);
+  } else {
+    Vector<char16_t, 32> chars(cx);
+    if (!chars.resize(length)) {
+      return AnyRef::invalid().forCompiledCode();
+    }
+    for (uint32_t i = 0; i < length; i++) {
+      chars[i] = mozilla::LittleEndian::readUint16(src + 2 * i);
+    }
+    for (uint32_t i = 0; i < length; i++) {
+      if (unicode::IsLeadSurrogate(chars[i]) && i + 1 < length &&
+          unicode::IsTrailSurrogate(chars[i + 1])) {
+        i++;
+      } else if (unicode::IsSurrogate(chars[i])) {
+        ReportTrapError(cx, JSMSG_WASM_COMPONENT_BAD_STRING);
+        return AnyRef::invalid().forCompiledCode();
+      }
+    }
+    str = NewStringCopyN<CanGC>(cx, chars.begin(), length);
+  }
+  if (!str) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue value(cx, StringValue(str));
+  return ExternRefForCompiledCode(cx, value);
 }
 
 int32_t wasm::ComponentTrap(Instance* instance, int32_t reason) {
