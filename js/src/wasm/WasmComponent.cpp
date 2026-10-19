@@ -159,6 +159,74 @@ bool StronglyUniqueNameSet::add(mozilla::Span<const char> name,
   return data_.add(p, std::move(canonicalized));
 }
 
+static bool IsAsciiUpper(char c) { return 'A' <= c && c <= 'Z'; }
+static char ToAsciiUpper(char c) { return 'a' <= c && c <= 'z' ? c - 32 : c; }
+static char ToAsciiLower(char c) { return IsAsciiUpper(c) ? c + 32 : c; }
+
+JSAtom* wasm::ComponentLabelToJS(JSContext* cx, mozilla::Span<const char> label,
+                                 ComponentJSCase jsCase) {
+  MOZ_ASSERT(NameIsProbablyValid(label));
+
+  Vector<Latin1Char, 32> result(cx);
+  if (!result.reserve(label.size())) {
+    return nullptr;
+  }
+
+  // A label is a series of hyphen-separated fragments. Every fragment is either
+  // all lowercase or an all-uppercase acronym, so a fragment is capitalized by
+  // uppercasing its first character, except for acronyms which are left alone.
+  bool firstFragment = true;
+  bool fragmentStart = true;
+  bool isAcronym = false;
+  for (char c : label) {
+    if (c == '-') {
+      firstFragment = false;
+      fragmentStart = true;
+      continue;
+    }
+    if (fragmentStart) {
+      isAcronym = IsAsciiUpper(c);
+    }
+    if (firstFragment && jsCase == ComponentJSCase::Camel) {
+      c = ToAsciiLower(c);
+    } else if (fragmentStart && !isAcronym) {
+      c = ToAsciiUpper(c);
+    }
+    fragmentStart = false;
+    result.infallibleAppend(Latin1Char(c));
+  }
+
+  return AtomizeChars(cx, result.begin(), result.length());
+}
+
+// The JS-API's LabelOf: the label that names a definition in JS.
+static mozilla::Span<const char> ComponentLabelOf(const ComponentName& name) {
+  mozilla::Span<const char> label = name.name.utf8Bytes();
+  while (label[0] == '[') {
+    size_t end = 0;
+    while (label[end] != ']') {
+      end++;
+    }
+    label = label.From(end + 1);
+  }
+  if (name.attributes.contains(ComponentNameAttribute::Method) ||
+      name.attributes.contains(ComponentNameAttribute::Static)) {
+    size_t dot = 0;
+    while (label[dot] != '.') {
+      dot++;
+    }
+    label = label.From(dot + 1);
+  }
+  return label;
+}
+
+JSAtom* wasm::ComponentJSName(JSContext* cx, const ComponentName& name,
+                              bool isType) {
+  return ComponentLabelToJS(
+      cx, ComponentLabelOf(name),
+      isType ? ComponentJSCase::Pascal : ComponentJSCase::Camel);
+}
+
 bool ComponentInlineExports::addExport(CacheableName&& name,
                                        ComponentSortIndex exported) {
   auto p = exports_.lookupForAdd(name.utf8Bytes());
@@ -1578,6 +1646,72 @@ bool ComponentInstance::init(JSContext* cx) {
   }
 
   return true;
+}
+
+bool ComponentInstance::createExportsObject(
+    JSContext* cx, MutableHandleObject exportsObj) const {
+  using Attr = ComponentNameAttribute;
+
+  exportsObj.set(NewPlainObjectWithProto(cx, nullptr));
+  if (!exportsObj) {
+    return false;
+  }
+
+  for (const ComponentExport& exp : component_->exports()) {
+    ComponentNameAttributes attrs = exp.name().attributes;
+    if (attrs.contains(Attr::Constructor) || attrs.contains(Attr::Method) ||
+        attrs.contains(Attr::Static)) {
+      // TODO(wasm-cm): These belong on guest resource classes.
+      continue;
+    }
+    if (attrs.contains(Attr::Get) || attrs.contains(Attr::Set)) {
+      JS_ReportErrorASCII(cx, "accessor exports are not supported yet");
+      return false;
+    }
+
+    RootedValue value(cx);
+    switch (exp.externDesc().sort()) {
+      case ComponentSort::CoreModule: {
+        RootedObject proto(
+            cx, GlobalObject::getOrCreatePrototype(cx, JSProto_WasmModule));
+        if (!proto) {
+          return false;
+        }
+        SharedModule module =
+            component_->getCoreModule(exp.externDesc().asCoreModule());
+        JSObject* moduleObj = WasmModuleObject::create(cx, *module, proto);
+        if (!moduleObj) {
+          return false;
+        }
+        value.setObject(*moduleObj);
+      } break;
+      case ComponentSort::Type: {
+        ComponentTypeKind kind = exp.externDesc().asType().kind();
+        if (kind != ComponentTypeKind::Resource &&
+            kind != ComponentTypeKind::SubResource) {
+          continue;
+        }
+        JS_ReportErrorASCII(cx, "resource type exports are not supported yet");
+        return false;
+      }
+      case ComponentSort::Func:
+        // TODO(wasm-cm): Lift the function.
+        continue;
+      default:
+        MOZ_CRASH("unexpected export sort");
+    }
+
+    JSAtom* key = ComponentJSName(cx, exp.name(), /*isType=*/false);
+    if (!key) {
+      return false;
+    }
+    RootedId keyId(cx, AtomToId(key));
+    if (!DefineDataProperty(cx, exportsObj, keyId, value, JSPROP_ENUMERATE)) {
+      return false;
+    }
+  }
+
+  return SetIntegrityLevel(cx, exportsObj, IntegrityLevel::Frozen);
 }
 
 static const char* ComponentSortKeyword(ComponentSort sort) {

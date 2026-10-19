@@ -564,6 +564,7 @@ JSObject* MaybeUnwrapSuspendingObject(JSObject* wrapper);
 // objects.
 class WasmComponentInstanceObject : public NativeObject {
   JS_DEFINE_TYPED_SLOT(0, INSTANCE_SLOT, Private, Undefined);
+  JS_DEFINE_TYPED_SLOT(1, EXPORTS_SLOT, Object, Undefined);
 
   static const JSClassOps classOps_;
   static const ClassSpec classSpec_;
@@ -571,8 +572,11 @@ class WasmComponentInstanceObject : public NativeObject {
   static void finalize(JS::GCContext* gcx, JSObject* obj);
   static void trace(JSTracer* trc, JSObject* obj);
 
+  static bool exportsGetterImpl(JSContext* cx, const CallArgs& args);
+  static bool exportsGetter(JSContext* cx, unsigned argc, Value* vp);
+
  public:
-  static const unsigned RESERVED_SLOTS = 1;
+  static const unsigned RESERVED_SLOTS = 2;
   static const JSClass class_;
   static const JSClass& protoClass_;
   static const JSPropertySpec properties[];

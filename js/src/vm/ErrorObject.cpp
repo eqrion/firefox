@@ -88,6 +88,9 @@ const JSClass ErrorObject::protoClasses[JSEXN_ERROR_LIMIT] = {
 #ifdef ENABLE_WASM_JSPI
     IMPLEMENT_ERROR_PROTO_CLASS(SuspendError),
 #endif
+#ifdef ENABLE_WASM_COMPONENTS
+    IMPLEMENT_ERROR_PROTO_CLASS(ComponentError),
+#endif
 };
 
 static bool exn_toSource(JSContext* cx, unsigned argc, Value* vp);
@@ -146,6 +149,13 @@ IMPLEMENT_NATIVE_ERROR_PROPERTIES(RuntimeError)
 #ifdef ENABLE_WASM_JSPI
 IMPLEMENT_NATIVE_ERROR_PROPERTIES(SuspendError)
 #endif
+#ifdef ENABLE_WASM_COMPONENTS
+static const JSPropertySpec ComponentError_properties[] = {
+    COMMON_ERROR_PROPERTIES(ComponentError),
+    JS_PSG("data", ErrorObject::getComponentErrorData, JSPROP_ENUMERATE),
+    JS_PS_END,
+};
+#endif
 
 #define IMPLEMENT_NATIVE_ERROR_SPEC(name) \
   {ErrorObject::createConstructor,        \
@@ -188,6 +198,9 @@ const ClassSpec ErrorObject::classSpecs[JSEXN_ERROR_LIMIT] = {
     IMPLEMENT_NONGLOBAL_ERROR_SPEC(RuntimeError),
 #ifdef ENABLE_WASM_JSPI
     IMPLEMENT_NONGLOBAL_ERROR_SPEC(SuspendError),
+#endif
+#ifdef ENABLE_WASM_COMPONENTS
+    IMPLEMENT_NONGLOBAL_ERROR_SPEC(ComponentError),
 #endif
 };
 
@@ -233,6 +246,10 @@ const JSClass ErrorObject::classes[JSEXN_ERROR_LIMIT] = {
 #ifdef ENABLE_WASM_JSPI
     IMPLEMENT_ERROR_CLASS(SuspendError),
 #endif
+#ifdef ENABLE_WASM_COMPONENTS
+    IMPLEMENT_ERROR_CLASS_CORE(ComponentError,
+                               ErrorObject::RESERVED_SLOTS_COMPONENT_ERROR),
+#endif
 };
 
 static void exn_finalize(JS::GCContext* gcx, JSObject* obj) {
@@ -260,11 +277,20 @@ static ErrorObject* CreateErrorObject(JSContext* cx, const CallArgs& args,
     }
   }
 
+  // WebAssembly.ComponentError takes a `data` argument after the message
+  // instead of an options object or the non-standard fileName and lineNumber
+  // arguments.
+#ifdef ENABLE_WASM_COMPONENTS
+  bool hasExtraArgs = exnType != JSEXN_WASMCOMPONENTERROR;
+#else
+  bool hasExtraArgs = true;
+#endif
+
   // Don't interpret the two parameters following the message parameter as the
   // non-standard fileName and lineNumber arguments when we have an options
   // object argument and the exception type is not SuppressedError.
-  bool hasOptions =
-      args.get(messageArg + 1).isObject() && exnType != JSEXN_SUPPRESSEDERR;
+  bool hasOptions = hasExtraArgs && args.get(messageArg + 1).isObject() &&
+                    exnType != JSEXN_SUPPRESSEDERR;
 
   Rooted<mozilla::Maybe<Value>> cause(cx, mozilla::Nothing());
   if (hasOptions) {
@@ -289,7 +315,7 @@ static ErrorObject* CreateErrorObject(JSContext* cx, const CallArgs& args,
 
   RootedString fileName(cx);
   uint32_t sourceId = 0;
-  if (!hasOptions && args.length() > messageArg + 1 &&
+  if (hasExtraArgs && !hasOptions && args.length() > messageArg + 1 &&
       IsUsableLegacyErrorArg(args[messageArg + 1])) {
     fileName = ToString<CanGC>(cx, args[messageArg + 1]);
   } else {
@@ -310,7 +336,7 @@ static ErrorObject* CreateErrorObject(JSContext* cx, const CallArgs& args,
 
   uint32_t lineNumber;
   JS::ColumnNumberOneOrigin columnNumber;
-  if (!hasOptions && args.length() > messageArg + 2 &&
+  if (hasExtraArgs && !hasOptions && args.length() > messageArg + 2 &&
       IsUsableLegacyErrorArg(args[messageArg + 2])) {
     if (!ToUint32(cx, args[messageArg + 2], &lineNumber)) {
       return nullptr;
@@ -474,6 +500,52 @@ static bool SuppressedError(JSContext* cx, unsigned argc, Value* vp) {
   return true;
 }
 
+#ifdef ENABLE_WASM_COMPONENTS
+// WebAssembly.ComponentError ( message, data )
+static bool ComponentError(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+
+  if (!ThrowIfNotConstructing(cx, args, "WebAssembly.ComponentError")) {
+    return false;
+  }
+
+  RootedObject proto(cx);
+  if (!GetPrototypeFromBuiltinConstructor(cx, args, JSProto_ComponentError,
+                                          &proto)) {
+    return false;
+  }
+
+  Rooted<ErrorObject*> obj(
+      cx, CreateErrorObject(cx, args, 0, JSEXN_WASMCOMPONENTERROR, proto));
+  if (!obj) {
+    return false;
+  }
+  obj->initComponentErrorData(args.get(1));
+
+  args.rval().setObject(*obj);
+  return true;
+}
+
+static bool IsComponentError(HandleValue v) {
+  return v.isObject() && v.toObject().is<ErrorObject>() &&
+         v.toObject().as<ErrorObject>().type() == JSEXN_WASMCOMPONENTERROR;
+}
+
+static bool ComponentErrorData_impl(JSContext* cx, const CallArgs& args) {
+  args.rval().set(
+      args.thisv().toObject().as<ErrorObject>().componentErrorData());
+  return true;
+}
+
+/* static */
+bool ErrorObject::getComponentErrorData(JSContext* cx, unsigned argc,
+                                        Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  return CallNonGenericMethod<IsComponentError, ComponentErrorData_impl>(cx,
+                                                                         args);
+}
+#endif
+
 /* static */
 JSObject* ErrorObject::createProto(JSContext* cx, JSProtoKey key) {
   JSExnType type = ExnTypeFromProtoKey(key);
@@ -516,6 +588,11 @@ JSObject* ErrorObject::createConstructor(JSContext* cx, JSProtoKey key) {
     } else if (type == JSEXN_SUPPRESSEDERR) {
       native = SuppressedError;
       nargs = 3;
+#ifdef ENABLE_WASM_COMPONENTS
+    } else if (type == JSEXN_WASMCOMPONENTERROR) {
+      native = ComponentError;
+      nargs = 0;
+#endif
     } else {
       native = Error;
       nargs = 1;
@@ -639,6 +716,11 @@ bool js::ErrorObject::init(JSContext* cx, Handle<ErrorObject*> obj,
                WASM_TRAP_SLOT.index());
     obj->initReservedSlotTyped(WASM_TRAP_SLOT, BooleanValue(false));
   }
+#ifdef ENABLE_WASM_COMPONENTS
+  if (type == JSEXN_WASMCOMPONENTERROR) {
+    obj->initReservedSlot(COMPONENT_ERROR_DATA_SLOT, UndefinedValue());
+  }
+#endif
 
   return true;
 }

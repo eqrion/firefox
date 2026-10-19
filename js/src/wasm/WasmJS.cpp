@@ -2646,10 +2646,34 @@ const ClassSpec WasmComponentInstanceObject::classSpec_ = {
 };
 
 const JSPropertySpec WasmComponentInstanceObject::properties[] = {
+    JS_PSG("exports", WasmComponentInstanceObject::exportsGetter,
+           JSPROP_ENUMERATE),
     JS_STRING_SYM_PS(toStringTag, "WebAssembly.ComponentInstance",
                      JSPROP_READONLY),
     JS_PS_END,
 };
+
+static bool IsComponentInstance(HandleValue v) {
+  return v.isObject() && v.toObject().is<WasmComponentInstanceObject>();
+}
+
+/* static */
+bool WasmComponentInstanceObject::exportsGetterImpl(JSContext* cx,
+                                                    const CallArgs& args) {
+  args.rval().setObject(args.thisv()
+                            .toObject()
+                            .as<WasmComponentInstanceObject>()
+                            .getReservedSlotTyped(EXPORTS_SLOT)
+                            .toObject());
+  return true;
+}
+
+/* static */
+bool WasmComponentInstanceObject::exportsGetter(JSContext* cx, unsigned argc,
+                                                Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  return CallNonGenericMethod<IsComponentInstance, exportsGetterImpl>(cx, args);
+}
 
 const JSFunctionSpec WasmComponentInstanceObject::methods[] = {
     JS_FS_END,
@@ -2716,9 +2740,11 @@ WasmComponentInstanceObject* WasmComponentInstanceObject::create(
     MOZ_ASSERT(!obj->isNewborn());
   }
 
-  if (!instance->init(cx)) {
+  RootedObject exportsObj(cx);
+  if (!instance->init(cx) || !instance->createExportsObject(cx, &exportsObj)) {
     return nullptr;
   }
+  obj->initReservedSlotTyped(EXPORTS_SLOT, ObjectValue(*exportsObj));
 
   return obj;
 }
@@ -5169,12 +5195,123 @@ static bool ResolveCompile(JSContext* cx, const Module& module,
   return true;
 }
 
+#ifdef ENABLE_WASM_COMPONENTS
+static bool IsComponentBytecode(JSContext* cx, const BytecodeSource& bytecode) {
+  if (!ComponentsAvailable(cx)) {
+    return false;
+  }
+  Decoder d(bytecode.envSpan(), bytecode.envRange().start);
+  return IsComponent(d);
+}
+
+class AsyncInstantiateComponentTask : public OffThreadPromiseTask {
+  SharedComponent component_;
+  PersistentRootedObject importObj_;
+  Ret ret_;
+
+ public:
+  AsyncInstantiateComponentTask(JSContext* cx, const Component& component,
+                                HandleObject importObj, Ret ret,
+                                Handle<PromiseObject*> promise)
+      : OffThreadPromiseTask(cx, promise),
+        component_(&component),
+        importObj_(cx, importObj),
+        ret_(ret) {}
+
+  bool resolve(JSContext* cx, Handle<PromiseObject*> promise) override {
+    RootedObject instanceProto(cx, GlobalObject::getOrCreatePrototype(
+                                       cx, JSProto_WasmComponentInstance));
+    if (!instanceProto) {
+      return RejectWithPendingException(cx, promise);
+    }
+
+    // TODO(wasm-cm): Read the imports from importObj_.
+    Rooted<WasmComponentInstanceObject*> instanceObj(cx);
+    if (!component_->instantiate(cx, instanceProto, &instanceObj)) {
+      return RejectWithPendingException(cx, promise);
+    }
+
+    RootedValue resolutionValue(cx, ObjectValue(*instanceObj));
+    if (ret_ == Ret::Pair) {
+      RootedObject resultObj(cx, JS_NewPlainObject(cx));
+      RootedObject componentProto(
+          cx, GlobalObject::getOrCreatePrototype(cx, JSProto_WasmComponent));
+      if (!resultObj || !componentProto) {
+        return RejectWithPendingException(cx, promise);
+      }
+      RootedObject componentObj(
+          cx, WasmComponentObject::create(cx, *component_, componentProto));
+      if (!componentObj) {
+        return RejectWithPendingException(cx, promise);
+      }
+
+      RootedValue val(cx, ObjectValue(*componentObj));
+      if (!JS_DefineProperty(cx, resultObj, "component", val,
+                             JSPROP_ENUMERATE)) {
+        return RejectWithPendingException(cx, promise);
+      }
+      if (!JS_DefineProperty(cx, resultObj, "instance", resolutionValue,
+                             JSPROP_ENUMERATE)) {
+        return RejectWithPendingException(cx, promise);
+      }
+      resolutionValue = ObjectValue(*resultObj);
+    }
+
+    if (!PromiseObject::resolve(cx, promise, resolutionValue)) {
+      return RejectWithPendingException(cx, promise);
+    }
+
+    Log(cx, "async instantiate succeeded");
+    return true;
+  }
+};
+
+static bool AsyncInstantiateComponent(JSContext* cx, const Component& component,
+                                      HandleObject importObj, Ret ret,
+                                      Handle<PromiseObject*> promise) {
+  auto task = js::MakeUnique<AsyncInstantiateComponentTask>(
+      cx, component, importObj, ret, promise);
+  if (!task || !task->init(cx)) {
+    return RejectWithOutOfMemory(cx, promise);
+  }
+
+  OffThreadPromiseTask::DispatchResolveAndDestroy(std::move(task));
+  return true;
+}
+
+static bool ResolveCompileComponent(JSContext* cx, const Component& component,
+                                    Handle<PromiseObject*> promise) {
+  RootedObject proto(
+      cx, GlobalObject::getOrCreatePrototype(cx, JSProto_WasmComponent));
+  if (!proto) {
+    return RejectWithPendingException(cx, promise);
+  }
+  RootedObject componentObj(cx,
+                            WasmComponentObject::create(cx, component, proto));
+  if (!componentObj) {
+    return RejectWithPendingException(cx, promise);
+  }
+
+  RootedValue resolutionValue(cx, ObjectValue(*componentObj));
+  if (!PromiseObject::resolve(cx, promise, resolutionValue)) {
+    return RejectWithPendingException(cx, promise);
+  }
+
+  Log(cx, "async compile succeeded");
+  return true;
+}
+#endif
+
 struct CompileBufferTask : PromiseHelperTask {
   BytecodeBuffer bytecode;
   SharedCompileArgs compileArgs;
   UniqueChars error;
   UniqueCharsVector warnings;
   SharedModule module;
+#ifdef ENABLE_WASM_COMPONENTS
+  bool isComponent = false;
+  SharedComponent component;
+#endif
   bool instantiate;
   PersistentRootedObject importObj;
 
@@ -5187,8 +5324,13 @@ struct CompileBufferTask : PromiseHelperTask {
   CompileBufferTask(JSContext* cx, Handle<PromiseObject*> promise)
       : PromiseHelperTask(cx, promise), instantiate(false) {}
 
-  bool init(JSContext* cx, const FeatureOptions& options,
-            const char* introducer) {
+  // This must be called after `bytecode` is initialized, as the compile
+  // arguments depend on whether it is a module or a component.
+  bool init(JSContext* cx, FeatureOptions options, const char* introducer) {
+#ifdef ENABLE_WASM_COMPONENTS
+    isComponent = IsComponentBytecode(cx, bytecode.source());
+    options.isComponent = isComponent;
+#endif
     compileArgs = InitCompileArgs(cx, options, introducer);
     if (!compileArgs) {
       return false;
@@ -5197,6 +5339,14 @@ struct CompileBufferTask : PromiseHelperTask {
   }
 
   void execute() override {
+#ifdef ENABLE_WASM_COMPONENTS
+    if (isComponent) {
+      component = CompileComponent(*compileArgs,
+                                   BytecodeBufferOrSource(std::move(bytecode)),
+                                   &error, &warnings, nullptr);
+      return;
+    }
+#endif
     module =
         CompileModule(*compileArgs, BytecodeBufferOrSource(std::move(bytecode)),
                       &error, &warnings, nullptr);
@@ -5206,6 +5356,18 @@ struct CompileBufferTask : PromiseHelperTask {
     if (!ReportCompileWarnings(cx, warnings)) {
       return false;
     }
+#ifdef ENABLE_WASM_COMPONENTS
+    if (isComponent) {
+      if (!component) {
+        return Reject(cx, *compileArgs, promise, error);
+      }
+      if (instantiate) {
+        return AsyncInstantiateComponent(cx, *component, importObj, Ret::Pair,
+                                         promise);
+      }
+      return ResolveCompileComponent(cx, *component, promise);
+    }
+#endif
     if (!module) {
       return Reject(cx, *compileArgs, promise, error);
     }
@@ -5351,11 +5513,22 @@ static bool WebAssembly_instantiate(JSContext* cx, unsigned argc, Value* vp) {
 
   Rooted<WasmModuleObject*> moduleObj(
       cx, firstArg->maybeUnwrapIf<WasmModuleObject>());
+#ifdef ENABLE_WASM_COMPONENTS
+  Rooted<WasmComponentObject*> componentObj(
+      cx, firstArg->maybeUnwrapIf<WasmComponentObject>());
+#endif
   if (moduleObj) {
     if (!AsyncInstantiate(cx, moduleObj->module(), importObj, Ret::Instance,
                           promise)) {
       return false;
     }
+#ifdef ENABLE_WASM_COMPONENTS
+  } else if (componentObj) {
+    if (!AsyncInstantiateComponent(cx, componentObj->component(), importObj,
+                                   Ret::Instance, promise)) {
+      return false;
+    }
+#endif
   } else {
     JS::RootedVector<JSString*> parameterStrings(cx);
     JS::RootedVector<Value> parameterArgs(cx);
@@ -5379,13 +5552,17 @@ static bool WebAssembly_instantiate(JSContext* cx, unsigned argc, Value* vp) {
     }
 
     auto task = cx->make_unique<CompileBufferTask>(cx, promise, importObj);
-    if (!task || !task->init(cx, options, "WebAssembly.instantiate")) {
+    if (!task) {
       return false;
     }
 
     if (!GetBytecodeBuffer(cx, firstArg, JSMSG_WASM_BAD_BUF_MOD_ARG,
                            &task->bytecode)) {
       return RejectWithPendingException(cx, promise, callArgs);
+    }
+
+    if (!task->init(cx, options, "WebAssembly.instantiate")) {
+      return false;
     }
 
     if (!StartOffThreadPromiseHelperTask(cx, std::move(task))) {
@@ -6349,6 +6526,13 @@ static bool WebAssemblyClassFinish(JSContext* cx, HandleObject object,
         "ComponentInstance", JSProto_WasmComponentInstance};
     if (!WebAssemblyDefineConstructor(cx, wasm, componentInstanceEntry,
                                       &ctorValue, &id)) {
+      return false;
+    }
+
+    constexpr NameAndProtoKey componentErrorEntry = {
+        "ComponentError", GetExceptionProtoKey(JSEXN_WASMCOMPONENTERROR)};
+    if (!WebAssemblyDefineConstructor(cx, wasm, componentErrorEntry, &ctorValue,
+                                      &id)) {
       return false;
     }
   }
