@@ -1132,27 +1132,6 @@ SharedComponent wasm::CompileComponent(
 
   return c;
 }
-
-SharedModuleOrComponent wasm::CompileBuffer(
-    const CompileArgs& args, const BytecodeBufferOrSource& bytecode,
-    UniqueChars* error, UniqueCharsVector* warnings,
-    JS::OptimizedEncodingListener* listener) {
-  const BytecodeSource& bytecodeSource = bytecode.source();
-  Decoder preambleDecoder(bytecodeSource.envSpan(),
-                          bytecodeSource.envRange().start, error, warnings);
-  if (IsComponent(preambleDecoder)) {
-    // TODO(wasm-cm)
-    preambleDecoder.fail("components are not supported yet");
-    return mozilla::Nothing();
-  }
-
-  SharedModule module =
-      CompileModule(args, bytecode, error, warnings, listener);
-  if (!module) {
-    return mozilla::Nothing();
-  }
-  return SharedModuleOrComponent(std::in_place, module);
-}
 #endif  // ENABLE_WASM_COMPONENTS
 
 bool wasm::CompileCompleteTier2(const ShareableBytes* codeSection,

@@ -30,11 +30,6 @@ namespace wasm {
 
 class Code;
 
-#ifdef ENABLE_WASM_COMPONENTS
-using SharedModuleOrComponent =
-    mozilla::Maybe<mozilla::Variant<SharedModule, SharedComponent>>;
-#endif
-
 // Return a uint32_t which captures the observed properties of the CPU that
 // affect compilation. If code compiled now is to be serialized and executed
 // later, the ObservedCPUFeatures() must be ensured to be the same.
@@ -56,11 +51,6 @@ SharedModule CompileModule(const CompileArgs& args,
 
 #ifdef ENABLE_WASM_COMPONENTS
 SharedComponent CompileComponent(
-    const CompileArgs& args, const BytecodeBufferOrSource& bytecode,
-    UniqueChars* error, UniqueCharsVector* warnings,
-    JS::OptimizedEncodingListener* listener = nullptr);
-
-SharedModuleOrComponent CompileBuffer(
     const CompileArgs& args, const BytecodeBufferOrSource& bytecode,
     UniqueChars* error, UniqueCharsVector* warnings,
     JS::OptimizedEncodingListener* listener = nullptr);
