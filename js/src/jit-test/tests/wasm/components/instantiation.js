@@ -102,9 +102,9 @@ assertErrorMessage(() => {
   assertEq(test456(), 456);
 }
 
-// Canon definitions that generate core functions validate but crash for now
-// TODO(wasm-cm): Update / remove these tests when adding instantiation support
-// for: canon lower, canon resource.new/drop/rep
+// Canon definitions that generate core functions. Lowering a function lifted by
+// the same component traps for now.
+// TODO(wasm-cm): Update this test when lowering lifted functions is supported.
 {
   const i = new WebAssembly.ComponentInstance(
     new WebAssembly.Component(wasmTextToBinary(`
@@ -155,9 +155,9 @@ assertErrorMessage(() => {
     `)),
   );
   const { R_new, R_rep, R_drop, cool, uncool } = wasmComponentCoreInstanceExports(i, 2);
-  assertErrorMessage(() => R_new(1), WebAssembly.RuntimeError, /unreachable/);
-  assertErrorMessage(() => R_rep(1), WebAssembly.RuntimeError, /unreachable/);
-  assertErrorMessage(() => R_drop(1), WebAssembly.RuntimeError, /unreachable/);
+  assertEq(R_new(7), 1);
+  assertEq(R_rep(1), 7);
+  R_drop(1);
   assertErrorMessage(() => cool(), WebAssembly.RuntimeError, /unreachable/);
   assertEq(uncool(), 123);
 }

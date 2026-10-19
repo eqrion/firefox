@@ -52,6 +52,9 @@ namespace wasm {
 // unless the function returns a `result`, in which case an exception is its
 // `error` case.
 //
+// The core functions of resource.new, resource.rep, and resource.drop are
+// generated the same way, but without any conversions.
+//
 // Adapters are generated in WasmComponentAdapter.cpp. AdapterBuilder builds
 // the adapter module along with its imports, and emits wasm instructions.
 // LiftLowerBuilder adds the conversions of each component type, following the
@@ -89,6 +92,16 @@ struct MOZ_STACK_CLASS CanonOptValues {
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     const ComponentFuncType& funcType, const TypeDef& coreFuncType,
     HandleObject host, const CanonOptValues& opts,
+    MutableHandleFunction result);
+
+// Creates the core function for a canon resource.new, resource.rep, or
+// resource.drop of the resource type at index `resourceType` of
+// Component::resourceTypes(). `dtor` is the destructor that resource.drop
+// calls, if any.
+[[nodiscard]] bool CreateResourceBuiltinFunction(
+    JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+    ComponentResourceBuiltin::Kind kind, uint32_t resourceType,
+    const TypeDef& coreFuncType, HandleFunction dtor,
     MutableHandleFunction result);
 
 }  // namespace wasm

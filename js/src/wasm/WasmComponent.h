@@ -1021,6 +1021,23 @@ class Component : public JS::WasmComponent {
   // Whether the JS-API's `wasm:js/global` builtin is enabled for imports.
   bool jsGlobalBuiltin_ = false;
 
+  // See resourceTypes(). Several types can be the same resource type, as when
+  // a resource type is exported with an ascribed (sub resource) bound, so this
+  // maps each of them to the index of its resource type.
+  ComponentTypeVector resourceTypes_;
+  mozilla::HashMap<const ComponentTypeDef*, uint32_t,
+                   mozilla::DefaultHasher<const ComponentTypeDef*>,
+                   SystemAllocPolicy>
+      resourceTypeIndices_;
+
+  // Adds a new resource type, or makes `alias` another name for the resource
+  // type of `type`.
+  [[nodiscard]] bool addResourceType(const ComponentType& type);
+  [[nodiscard]] bool aliasResourceType(const ComponentType& alias,
+                                       const ComponentType& type);
+  // Adds the resource types declared by an import.
+  [[nodiscard]] bool addImportedResourceTypes(const ComponentExternDesc& desc);
+
   template <typename T>
   bool addDefinedItem(
       ComponentSort sort, T&& item,
@@ -1077,9 +1094,17 @@ class Component : public JS::WasmComponent {
   ComponentType getType(uint32_t typeIndex) const;
   [[nodiscard]] bool addType(ComponentType&& type) {
     MOZ_RELEASE_ASSERT(type.isValid());
+    if (type.kind() == ComponentTypeKind::Resource && !addResourceType(type)) {
+      return false;
+    }
     return addDefinedItem(ComponentSort::Type, std::move(type), definedTypes_,
                           types_);
   }
+
+  // The distinct resource types that the component defines or imports, which
+  // are referred to by their index among them.
+  const ComponentTypeVector& resourceTypes() const { return resourceTypes_; }
+  uint32_t resourceTypeIndex(const ComponentType& type) const;
 
   // TODO(wasm-cm): Functions for components
 
@@ -1216,6 +1241,58 @@ using MutableComponent = RefPtr<Component>;
 using SharedComponent = RefPtr<const Component>;
 
 struct CanonOptValues;
+struct ComponentImportScope;
+
+// The canonical ABI's state of a call into or out of a component instance, for
+// tracking borrowed handles. A call into the instance (a task) lends it
+// handles, which it must drop before returning. A call out of it (a subtask) is
+// lent handles from its table, which can't be dropped until it returns.
+struct ComponentCallScope {
+  // The number of handles lent to the instance by a call into it.
+  uint32_t numBorrows = 0;
+  // The handles lent by the instance to a call out of it.
+  mozilla::Vector<uint32_t, 0, SystemAllocPolicy> lentHandles;
+};
+
+// A handle to a resource in a component instance's handle table.
+struct ComponentResourceHandle {
+  // The index of the handle's resource type in Component::resourceTypes().
+  uint32_t resourceType = UINT32_MAX;
+  bool own = false;
+  // The number of calls that the handle is lent to, as a borrow.
+  uint32_t numLends = 0;
+  // For a borrow, the call scope it was lent for. See
+  // ComponentInstance::callScopes_.
+  uint32_t borrowScope = 0;
+  // The representation of a resource type defined by the component.
+  int32_t rep = 0;
+  // The JS value of a resource of an imported resource type.
+  HeapPtr<JS::Value> hostValue;
+
+  bool isFree() const { return resourceType == UINT32_MAX; }
+  void trace(JSTracer* trc);
+};
+
+// The canonical ABI's table of a component instance's resource handles. Index
+// 0 is never used.
+class ComponentHandleTable {
+  GCVector<ComponentResourceHandle, 0, SystemAllocPolicy> handles_;
+  mozilla::Vector<uint32_t, 0, SystemAllocPolicy> free_;
+
+ public:
+  static constexpr uint32_t MaxLength = (1u << 28) - 1;
+
+  [[nodiscard]] bool init() { return handles_.resize(1); }
+
+  // Adds a handle, returning its index, or 0 if the table is full.
+  [[nodiscard]] bool add(ComponentResourceHandle&& handle, uint32_t* index);
+  // Gets a handle, or null if there is none at `index`.
+  ComponentResourceHandle* get(uint32_t index);
+  // Removes the handle at `index`, which must exist.
+  void remove(uint32_t index, ComponentResourceHandle* removed);
+
+  void trace(JSTracer* trc) { handles_.trace(trc); }
+};
 
 class ComponentInstance {
   // The containing JS::Realm.
@@ -1252,6 +1329,26 @@ class ComponentInstance {
   // calling any of its functions, after which any failure locks it down.
   bool enteredGuest_ = false;
 
+  // The canonical ABI's may_leave, which is false while the canonical ABI calls
+  // realloc or post-return, when the instance may not call out or use its
+  // handle table.
+  bool mayLeave_ = true;
+
+  ComponentHandleTable handles_;
+
+  // The calls into or out of this instance that are in progress, innermost
+  // last.
+  mozilla::Vector<ComponentCallScope, 0, SystemAllocPolicy> callScopes_;
+
+  // The constructor that each imported resource type was read from. Indices
+  // correspond 1:1 with Component::resourceTypes(), and are null for resource
+  // types defined by the component.
+  ObjectVector hostResourceCtors_;
+  // The %Symbol.dispose% method of each imported resource type's prototype,
+  // called when an own handle of the resource type is dropped, or null if it
+  // has none.
+  ObjectVector hostResourceDisposers_;
+
   // The data of the ComponentError that a lifted function returning a
   // `result` error is about to throw.
   bool hasPendingError_ = false;
@@ -1273,6 +1370,10 @@ class ComponentInstance {
       JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
       uint32_t coreFuncIndex, const ComponentLoweredFuncDesc& lowered,
       MutableHandleValue val);
+  [[nodiscard]] bool getResourceBuiltinFunc(
+      JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+      uint32_t coreFuncIndex, const ComponentResourceBuiltin& builtin,
+      MutableHandleValue val);
   [[nodiscard]] bool instantiateCoreModule(
       JSContext* cx, const CoreInstanceDescFromModule& desc,
       MutableHandleObject exportsObj) const;
@@ -1283,13 +1384,12 @@ class ComponentInstance {
       JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
       const ComponentInlineExports& inlineExports,
       MutableHandleObject exportsObj);
-  // Reads the import (or instance export) `name` from `importObj`, if it is
-  // not null, into the imported items starting at `firstItem`. Builtins are
-  // only resolved for the component's own imports, when `resolveBuiltins`.
-  [[nodiscard]] bool readImport(JSContext* cx, HandleObject importObj,
+  // Reads the import (or instance export) `name` in `scope` into the imported
+  // items starting at `firstItem`.
+  [[nodiscard]] bool readImport(JSContext* cx, ComponentImportScope& scope,
                                 const ComponentName& name,
                                 const ComponentExternDesc& desc,
-                                uint32_t firstItem, bool resolveBuiltins);
+                                uint32_t firstItem);
   // The JS-API's "resolve a builtin specifier", which sets `isBuiltin` and
   // `value` if `name` is an enabled builtin.
   [[nodiscard]] bool resolveBuiltin(JSContext* cx, const ComponentName& name,
@@ -1323,6 +1423,30 @@ class ComponentInstance {
 
   bool enteredGuest() const { return enteredGuest_; }
   void setEnteredGuest(bool entered) { enteredGuest_ = entered; }
+
+  bool mayLeave() const { return mayLeave_; }
+  void setMayLeave(bool mayLeave) { mayLeave_ = mayLeave; }
+
+  ComponentHandleTable& handles() { return handles_; }
+
+  const Component& component() const { return *component_; }
+
+  // The constructor of an imported resource type, or null for a resource type
+  // defined by the component.
+  JSObject* hostResourceCtor(uint32_t resourceType) const {
+    return hostResourceCtors_[resourceType];
+  }
+  JSObject* hostResourceDisposer(uint32_t resourceType) const {
+    return hostResourceDisposers_[resourceType];
+  }
+
+  size_t callScopeDepth() const { return callScopes_.length(); }
+  ComponentCallScope& callScope(size_t depth) { return callScopes_[depth]; }
+  [[nodiscard]] bool pushCallScope() { return callScopes_.emplaceBack(); }
+  // Pops the innermost call scope, returning the handles it lent.
+  void popCallScope();
+  // Pops call scopes until there are `depth` left.
+  void popCallScopesTo(size_t depth);
 
   void setPendingError(const JS::Value& data) {
     hasPendingError_ = true;

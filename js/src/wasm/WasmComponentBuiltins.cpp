@@ -70,6 +70,13 @@ static ComponentInstance& InstanceFromCtx(HandleObject ctx) {
   return ctx->as<WasmComponentInstanceObject>().instance();
 }
 
+static ComponentInstance& InstanceFromCtxRef(void* ctxRef) {
+  return AnyRef::fromCompiledCode(ctxRef)
+      .toJSObject()
+      .as<WasmComponentInstanceObject>()
+      .instance();
+}
+
 // The canonical ABI's lift_flat_signed and lift_flat_unsigned, which keep only
 // the bits of the type's width.
 static double LiftFlatInteger(int32_t value, ComponentTypeKind kind) {
@@ -1121,6 +1128,260 @@ void* wasm::ComponentStringToJS(Instance* instance, int32_t ptr,
   }
   RootedValue value(cx, StringValue(str));
   return ExternRefForCompiledCode(cx, value);
+}
+
+// Gets the handle at `index`, trapping unless it has the given resource type.
+static ComponentResourceHandle* GetResourceHandle(JSContext* cx,
+                                                  ComponentInstance& instance,
+                                                  int32_t index,
+                                                  int32_t resourceType) {
+  ComponentResourceHandle* handle = instance.handles().get(uint32_t(index));
+  if (!handle) {
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_BAD_HANDLE);
+    return nullptr;
+  }
+  if (handle->resourceType != uint32_t(resourceType)) {
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_WRONG_RESOURCE_TYPE);
+    return nullptr;
+  }
+  return handle;
+}
+
+static bool CheckMayLeave(JSContext* cx, const ComponentInstance& instance) {
+  if (!instance.mayLeave()) {
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_MAY_NOT_LEAVE);
+    return false;
+  }
+  return true;
+}
+
+int32_t wasm::ComponentResourceNew(Instance* instance, void* ctxRef,
+                                   int32_t rep, int32_t resourceType) {
+  MOZ_ASSERT(SASigComponentResourceNew.failureMode ==
+             FailureMode::FailOnNegI32);
+  JSContext* cx = instance->cx();
+  ComponentInstance& componentInstance = InstanceFromCtxRef(ctxRef);
+  if (!CheckMayLeave(cx, componentInstance)) {
+    return -1;
+  }
+  ComponentResourceHandle handle;
+  handle.resourceType = uint32_t(resourceType);
+  handle.own = true;
+  handle.rep = rep;
+  uint32_t index;
+  if (!componentInstance.handles().add(std::move(handle), &index)) {
+    ReportOutOfMemory(cx);
+    return -1;
+  }
+  if (index == 0) {
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_TABLE_FULL);
+    return -1;
+  }
+  return int32_t(index);
+}
+
+int32_t wasm::ComponentResourceRep(Instance* instance, void* ctxRef,
+                                   int32_t handle, int32_t resourceType) {
+  MOZ_ASSERT(SASigComponentResourceRep.failureMode ==
+             FailureMode::FailOnInstanceFlag);
+  ComponentInstance& componentInstance = InstanceFromCtxRef(ctxRef);
+  ComponentResourceHandle* h = GetResourceHandle(
+      instance->cx(), componentInstance, handle, resourceType);
+  if (!h) {
+    return instance->failBuiltin<int32_t>();
+  }
+  return int32_t(h->rep);
+}
+
+// Calls the disposer of an imported resource type, if any, for a dropped own
+// handle. Dropping is infallible, so an exception thrown by the disposer traps.
+static bool CallHostResourceDisposer(JSContext* cx,
+                                     const ComponentInstance& instance,
+                                     int32_t resourceType, HandleValue value) {
+  RootedValue disposer(
+      cx, ObjectOrNullValue(instance.hostResourceDisposer(resourceType)));
+  if (disposer.isNull()) {
+    return true;
+  }
+  RootedValue rval(cx);
+  if (Call(cx, disposer, value, &rval)) {
+    return true;
+  }
+  if (cx->isExceptionPending()) {
+    cx->clearPendingException();
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_DISPOSE_EXCEPTION);
+  }
+  return false;
+}
+
+int64_t wasm::ComponentResourceDrop(Instance* instance, void* ctxRef,
+                                    int32_t handle, int32_t resourceType) {
+  MOZ_ASSERT(SASigComponentResourceDrop.failureMode ==
+             FailureMode::FailOnInstanceFlag);
+  JSContext* cx = instance->cx();
+  ComponentInstance& componentInstance = InstanceFromCtxRef(ctxRef);
+  if (!CheckMayLeave(cx, componentInstance)) {
+    return instance->failBuiltin<int64_t>();
+  }
+  ComponentResourceHandle* h =
+      GetResourceHandle(cx, componentInstance, handle, resourceType);
+  if (!h) {
+    return instance->failBuiltin<int64_t>();
+  }
+  if (h->numLends != 0) {
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_HANDLE_LENT);
+    return instance->failBuiltin<int64_t>();
+  }
+  ComponentResourceHandle removed;
+  componentInstance.handles().remove(uint32_t(handle), &removed);
+  if (!removed.own) {
+    MOZ_ASSERT(removed.borrowScope < componentInstance.callScopeDepth());
+    componentInstance.callScope(removed.borrowScope).numBorrows--;
+    return -1;
+  }
+  if (componentInstance.hostResourceCtor(resourceType)) {
+    RootedValue value(cx, removed.hostValue);
+    if (!CallHostResourceDisposer(cx, componentInstance, resourceType, value)) {
+      return instance->failBuiltin<int64_t>();
+    }
+    return -1;
+  }
+  return int64_t(uint32_t(removed.rep));
+}
+
+int32_t wasm::ComponentLowerResource(Instance* instance, void* ctxRef,
+                                     void* valueRef, int32_t resourceType,
+                                     int32_t borrow) {
+  MOZ_ASSERT(SASigComponentLowerResource.failureMode ==
+             FailureMode::FailOnNegI32);
+  JSContext* cx = instance->cx();
+  RootedObject ctx(cx, &AnyRef::fromCompiledCode(ctxRef).toJSObject());
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  ComponentInstance& componentInstance = InstanceFromCtx(ctx);
+
+  RootedObject ctor(cx, componentInstance.hostResourceCtor(resourceType));
+  if (!ctor) {
+    JS_ReportErrorASCII(cx, "guest resources are not supported yet");
+    return -1;
+  }
+  bool isInstance;
+  if (!InstanceofOperator(cx, ctor, value, &isInstance)) {
+    return -1;
+  }
+  if (!isInstance) {
+    JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
+                             JSMSG_WASM_COMPONENT_BAD_RESOURCE);
+    return -1;
+  }
+
+  ComponentResourceHandle handle;
+  handle.resourceType = uint32_t(resourceType);
+  handle.own = !borrow;
+  handle.hostValue = value;
+  if (borrow) {
+    MOZ_ASSERT(componentInstance.callScopeDepth() > 0);
+    handle.borrowScope = componentInstance.callScopeDepth() - 1;
+  }
+  uint32_t index;
+  if (!componentInstance.handles().add(std::move(handle), &index)) {
+    ReportOutOfMemory(cx);
+    return -1;
+  }
+  if (index == 0) {
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_TABLE_FULL);
+    return -1;
+  }
+  if (borrow) {
+    componentInstance.callScope(componentInstance.callScopeDepth() - 1)
+        .numBorrows++;
+  }
+
+  // Modifying the handle table enters the guest.
+  componentInstance.setEnteredGuest(true);
+  return int32_t(index);
+}
+
+void* wasm::ComponentLiftResource(Instance* instance, void* ctxRef,
+                                  int32_t handle, int32_t resourceType,
+                                  int32_t borrow) {
+  MOZ_ASSERT(SASigComponentLiftResource.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedObject ctx(cx, &AnyRef::fromCompiledCode(ctxRef).toJSObject());
+  ComponentInstance& componentInstance = InstanceFromCtx(ctx);
+  if (!componentInstance.hostResourceCtor(resourceType)) {
+    JS_ReportErrorASCII(cx, "guest resources are not supported yet");
+    return AnyRef::invalid().forCompiledCode();
+  }
+
+  ComponentResourceHandle* h =
+      GetResourceHandle(cx, componentInstance, handle, resourceType);
+  if (!h) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue value(cx, h->hostValue);
+  if (borrow) {
+    MOZ_ASSERT(componentInstance.callScopeDepth() > 0);
+    ComponentCallScope& scope =
+        componentInstance.callScope(componentInstance.callScopeDepth() - 1);
+    if (!scope.lentHandles.append(uint32_t(handle))) {
+      ReportOutOfMemory(cx);
+      return AnyRef::invalid().forCompiledCode();
+    }
+    h->numLends++;
+  } else {
+    if (h->numLends != 0) {
+      ReportTrapError(cx, JSMSG_WASM_COMPONENT_HANDLE_LENT);
+      return AnyRef::invalid().forCompiledCode();
+    }
+    if (!h->own) {
+      ReportTrapError(cx, JSMSG_WASM_COMPONENT_NOT_OWNED);
+      return AnyRef::invalid().forCompiledCode();
+    }
+    ComponentResourceHandle removed;
+    componentInstance.handles().remove(uint32_t(handle), &removed);
+  }
+  return ExternRefForCompiledCode(cx, value);
+}
+
+int32_t wasm::ComponentPushCallScope(Instance* instance, void* ctxRef) {
+  MOZ_ASSERT(SASigComponentPushCallScope.failureMode ==
+             FailureMode::FailOnNegI32);
+  if (!InstanceFromCtxRef(ctxRef).pushCallScope()) {
+    ReportOutOfMemory(instance->cx());
+    return -1;
+  }
+  return 0;
+}
+
+void wasm::ComponentPopCallScope(Instance* instance, void* ctxRef) {
+  MOZ_ASSERT(SASigComponentPopCallScope.failureMode == FailureMode::Infallible);
+  InstanceFromCtxRef(ctxRef).popCallScope();
+}
+
+int32_t wasm::ComponentCheckBorrowsDropped(Instance* instance, void* ctxRef) {
+  MOZ_ASSERT(SASigComponentCheckBorrowsDropped.failureMode ==
+             FailureMode::FailOnNegI32);
+  ComponentInstance& componentInstance = InstanceFromCtxRef(ctxRef);
+  MOZ_ASSERT(componentInstance.callScopeDepth() > 0);
+  if (componentInstance.callScope(componentInstance.callScopeDepth() - 1)
+          .numBorrows != 0) {
+    ReportTrapError(instance->cx(), JSMSG_WASM_COMPONENT_BORROWS_NOT_DROPPED);
+    return -1;
+  }
+  return 0;
+}
+
+void wasm::ComponentSetMayLeave(Instance* instance, void* ctxRef,
+                                int32_t mayLeave) {
+  MOZ_ASSERT(SASigComponentSetMayLeave.failureMode == FailureMode::Infallible);
+  InstanceFromCtxRef(ctxRef).setMayLeave(mayLeave);
+}
+
+int32_t wasm::ComponentCheckMayLeave(Instance* instance, void* ctxRef) {
+  MOZ_ASSERT(SASigComponentCheckMayLeave.failureMode ==
+             FailureMode::FailOnNegI32);
+  return CheckMayLeave(instance->cx(), InstanceFromCtxRef(ctxRef)) ? 0 : -1;
 }
 
 int32_t wasm::ComponentTrap(Instance* instance, int32_t reason) {

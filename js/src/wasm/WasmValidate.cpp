@@ -7200,6 +7200,111 @@ enum class CanonDefKindRaw : uint8_t {
   return true;
 }
 
+// Checks whether the type of an import or export refers to a resource type
+// defined in the component, rather than imported.
+[[nodiscard]] static bool RefersToDefinedResource(
+    const ComponentExternDesc& desc, bool* refers) {
+  *refers = false;
+  Vector<ComponentType, 8, SystemAllocPolicy> worklist;
+  mozilla::HashSet<const ComponentTypeDef*,
+                   mozilla::DefaultHasher<const ComponentTypeDef*>,
+                   SystemAllocPolicy>
+      visited;
+  auto push = [&](const ComponentType& t) {
+    if (!t.typeDef()) {
+      return true;
+    }
+    auto p = visited.lookupForAdd(t.typeDef().get());
+    if (p) {
+      return true;
+    }
+    return visited.add(p, t.typeDef().get()) && worklist.append(t);
+  };
+  auto pushMaybe = [&](const mozilla::Maybe<ComponentType>& t) {
+    return !t || push(*t);
+  };
+  auto pushDesc = [&](const ComponentExternDesc& desc) {
+    switch (desc.sort()) {
+      case ComponentSort::Func:
+        return push(desc.asFunc());
+      case ComponentSort::Type:
+        return push(desc.asType());
+      case ComponentSort::Instance:
+        return push(desc.asInstance());
+      default:
+        return true;
+    }
+  };
+
+  if (!pushDesc(desc)) {
+    return false;
+  }
+  while (!worklist.empty()) {
+    ComponentType t = worklist.popCopy();
+    bool ok = true;
+    switch (t.kind()) {
+      case ComponentTypeKind::Resource:
+        *refers = true;
+        return true;
+      case ComponentTypeKind::Record:
+        for (const ComponentRecordField& field : t.asRecord()) {
+          ok = ok && push(field.type);
+        }
+        break;
+      case ComponentTypeKind::Variant:
+        for (const ComponentVariantCase& c : t.asVariant()) {
+          ok = ok && pushMaybe(c.type);
+        }
+        break;
+      case ComponentTypeKind::List:
+        ok = push(t.asList());
+        break;
+      case ComponentTypeKind::FixedList:
+        ok = push(t.asFixedList().elemType);
+        break;
+      case ComponentTypeKind::Map:
+        ok = push(t.asMap().keyType) && push(t.asMap().valueType);
+        break;
+      case ComponentTypeKind::Tuple:
+        for (const ComponentType& item : t.asTuple()) {
+          ok = ok && push(item);
+        }
+        break;
+      case ComponentTypeKind::Option:
+        ok = push(t.asOption());
+        break;
+      case ComponentTypeKind::Result:
+        ok = pushMaybe(t.asResult().type) && pushMaybe(t.asResult().errorType);
+        break;
+      case ComponentTypeKind::Own:
+        ok = push(t.asOwn());
+        break;
+      case ComponentTypeKind::Borrow:
+        ok = push(t.asBorrow());
+        break;
+      case ComponentTypeKind::Func: {
+        const ComponentFuncType& funcType = t.asFunc();
+        for (const ComponentType& param : funcType.paramTypes) {
+          ok = ok && push(param);
+        }
+        ok = ok && pushMaybe(funcType.resultType);
+      } break;
+      case ComponentTypeKind::Instance:
+        for (const ComponentInstanceTypeExport& exp :
+             t.asInstance().exports()) {
+          ok = ok && pushDesc(exp.desc);
+        }
+        break;
+      default:
+        break;
+    }
+    if (!ok) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
                                   StronglyUniqueNameSet& nameDedup) {
   ComponentName importName;
@@ -7214,11 +7319,15 @@ static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
       !CheckCanAddItem(d, *c, externDesc.sort())) {
     return false;
   }
-  if (externDesc.sort() == ComponentSort::Type) {
-    ComponentType t = externDesc.asType();
-    if (t.kind() == ComponentTypeKind::Resource) {
-      return d.fail("cannot import a type equal to a defined resource type");
-    }
+  // Imports precede the definitions of the component, so they cannot refer to
+  // its resource types.
+  bool refersToDefinedResource;
+  if (!RefersToDefinedResource(externDesc, &refersToDefinedResource)) {
+    return false;
+  }
+  if (refersToDefinedResource) {
+    return d.fail(
+        "an import cannot refer to a resource type defined in the component");
   }
 
   bool duplicate;

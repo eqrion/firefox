@@ -241,6 +241,10 @@ class MOZ_STACK_CLASS AdapterBuilder {
 
   // Traps unless `ptr` is aligned for `type` and all of `type` fits in memory.
   void emitCheckPointer(const ComponentType& type, uint32_t ptr);
+
+  // Sets the canonical ABI's may_leave, which is cleared while calling realloc
+  // and post-return.
+  void emitSetMayLeave(bool mayLeave);
 };
 
 }  // namespace
@@ -785,6 +789,13 @@ void AdapterBuilder::emitCheckPointer(const ComponentType& type, uint32_t ptr) {
   callBuiltin(Id::ComponentCheckRange);
 }
 
+void AdapterBuilder::emitSetMayLeave(bool mayLeave) {
+  ctx();
+  i32Const(mayLeave);
+  callBuiltin(Id::ComponentSetMayLeave);
+}
+
+#  ifdef DEBUG
 static bool IsIntegerKind(ComponentTypeKind kind) {
   switch (kind) {
     case ComponentTypeKind::S8:
@@ -798,64 +809,56 @@ static bool IsIntegerKind(ComponentTypeKind kind) {
       return false;
   }
 }
+#  endif
 
-[[nodiscard]] static bool IsSupportedVariant(const ComponentType& type);
-
-static bool IsSupportedAdapterType(const ComponentType& type) {
+// Whether a value of `type` can contain a borrow.
+static bool ContainsBorrow(const ComponentType& type) {
+  auto containsBorrow = [](const mozilla::Maybe<ComponentType>& t) {
+    return t && ContainsBorrow(*t);
+  };
   switch (type.kind()) {
-    case ComponentTypeKind::Variant:
-    case ComponentTypeKind::Enum:
-    case ComponentTypeKind::Option:
-    case ComponentTypeKind::Result:
-      return IsSupportedVariant(type);
-    case ComponentTypeKind::Bool:
-    case ComponentTypeKind::S64:
-    case ComponentTypeKind::U64:
-    case ComponentTypeKind::F32:
-    case ComponentTypeKind::F64:
-    case ComponentTypeKind::Char:
-    case ComponentTypeKind::String:
-    case ComponentTypeKind::Flags:
+    case ComponentTypeKind::Borrow:
       return true;
     case ComponentTypeKind::List:
-      return IsSupportedAdapterType(type.asList());
+      return ContainsBorrow(type.asList());
     case ComponentTypeKind::FixedList:
-      return IsSupportedAdapterType(type.asFixedList().elemType);
+      return ContainsBorrow(type.asFixedList().elemType);
     case ComponentTypeKind::Map:
-      return IsSupportedAdapterType(type.asMap().keyType) &&
-             IsSupportedAdapterType(type.asMap().valueType);
+      return ContainsBorrow(type.asMap().keyType) ||
+             ContainsBorrow(type.asMap().valueType);
     case ComponentTypeKind::Tuple:
-      for (const ComponentType& item : type.asTuple()) {
-        if (!IsSupportedAdapterType(item)) {
-          return false;
-        }
-      }
-      return true;
+      return std::any_of(
+          type.asTuple().begin(), type.asTuple().end(),
+          [](const ComponentType& t) { return ContainsBorrow(t); });
     case ComponentTypeKind::Record:
-      for (const ComponentRecordField& field : type.asRecord()) {
-        if (!IsSupportedAdapterType(field.type)) {
-          return false;
-        }
-      }
-      return true;
+      return std::any_of(
+          type.asRecord().begin(), type.asRecord().end(),
+          [](const ComponentRecordField& f) { return ContainsBorrow(f.type); });
+    case ComponentTypeKind::Variant:
+      return std::any_of(type.asVariant().begin(), type.asVariant().end(),
+                         [&](const ComponentVariantCase& c) {
+                           return containsBorrow(c.type);
+                         });
+    case ComponentTypeKind::Option:
+      return ContainsBorrow(type.asOption());
+    case ComponentTypeKind::Result:
+      return containsBorrow(type.asResult().type) ||
+             containsBorrow(type.asResult().errorType);
     default:
-      return IsIntegerKind(type.kind());
+      return false;
   }
 }
 
-[[nodiscard]] static bool CheckSupportedAdapterFuncType(
-    JSContext* cx, const ComponentFuncType& funcType) {
-  bool supported = funcType.resultType.isNothing() ||
-                   IsSupportedAdapterType(*funcType.resultType);
-  for (const ComponentType& type : funcType.paramTypes) {
-    supported = supported && IsSupportedAdapterType(type);
-  }
+static bool ParamsContainBorrow(const ComponentFuncType& funcType) {
+  return std::any_of(funcType.paramTypes.begin(), funcType.paramTypes.end(),
+                     [](const ComponentType& t) { return ContainsBorrow(t); });
+}
 
-  if (!supported) {
-    JS_ReportErrorASCII(cx, "component function type is not supported yet");
-    return false;
-  }
-  return true;
+// The index of the resource type of an own or borrow.
+static int32_t ResourceTypeIndex(const Component& component,
+                                 const ComponentType& type) {
+  return int32_t(component.resourceTypeIndex(
+      type.kind() == ComponentTypeKind::Own ? type.asOwn() : type.asBorrow()));
 }
 
 // Gets the tuple of a function's params if the canonical ABI passes them in
@@ -1007,19 +1010,6 @@ using VariantCaseVector = Vector<VariantCase, 4, SystemAllocPolicy>;
   }
 }
 
-[[nodiscard]] static bool IsSupportedVariant(const ComponentType& type) {
-  VariantCaseVector cases;
-  if (!GetVariantCases(type, &cases)) {
-    return false;
-  }
-  for (const VariantCase& c : cases) {
-    if (c.type && !IsSupportedAdapterType(*c.type)) {
-      return false;
-    }
-  }
-  return true;
-}
-
 // The location of the payload of the variant at `loc`.
 static ValueLoc GetPayloadLoc(const ComponentType& type, const ValueLoc& loc) {
   if (loc.inMemory()) {
@@ -1060,6 +1050,7 @@ namespace {
 // Builds the adapter of a lifted or lowered function, which converts values
 // between JS and the canonical ABI with the function's canonical options.
 class MOZ_STACK_CLASS LiftLowerBuilder : public AdapterBuilder {
+  const Component& component_;
   // Whether calls to realloc enter the guest, which is true when lifting.
   bool enterGuest_;
   ComponentStringEncoding stringEncoding_ = ComponentStringEncoding::UTF8;
@@ -1067,8 +1058,8 @@ class MOZ_STACK_CLASS LiftLowerBuilder : public AdapterBuilder {
   uint32_t realloc_ = UINT32_MAX;
 
  public:
-  LiftLowerBuilder(JSContext* cx, bool enterGuest)
-      : AdapterBuilder(cx), enterGuest_(enterGuest) {}
+  LiftLowerBuilder(JSContext* cx, const Component& component, bool enterGuest)
+      : AdapterBuilder(cx), component_(component), enterGuest_(enterGuest) {}
 
   // Imports the memory and functions of the canonical options, and sets up
   // `postReturn` with its function index, or UINT32_MAX if it is absent.
@@ -1219,12 +1210,14 @@ void LiftLowerBuilder::emitRealloc(F emitOld, int32_t alignment,
     ctx();
     callBuiltin(Id::ComponentEnterGuest);
   }
+  emitSetMayLeave(false);
   callGuest(realloc_, mozilla::Some(ValType::I32), [&]() {
     emitOld();
     i32Const(alignment);
     localGet(newSize);
   });
   localSet(ptr);
+  emitSetMayLeave(true);
 }
 
 void LiftLowerBuilder::emitAllocate(int32_t alignment, uint32_t size,
@@ -2222,6 +2215,15 @@ bool LiftLowerBuilder::emitToComponentValue(const ComponentType& type,
     case ComponentTypeKind::Result:
       return emitToComponentValueVariant(type, jsValue, loc,
                                          /*inOption=*/false);
+    case ComponentTypeKind::Own:
+    case ComponentTypeKind::Borrow:
+      ctx();
+      localGet(jsValue);
+      i32Const(ResourceTypeIndex(component_, type));
+      i32Const(kind == ComponentTypeKind::Borrow);
+      callBuiltin(Id::ComponentLowerResource);
+      emitSetScalar(ComponentTypeKind::U32, loc);
+      return true;
     default:
       MOZ_ASSERT(IsIntegerKind(kind));
       localGet(jsValue);
@@ -2283,6 +2285,14 @@ bool LiftLowerBuilder::emitToJSValue(const ComponentType& type,
     case ComponentTypeKind::Option:
     case ComponentTypeKind::Result:
       return emitToJSValueVariant(type, loc, /*inOption=*/false);
+    case ComponentTypeKind::Own:
+    case ComponentTypeKind::Borrow:
+      ctx();
+      emitGetScalar(ComponentTypeKind::U32, loc);
+      i32Const(ResourceTypeIndex(component_, type));
+      i32Const(kind == ComponentTypeKind::Borrow);
+      callBuiltin(Id::ComponentLiftResource);
+      return true;
     default:
       MOZ_ASSERT(IsIntegerKind(kind));
       emitGetScalar(kind, loc);
@@ -2493,6 +2503,10 @@ bool LiftLowerBuilder::emitLiftAdapter(const ComponentFuncType& funcType,
   if (calleeResultType) {
     localSet(calleeResult);
   }
+  if (ParamsContainBorrow(funcType)) {
+    ctx();
+    callBuiltin(Id::ComponentCheckBorrowsDropped);
+  }
 
   uint32_t jsResult = UINT32_MAX;
   if (funcType.resultType) {
@@ -2508,11 +2522,13 @@ bool LiftLowerBuilder::emitLiftAdapter(const ComponentFuncType& funcType,
   }
 
   if (postReturn != UINT32_MAX) {
+    emitSetMayLeave(false);
     callGuest(postReturn, mozilla::Nothing(), [&]() {
       if (calleeResultType) {
         localGet(calleeResult);
       }
     });
+    emitSetMayLeave(true);
   }
   if (funcType.resultType) {
     localGet(jsResult);
@@ -2527,12 +2543,13 @@ bool LiftLowerBuilder::emitLiftAdapter(const ComponentFuncType& funcType,
 //     ;; ToJSValue for each parameter, into externref locals. With more than
 //     ;; MaxFlatParams flat params, the only flat param points to them.
 //     block
-//       try_table (result flat-result)? (catch_all 0)
+//       try_table (catch_all 0)
 //         (local.get js-param)*
 //         call $host
 //         ;; ToComponentValue for the result, if any, into a flat local or
 //         ;; to $retptr
 //       end
+//       ;; return the handles lent to the call, if any
 //       return
 //     end
 //     ;; the host function or the result conversion threw
@@ -2541,6 +2558,14 @@ bool LiftLowerBuilder::emitLiftAdapter(const ComponentFuncType& funcType,
 bool LiftLowerBuilder::emitLowerAdapter(const ComponentFuncType& funcType,
                                         const FuncType& coreType,
                                         uint32_t hostIndex) {
+  bool lendsBorrows = ParamsContainBorrow(funcType);
+  ctx();
+  callBuiltin(Id::ComponentCheckMayLeave);
+  if (lendsBorrows) {
+    ctx();
+    callBuiltin(Id::ComponentPushCallScope);
+  }
+
   mozilla::Maybe<ComponentType> paramTuple;
   if (!GetParamsInMemory(funcType, &paramTuple)) {
     return false;
@@ -2605,7 +2630,12 @@ bool LiftLowerBuilder::emitLowerAdapter(const ComponentFuncType& funcType,
       localGet(jsParam);
     }
   };
+  // Handles lent to the call are returned once its result is lowered.
   auto emitReturn = [&]() {
+    if (lendsBorrows) {
+      ctx();
+      callBuiltin(Id::ComponentPopCallScope);
+    }
     if (flatResultType) {
       localGet(flatResult);
     }
@@ -2627,7 +2657,7 @@ bool LiftLowerBuilder::emitLowerAdapter(const ComponentFuncType& funcType,
   }
 
   block(Op::Block);
-  tryTableCatchAll(0, flatResultType);
+  tryTableCatchAll(0);
   emitArgs();
   call(hostIndex);
   if (funcType.resultType) {
@@ -2639,11 +2669,8 @@ bool LiftLowerBuilder::emitLowerAdapter(const ComponentFuncType& funcType,
       return false;
     }
   }
-  if (flatResultType) {
-    localGet(flatResult);
-  }
   end();
-  op(Op::Return);
+  emitReturn();
   end();
   trap(AdapterTrap::ImportException);
   return true;
@@ -2654,7 +2681,8 @@ bool LiftLowerBuilder::emitLowerAdapter(const ComponentFuncType& funcType,
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     const ComponentFuncType& funcType, HandleFunction callee,
     const CanonOptValues& opts, MutableHandleFunction result) {
-  LiftLowerBuilder b(cx, /*enterGuest=*/true);
+  LiftLowerBuilder b(cx, instanceObj->instance().component(),
+                     /*enterGuest=*/true);
   uint32_t calleeIndex, postReturn;
   if (!b.init(instanceObj) || !b.importWasmFunc(callee, &calleeIndex) ||
       !b.importCanonOpts(opts, &postReturn)) {
@@ -2752,7 +2780,15 @@ static bool CallLiftedFunction(JSContext* cx, unsigned argc, Value* vp) {
   bool outerHasError = instance.takePendingError(&outerErrorData);
   instance.setEnteredGuest(false);
 
+  // The call is a call scope that the handles borrowed by its parameters are
+  // lent for, which also ends any call scopes left by a failure.
+  size_t callScopeDepth = instance.callScopeDepth();
+  if (!instance.pushCallScope()) {
+    ReportOutOfMemory(cx);
+    return false;
+  }
   bool ok = Call(cx, adapter, UndefinedHandleValue, adapterArgs, args.rval());
+  instance.popCallScopesTo(callScopeDepth);
   if (!ok && (instance.enteredGuest() || IsPendingTrap(cx))) {
     instance.setTrapped();
   }
@@ -2773,10 +2809,6 @@ bool wasm::CreateLiftedFunction(
     const ComponentFuncType& funcType, HandleFunction callee,
     const CanonOptValues& opts, Handle<JSAtom*> name,
     MutableHandleFunction result) {
-  if (!CheckSupportedAdapterFuncType(cx, funcType)) {
-    return false;
-  }
-
   RootedFunction adapter(cx);
   if (!GenerateLiftAdapter(cx, instanceObj, funcType, callee, opts, &adapter)) {
     return false;
@@ -2801,10 +2833,6 @@ bool wasm::CreateLoweredFunction(
     const ComponentFuncType& funcType, const TypeDef& coreFuncType,
     HandleObject host, const CanonOptValues& opts,
     MutableHandleFunction result) {
-  if (!CheckSupportedAdapterFuncType(cx, funcType)) {
-    return false;
-  }
-
   ValTypeVector hostParams, hostResults;
   if (!hostParams.appendN(ValType(RefType::extern_()),
                           funcType.paramTypes.length()) ||
@@ -2814,7 +2842,8 @@ bool wasm::CreateLoweredFunction(
     return false;
   }
 
-  LiftLowerBuilder b(cx, /*enterGuest=*/false);
+  LiftLowerBuilder b(cx, instanceObj->instance().component(),
+                     /*enterGuest=*/false);
   uint32_t hostIndex, postReturn;
   if (!b.init(instanceObj) ||
       !b.importJSFunc(host, std::move(hostParams), std::move(hostResults),
@@ -2828,6 +2857,62 @@ bool wasm::CreateLoweredFunction(
   if (!b.emitLowerAdapter(funcType, coreFuncType.funcType(), hostIndex)) {
     ReportOutOfMemory(cx);
     return false;
+  }
+  return b.finish(result);
+}
+
+// Generates the core function for a resource builtin, which calls the builtin
+// module function for it, and for resource.drop, the destructor:
+//
+//   (func (param $handle i32) (result i32)?
+//     (call $ComponentResource* (global.get $ctx) (local.get $handle)
+//                               (i32.const rt))
+//     ;; for resource.drop, if the result is a rep, call $dtor with it
+//   )
+bool wasm::CreateResourceBuiltinFunction(
+    JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+    ComponentResourceBuiltin::Kind kind, uint32_t resourceType,
+    const TypeDef& coreFuncType, HandleFunction dtor,
+    MutableHandleFunction result) {
+  using Id = BuiltinModuleFuncId;
+  using Kind = ComponentResourceBuiltin::Kind;
+  MOZ_ASSERT_IF(dtor, kind == Kind::ResourceDrop);
+
+  AdapterBuilder b(cx);
+  uint32_t dtorIndex = UINT32_MAX;
+  if (!b.init(instanceObj) || (dtor && !b.importWasmFunc(dtor, &dtorIndex)) ||
+      !b.defineAdapterFuncWithType(coreFuncType)) {
+    return false;
+  }
+
+  b.ctx();
+  b.localGet(0);
+  b.i32Const(int32_t(resourceType));
+  switch (kind) {
+    case Kind::ResourceNew:
+      b.callBuiltin(Id::ComponentResourceNew);
+      break;
+    case Kind::ResourceRep:
+      b.callBuiltin(Id::ComponentResourceRep);
+      break;
+    case Kind::ResourceDrop:
+      b.callBuiltin(Id::ComponentResourceDrop);
+      if (!dtor) {
+        b.op(Op::Drop);
+        break;
+      }
+      uint32_t rep = b.addLocal(ValType::I64);
+      b.localSet(rep);
+      b.localGet(rep);
+      b.zero(ValType::I64);
+      b.op(Op::I64GeS);
+      b.block(Op::If);
+      b.callGuest(dtorIndex, mozilla::Nothing(), [&]() {
+        b.localGet(rep);
+        b.op(Op::I32WrapI64);
+      });
+      b.end();
+      break;
   }
   return b.finish(result);
 }

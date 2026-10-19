@@ -186,4 +186,16 @@ wasmValidateText(`(component
 wasmFailValidateText(`(component
   (type $T1 (resource (rep i32)))
   (import "T1E" (type $T1E (eq $T1)))
-)`, /cannot import a type equal to a defined resource type/);
+)`, /an import cannot refer to a resource type defined in the component/);
+
+// Imports cannot refer to resource types defined in the component.
+for (const type of [
+  `(func (param "x" (own $r)))`,
+  `(func (result (list (borrow $r))))`,
+  `(instance (export "f" (func (param "x" (own $r)))))`,
+]) {
+  wasmFailValidateText(`(component
+    (type $r (resource (rep i32)))
+    (import "i" ${type})
+  )`, /an import cannot refer to a resource type defined in the component/);
+}

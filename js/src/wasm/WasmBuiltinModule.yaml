@@ -1141,4 +1141,142 @@
   fail_mode: FailOnNegI32
   uses_memory: false
 
+- op: ComponentResourceNew
+  symbolic_address:
+    name: ComponentResourceNew
+    type: Args_Int32_GeneralGeneralInt32Int32
+    needs_thunk: true
+  entry: ComponentResourceNew
+  export: componentResourceNew
+  params:
+    - 'externref'
+    - 'i32'
+    - 'i32'
+  result: 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentResourceRep
+  symbolic_address:
+    name: ComponentResourceRep
+    type: Args_Int32_GeneralGeneralInt32Int32
+    needs_thunk: true
+  entry: ComponentResourceRep
+  export: componentResourceRep
+  params:
+    - 'externref'
+    - 'i32'
+    - 'i32'
+  result: 'i32'
+  fail_mode: FailOnInstanceFlag
+  uses_memory: false
+
+- op: ComponentResourceDrop
+  symbolic_address:
+    name: ComponentResourceDrop
+    type: Args_Int64_GeneralGeneralInt32Int32
+    needs_thunk: true
+  entry: ComponentResourceDrop
+  export: componentResourceDrop
+  params:
+    - 'externref'
+    - 'i32'
+    - 'i32'
+  result: 'i64'
+  fail_mode: FailOnInstanceFlag
+  uses_memory: false
+
+- op: ComponentSetMayLeave
+  symbolic_address:
+    name: ComponentSetMayLeave
+    type: Args_Void_GeneralGeneralInt32
+    needs_thunk: true
+  entry: ComponentSetMayLeave
+  export: componentSetMayLeave
+  params:
+    - 'externref'
+    - 'i32'
+  fail_mode: Infallible
+  uses_memory: false
+
+- op: ComponentCheckMayLeave
+  symbolic_address:
+    name: ComponentCheckMayLeave
+    type: Args_Int32_GeneralGeneral
+    needs_thunk: true
+  entry: ComponentCheckMayLeave
+  export: componentCheckMayLeave
+  params:
+    - 'externref'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentLowerResource
+  symbolic_address:
+    name: ComponentLowerResource
+    type: Args_Int32_GeneralGeneralGeneralInt32Int32
+    needs_thunk: true
+  entry: ComponentLowerResource
+  export: componentLowerResource
+  params:
+    - 'externref'
+    - 'externref'
+    - 'i32'
+    - 'i32'
+  result: 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentLiftResource
+  symbolic_address:
+    name: ComponentLiftResource
+    type: Args_General_GeneralGeneralInt32Int32Int32
+    needs_thunk: true
+  entry: ComponentLiftResource
+  export: componentLiftResource
+  params:
+    - 'externref'
+    - 'i32'
+    - 'i32'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: ComponentPushCallScope
+  symbolic_address:
+    name: ComponentPushCallScope
+    type: Args_Int32_GeneralGeneral
+    needs_thunk: true
+  entry: ComponentPushCallScope
+  export: componentPushCallScope
+  params:
+    - 'externref'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentPopCallScope
+  symbolic_address:
+    name: ComponentPopCallScope
+    type: Args_Void_GeneralGeneral
+    needs_thunk: true
+  entry: ComponentPopCallScope
+  export: componentPopCallScope
+  params:
+    - 'externref'
+  fail_mode: Infallible
+  uses_memory: false
+
+- op: ComponentCheckBorrowsDropped
+  symbolic_address:
+    name: ComponentCheckBorrowsDropped
+    type: Args_Int32_GeneralGeneral
+    needs_thunk: true
+  entry: ComponentCheckBorrowsDropped
+  export: componentCheckBorrowsDropped
+  params:
+    - 'externref'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
 #endif // ENABLE_WASM_COMPONENTS

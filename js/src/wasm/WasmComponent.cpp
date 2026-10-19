@@ -1364,6 +1364,9 @@ bool Component::addImport(ComponentImport&& import) {
     return false;
   }
   numImportedItems_ += numItems;
+  if (!addImportedResourceTypes(import.externDesc())) {
+    return false;
+  }
 
   // Add import to imports vector
   uint32_t importIndex = imports_.length();
@@ -1427,9 +1430,65 @@ const ComponentExport& Component::getExportByName(
   return exports_[p->value()];
 }
 
+bool Component::addResourceType(const ComponentType& type) {
+  MOZ_ASSERT(type.kind() == ComponentTypeKind::Resource ||
+             type.kind() == ComponentTypeKind::SubResource);
+  auto p = resourceTypeIndices_.lookupForAdd(type.typeDef().get());
+  MOZ_ASSERT(!p);
+  return resourceTypeIndices_.add(p, type.typeDef().get(),
+                                  resourceTypes_.length()) &&
+         resourceTypes_.append(type);
+}
+
+bool Component::aliasResourceType(const ComponentType& alias,
+                                  const ComponentType& type) {
+  uint32_t index = resourceTypeIndex(type);
+  auto p = resourceTypeIndices_.lookupForAdd(alias.typeDef().get());
+  return p || resourceTypeIndices_.add(p, alias.typeDef().get(), index);
+}
+
+uint32_t Component::resourceTypeIndex(const ComponentType& type) const {
+  auto p = resourceTypeIndices_.lookup(type.typeDef().get());
+  MOZ_RELEASE_ASSERT(p);
+  return p->value();
+}
+
+bool Component::addImportedResourceTypes(const ComponentExternDesc& desc) {
+  switch (desc.sort()) {
+    case ComponentSort::Type: {
+      ComponentType type = desc.asType();
+      if (type.kind() == ComponentTypeKind::SubResource &&
+          !resourceTypeIndices_.has(type.typeDef().get())) {
+        return addResourceType(type);
+      }
+      return true;
+    }
+    case ComponentSort::Instance:
+      for (const ComponentInstanceTypeExport& exp :
+           desc.asInstance().asInstance().exports()) {
+        if (!addImportedResourceTypes(exp.desc)) {
+          return false;
+        }
+      }
+      return true;
+    default:
+      return true;
+  }
+}
+
 bool Component::addExport(ComponentExport&& exp) {
   ComponentSort sort = exp.externDesc().sort();
   MOZ_ASSERT(ComponentSortValidForExternDesc(sort));
+
+  // An exported resource type may be ascribed a new (sub resource) bound, which
+  // is still the exported resource type.
+  if (sort == ComponentSort::Type) {
+    ComponentType type = exp.externDesc().asType();
+    if (type.kind() == ComponentTypeKind::SubResource &&
+        !aliasResourceType(type, getType(exp.item().index))) {
+      return false;
+    }
+  }
 
   // Add export to exports vector
   uint32_t exportIndex = exports_.length();
@@ -1783,6 +1842,59 @@ void ComponentInstance::tracePrivate(JSTracer* trc) {
   importValues_.trace(trc);
   loweredFuncs_.trace(trc);
   TraceEdge(trc, &pendingErrorData_, "component pending error data");
+  handles_.trace(trc);
+  hostResourceCtors_.trace(trc);
+  hostResourceDisposers_.trace(trc);
+}
+
+void ComponentInstance::popCallScope() {
+  for (uint32_t index : callScopes_.back().lentHandles) {
+    ComponentResourceHandle* handle = handles_.get(index);
+    MOZ_ASSERT(handle && handle->numLends > 0);
+    handle->numLends--;
+  }
+  callScopes_.popBack();
+}
+
+void ComponentInstance::popCallScopesTo(size_t depth) {
+  while (callScopes_.length() > depth) {
+    popCallScope();
+  }
+}
+
+void ComponentResourceHandle::trace(JSTracer* trc) {
+  TraceEdge(trc, &hostValue, "component resource handle host value");
+}
+
+bool ComponentHandleTable::add(ComponentResourceHandle&& handle,
+                               uint32_t* index) {
+  if (!free_.empty()) {
+    *index = free_.popCopy();
+    handles_[*index] = std::move(handle);
+    return true;
+  }
+  if (handles_.length() > MaxLength) {
+    *index = 0;
+    return true;
+  }
+  // Every index can be freed, so reserve room for it in the free list.
+  *index = handles_.length();
+  return free_.reserve(handles_.length()) && handles_.append(std::move(handle));
+}
+
+ComponentResourceHandle* ComponentHandleTable::get(uint32_t index) {
+  if (index == 0 || index >= handles_.length() || handles_[index].isFree()) {
+    return nullptr;
+  }
+  return &handles_[index];
+}
+
+void ComponentHandleTable::remove(uint32_t index,
+                                  ComponentResourceHandle* removed) {
+  MOZ_ASSERT(get(index));
+  *removed = std::move(handles_[index]);
+  handles_[index] = ComponentResourceHandle();
+  free_.infallibleAppend(index);
 }
 
 // The JS-API's "find an accessor".
@@ -1831,18 +1943,96 @@ static bool CallWithReceiver(JSContext* cx, unsigned argc, Value* vp) {
   return Call(cx, target, receiver, targetArgs, args.rval());
 }
 
+// Calls extended slot 0 with the first argument as the receiver, for a method
+// of a host resource.
+static bool CallWithFirstArgAsReceiver(JSContext* cx, unsigned argc,
+                                       Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  JSFunction& callee = args.callee().as<JSFunction>();
+  MOZ_ASSERT(args.length() >= 1);
+  RootedValue target(cx, callee.getExtendedSlot(0));
+  InvokeArgs targetArgs(cx);
+  if (!targetArgs.init(cx, args.length() - 1)) {
+    return false;
+  }
+  for (size_t i = 1; i < args.length(); i++) {
+    targetArgs[i - 1].set(args[i]);
+  }
+  return Call(cx, target, args[0], targetArgs, args.rval());
+}
+
+// Constructs extended slot 0, for the constructor of a host resource.
+static bool ConstructWithArgs(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  JSFunction& callee = args.callee().as<JSFunction>();
+  RootedValue target(cx, callee.getExtendedSlot(0));
+  ConstructArgs targetArgs(cx);
+  if (!targetArgs.init(cx, args.length())) {
+    return false;
+  }
+  for (size_t i = 0; i < args.length(); i++) {
+    targetArgs[i].set(args[i]);
+  }
+  RootedObject result(cx);
+  if (!Construct(cx, target, targetArgs, target, &result)) {
+    return false;
+  }
+  args.rval().setObject(*result);
+  return true;
+}
+
+// The state of reading a scope of imports: the component's imports, or an
+// imported instance's exports.
+struct js::wasm::ComponentImportScope {
+  // The object that imports are read from, if any.
+  HandleObject object;
+  // Whether builtins are resolved, which they are for the component's imports.
+  bool resolveBuiltins;
+  // The resource types imported so far in the scope, by name, as indices into
+  // Component::resourceTypes().
+  mozilla::Vector<std::pair<mozilla::Span<const char>, uint32_t>, 4,
+                  SystemAllocPolicy>
+      resourceTypes;
+
+  ComponentImportScope(HandleObject object, bool resolveBuiltins)
+      : object(object), resolveBuiltins(resolveBuiltins) {}
+
+  uint32_t resourceType(mozilla::Span<const char> label) const {
+    for (const auto& [name, resourceType] : resourceTypes) {
+      if (name == label) {
+        return resourceType;
+      }
+    }
+    MOZ_CRASH("validation requires a preceding resource type import");
+  }
+};
+
+static bool ReportBadImportType(JSContext* cx, Handle<JSAtom*> name,
+                                const char* expected) {
+  UniqueChars nameChars = AtomToPrintableString(cx, name);
+  if (nameChars) {
+    JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
+                             JSMSG_WASM_BAD_IMPORT_TYPE, nameChars.get(),
+                             expected);
+  }
+  return false;
+}
+
 bool ComponentInstance::readImports(JSContext* cx, HandleObject importObj) {
-  if (!importValues_.resize(component_->numImportedItems())) {
+  size_t numResourceTypes = component_->resourceTypes().length();
+  if (!importValues_.resize(component_->numImportedItems()) ||
+      !hostResourceCtors_.resize(numResourceTypes) ||
+      !hostResourceDisposers_.resize(numResourceTypes)) {
     ReportOutOfMemory(cx);
     return false;
   }
 
+  ComponentImportScope scope(importObj, /*resolveBuiltins=*/true);
   for (size_t i = 0; i < component_->imports().length(); i++) {
     const ComponentImport& imp = component_->imports()[i];
     uint32_t firstItem = component_->firstImportedItem(
         ComponentItem::import(imp.externDesc().sort(), i));
-    if (!readImport(cx, importObj, imp.name(), imp.externDesc(), firstItem,
-                    /*resolveBuiltins=*/true)) {
+    if (!readImport(cx, scope, imp.name(), imp.externDesc(), firstItem)) {
       return false;
     }
   }
@@ -1863,73 +2053,135 @@ bool ComponentInstance::resolveBuiltin(JSContext* cx, const ComponentName& name,
   return true;
 }
 
-bool ComponentInstance::readImport(JSContext* cx, HandleObject importObj,
+bool ComponentInstance::readImport(JSContext* cx, ComponentImportScope& scope,
                                    const ComponentName& name,
                                    const ComponentExternDesc& desc,
-                                   uint32_t firstItem, bool resolveBuiltins) {
+                                   uint32_t firstItem) {
   using Attr = ComponentNameAttribute;
   ComponentNameAttributes attrs = name.attributes;
 
+  // Type imports are only read if they declare a new resource type, which is
+  // read from a constructor.
+  mozilla::Maybe<uint32_t> resourceType;
   if (desc.sort() == ComponentSort::Type) {
-    ComponentTypeKind kind = desc.asType().kind();
-    if (kind != ComponentTypeKind::Resource &&
-        kind != ComponentTypeKind::SubResource) {
+    ComponentType type = desc.asType();
+    if (type.kind() != ComponentTypeKind::SubResource) {
       return true;
     }
-    JS_ReportErrorASCII(cx, "resource type imports are not supported yet");
-    return false;
-  }
-  if (attrs.contains(Attr::Constructor) || attrs.contains(Attr::Method) ||
-      attrs.contains(Attr::Static)) {
-    JS_ReportErrorASCII(cx, "resource function imports are not supported yet");
-    return false;
+    resourceType.emplace(component_->resourceTypeIndex(type));
+    if (!scope.resourceTypes.emplaceBack(name.name.utf8Bytes(),
+                                         *resourceType)) {
+      ReportOutOfMemory(cx);
+      return false;
+    }
+    if (hostResourceCtors_[*resourceType]) {
+      return true;
+    }
   }
 
-  Rooted<JSAtom*> jsName(cx, ComponentJSName(cx, name, /*isType=*/false));
+  Rooted<JSAtom*> jsName(
+      cx, ComponentJSName(cx, name, desc.sort() == ComponentSort::Type));
   if (!jsName) {
     return false;
   }
   RootedId nameId(cx, AtomToId(jsName));
 
+  // Functions of a host resource are read from its constructor, rather than
+  // the object of the scope.
+  enum class CallKind { Call, CallWithFirstArgAsReceiver, Construct };
+  CallKind callKind = CallKind::Call;
   RootedValue value(cx);
   RootedValue receiver(cx);
+  RootedObject lookupTarget(cx, scope.object);
   bool isBuiltin = false;
-  if (resolveBuiltins && !resolveBuiltin(cx, name, &isBuiltin, &value)) {
+  if (scope.resolveBuiltins && !resolveBuiltin(cx, name, &isBuiltin, &value)) {
     return false;
   }
-  if (!isBuiltin) {
-    if (!importObj) {
-      JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
-                               JSMSG_WASM_BAD_IMPORT_ARG);
-      return false;
+  if (isBuiltin) {
+    lookupTarget = nullptr;
+  } else if (attrs.contains(Attr::Constructor) ||
+             attrs.contains(Attr::Method) || attrs.contains(Attr::Static)) {
+    RootedObject ctor(
+        cx, hostResourceCtors_[scope.resourceType(name.resourceName())]);
+    MOZ_ASSERT(ctor);
+    if (attrs.contains(Attr::Constructor)) {
+      if (!IsConstructor(ctor)) {
+        return ReportBadImportType(cx, jsName, "constructor");
+      }
+      value.setObject(*ctor);
+      callKind = CallKind::Construct;
+      lookupTarget = nullptr;
+    } else if (attrs.contains(Attr::Static)) {
+      lookupTarget = ctor;
+      receiver.setObject(*ctor);
+    } else {
+      RootedValue proto(cx);
+      if (!GetProperty(cx, ctor, ctor, cx->names().prototype, &proto)) {
+        return false;
+      }
+      if (!proto.isObject()) {
+        return ReportBadImportType(cx, jsName, "method of a class");
+      }
+      lookupTarget = &proto.toObject();
+      callKind = CallKind::CallWithFirstArgAsReceiver;
     }
+  } else if (!scope.object) {
+    JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
+                             JSMSG_WASM_BAD_IMPORT_ARG);
+    return false;
+  } else if (attrs.contains(Attr::Get) || attrs.contains(Attr::Set)) {
+    receiver.setObject(*scope.object);
+  }
+
+  if (lookupTarget) {
     if (attrs.contains(Attr::Get) || attrs.contains(Attr::Set)) {
-      receiver.setObject(*importObj);
-      if (!FindAccessor(cx, importObj, nameId, attrs.contains(Attr::Get),
+      if (!FindAccessor(cx, lookupTarget, nameId, attrs.contains(Attr::Get),
                         &value)) {
         return false;
       }
-    } else if (!GetProperty(cx, importObj, importObj, nameId, &value)) {
+    } else if (!GetProperty(cx, lookupTarget, lookupTarget, nameId, &value)) {
       return false;
     }
   }
 
-  if (desc.sort() == ComponentSort::Instance) {
-    if (!value.isObject()) {
-      UniqueChars nameChars = AtomToPrintableString(cx, jsName);
-      if (nameChars) {
-        JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
-                                 JSMSG_WASM_BAD_IMPORT_TYPE, nameChars.get(),
-                                 "object");
-      }
+  if (resourceType) {
+    if (!IsCallable(value)) {
+      return ReportBadImportType(cx, jsName, "constructor");
+    }
+    RootedObject ctor(cx, &value.toObject());
+    hostResourceCtors_[*resourceType] = ctor;
+
+    // The disposer is captured now, and called when a resource is dropped.
+    RootedValue proto(cx);
+    if (!GetProperty(cx, ctor, ctor, cx->names().prototype, &proto)) {
       return false;
     }
+    if (proto.isObject()) {
+      RootedObject protoObj(cx, &proto.toObject());
+      RootedId disposeId(cx,
+                         PropertyKey::Symbol(cx->wellKnownSymbols().dispose));
+      RootedValue dispose(cx);
+      if (!GetProperty(cx, protoObj, protoObj, disposeId, &dispose)) {
+        return false;
+      }
+      if (IsCallable(dispose)) {
+        hostResourceDisposers_[*resourceType] = &dispose.toObject();
+      }
+    }
+    return true;
+  }
+
+  if (desc.sort() == ComponentSort::Instance) {
+    if (!value.isObject()) {
+      return ReportBadImportType(cx, jsName, "object");
+    }
     RootedObject instanceObj(cx, &value.toObject());
+    ComponentImportScope instanceScope(instanceObj,
+                                       /*resolveBuiltins=*/false);
     for (const ComponentInstanceTypeExport& exp :
          desc.asInstance().asInstance().exports()) {
-      if (!readImport(cx, instanceObj, exp.name, exp.desc,
-                      firstItem + exp.firstImportedItem,
-                      /*resolveBuiltins=*/false)) {
+      if (!readImport(cx, instanceScope, exp.name, exp.desc,
+                      firstItem + exp.firstImportedItem)) {
         return false;
       }
     }
@@ -1938,29 +2190,31 @@ bool ComponentInstance::readImport(JSContext* cx, HandleObject importObj,
 
   MOZ_RELEASE_ASSERT(desc.sort() == ComponentSort::Func);
   if (!IsCallable(value)) {
-    UniqueChars nameChars = AtomToPrintableString(cx, jsName);
-    if (nameChars) {
-      JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
-                               JSMSG_WASM_BAD_IMPORT_TYPE, nameChars.get(),
-                               "function");
-    }
-    return false;
+    return ReportBadImportType(cx, jsName, "function");
   }
 
-  // A wrapper is needed to call with a receiver, and also to prevent a wasm
-  // function from being linked directly into an adapter, which would check
-  // its type.
+  // A wrapper is needed to call with a receiver or construct, and also to
+  // prevent a wasm function from being linked directly into an adapter, which
+  // would check its type.
   RootedObject callable(cx, &value.toObject());
-  if (!receiver.isUndefined() ||
-      (callable->is<JSFunction>() && callable->as<JSFunction>().isWasm())) {
-    JSFunction* wrapper = NewNativeFunction(cx, CallWithReceiver, 0, nullptr,
-                                            gc::AllocKind::FUNCTION_EXTENDED);
-    if (!wrapper) {
+  JSNative wrapper = nullptr;
+  if (callKind == CallKind::Construct) {
+    wrapper = ConstructWithArgs;
+  } else if (callKind == CallKind::CallWithFirstArgAsReceiver) {
+    wrapper = CallWithFirstArgAsReceiver;
+  } else if (!receiver.isUndefined() || (callable->is<JSFunction>() &&
+                                         callable->as<JSFunction>().isWasm())) {
+    wrapper = CallWithReceiver;
+  }
+  if (wrapper) {
+    JSFunction* wrapperFunc = NewNativeFunction(
+        cx, wrapper, 0, nullptr, gc::AllocKind::FUNCTION_EXTENDED);
+    if (!wrapperFunc) {
       return false;
     }
-    wrapper->initExtendedSlot(0, value);
-    wrapper->initExtendedSlot(1, receiver);
-    callable = wrapper;
+    wrapperFunc->initExtendedSlot(0, value);
+    wrapperFunc->initExtendedSlot(1, receiver);
+    callable = wrapperFunc;
   }
   importValues_[firstItem] = callable;
   return true;
@@ -2140,6 +2394,46 @@ bool ComponentInstance::getLoweredFunc(
   return true;
 }
 
+bool ComponentInstance::getResourceBuiltinFunc(
+    JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
+    uint32_t coreFuncIndex, const ComponentResourceBuiltin& builtin,
+    MutableHandleValue val) {
+  if (loweredFuncs_[coreFuncIndex]) {
+    val.setObject(*loweredFuncs_[coreFuncIndex]);
+    return true;
+  }
+
+  // Dropping an owned resource of a resource type defined by the component
+  // calls its destructor.
+  const ComponentType& resourceType = builtin.resourceType();
+  RootedFunction dtor(cx);
+  if (builtin.kind() == ComponentResourceBuiltin::Kind::ResourceDrop &&
+      resourceType.kind() == ComponentTypeKind::Resource) {
+    mozilla::Maybe<uint32_t> dtorIndex = resourceType.asResource().dtorIndex();
+    if (dtorIndex) {
+      RootedValue dtorValue(cx);
+      if (!getCoreItemJSValue(
+              cx, instanceObj,
+              ComponentSortIndex(ComponentSort::CoreFunction, *dtorIndex),
+              &dtorValue)) {
+        return false;
+      }
+      dtor = &dtorValue.toObject().as<JSFunction>();
+    }
+  }
+
+  RootedFunction result(cx);
+  if (!CreateResourceBuiltinFunction(
+          cx, instanceObj, builtin.kind(),
+          component_->resourceTypeIndex(resourceType),
+          component_->getTypeForCoreFunc(coreFuncIndex), dtor, &result)) {
+    return false;
+  }
+  loweredFuncs_[coreFuncIndex] = result;
+  val.setObject(*result);
+  return true;
+}
+
 bool ComponentInstance::getCoreItemJSValue(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     ComponentSortIndex sortIndex, MutableHandleValue val) {
@@ -2157,9 +2451,9 @@ bool ComponentInstance::getCoreItemJSValue(
                               val);
       }
 
-      // TODO(wasm-cm): Resource builtins just trap for now.
-      return GenerateDummyLoweredFunc(
-          cx, &component_->getTypeForCoreFunc(sortIndex.index), val);
+      return getResourceBuiltinFunc(
+          cx, instanceObj, sortIndex.index,
+          desc.payload().as<ComponentResourceBuiltin>(), val);
     }
     case ComponentItem::ItemKind::Alias: {
       MOZ_RELEASE_ASSERT(item.aliasKind() == ComponentAliasKind::CoreExport);
@@ -2239,7 +2533,8 @@ bool ComponentInstance::instantiateInlineExports(
 
 bool ComponentInstance::init(JSContext* cx,
                              Handle<WasmComponentInstanceObject*> instanceObj) {
-  if (!loweredFuncs_.resize(component_->coreFuncs().length())) {
+  if (!loweredFuncs_.resize(component_->coreFuncs().length()) ||
+      !handles_.init()) {
     ReportOutOfMemory(cx);
     return false;
   }
