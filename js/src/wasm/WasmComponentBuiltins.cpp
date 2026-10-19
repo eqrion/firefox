@@ -1249,56 +1249,125 @@ int64_t wasm::ComponentResourceDrop(Instance* instance, void* ctxRef,
   return int64_t(uint32_t(removed.rep));
 }
 
-int32_t wasm::ComponentLowerResource(Instance* instance, void* ctxRef,
-                                     void* valueRef, int32_t resourceType,
-                                     int32_t borrow) {
-  MOZ_ASSERT(SASigComponentLowerResource.failureMode ==
-             FailureMode::FailOnNegI32);
+// The JS-API's brand check of a host resource value against the constructor of
+// its resource type.
+static bool HostResourceBrandCheck(JSContext* cx, HandleObject ctor,
+                                   HandleValue value, bool* isInstance) {
+  if (IsComponentGuestResourceClass(ctor)) {
+    *isInstance =
+        value.isObject() &&
+        value.toObject().is<WasmComponentResourceObject>() &&
+        &value.toObject().as<WasmComponentResourceObject>().resourceClass() ==
+            ctor;
+    return true;
+  }
+  return InstanceofOperator(cx, ctor, value, isInstance);
+}
+
+// Adds an owned handle, or a handle borrowed for the current call, to the
+// component instance's table for ComponentLowerResource, returning its index.
+static int32_t AddResourceHandle(Instance* instance,
+                                 ComponentInstance& componentInstance,
+                                 ComponentResourceHandle&& handle) {
   JSContext* cx = instance->cx();
-  RootedObject ctx(cx, &AnyRef::fromCompiledCode(ctxRef).toJSObject());
-  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
-  ComponentInstance& componentInstance = InstanceFromCtx(ctx);
-
-  RootedObject ctor(cx, componentInstance.hostResourceCtor(resourceType));
-  if (!ctor) {
-    JS_ReportErrorASCII(cx, "guest resources are not supported yet");
-    return -1;
-  }
-  bool isInstance;
-  if (!InstanceofOperator(cx, ctor, value, &isInstance)) {
-    return -1;
-  }
-  if (!isInstance) {
-    JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
-                             JSMSG_WASM_COMPONENT_BAD_RESOURCE);
-    return -1;
-  }
-
-  ComponentResourceHandle handle;
-  handle.resourceType = uint32_t(resourceType);
-  handle.own = !borrow;
-  handle.hostValue = value;
+  bool borrow = !handle.own;
+  size_t depth = componentInstance.callScopeDepth();
   if (borrow) {
-    MOZ_ASSERT(componentInstance.callScopeDepth() > 0);
-    handle.borrowScope = componentInstance.callScopeDepth() - 1;
+    MOZ_ASSERT(depth > 0);
+    handle.borrowScope = depth - 1;
   }
   uint32_t index;
   if (!componentInstance.handles().add(std::move(handle), &index)) {
     ReportOutOfMemory(cx);
-    return -1;
+    return instance->failBuiltin<int32_t>();
   }
   if (index == 0) {
     ReportTrapError(cx, JSMSG_WASM_COMPONENT_TABLE_FULL);
-    return -1;
+    return instance->failBuiltin<int32_t>();
   }
   if (borrow) {
-    componentInstance.callScope(componentInstance.callScopeDepth() - 1)
-        .numBorrows++;
+    componentInstance.callScope(depth - 1).numBorrows++;
   }
 
   // Modifying the handle table enters the guest.
   componentInstance.setEnteredGuest(true);
   return int32_t(index);
+}
+
+int32_t wasm::ComponentLowerResource(Instance* instance, void* ctxRef,
+                                     void* valueRef, int32_t resourceType,
+                                     int32_t borrow) {
+  MOZ_ASSERT(SASigComponentLowerResource.failureMode ==
+             FailureMode::FailOnInstanceFlag);
+  JSContext* cx = instance->cx();
+  RootedObject ctx(cx, &AnyRef::fromCompiledCode(ctxRef).toJSObject());
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  ComponentInstance& componentInstance = InstanceFromCtx(ctx);
+
+  ComponentResourceHandle handle;
+  handle.resourceType = uint32_t(resourceType);
+  handle.own = !borrow;
+
+  // A resource of an imported resource type is a JS object that passes the
+  // brand check of its constructor, and is not consumed.
+  RootedObject ctor(cx, componentInstance.hostResourceCtor(resourceType));
+  if (ctor) {
+    bool isInstance;
+    if (!HostResourceBrandCheck(cx, ctor, value, &isInstance)) {
+      return instance->failBuiltin<int32_t>();
+    }
+    if (!isInstance) {
+      JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
+                               JSMSG_WASM_COMPONENT_BAD_RESOURCE);
+      return instance->failBuiltin<int32_t>();
+    }
+    handle.hostValue = value;
+    return AddResourceHandle(instance, componentInstance, std::move(handle));
+  }
+
+  // A resource of a resource type defined by the component is a guest resource
+  // instance of its class.
+  JSObject* resourceClass = componentInstance.guestResourceClass(resourceType);
+  if (!value.isObject() ||
+      !value.toObject().is<WasmComponentResourceObject>() ||
+      &value.toObject().as<WasmComponentResourceObject>().resourceClass() !=
+          resourceClass) {
+    JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
+                             JSMSG_WASM_COMPONENT_BAD_RESOURCE);
+    return instance->failBuiltin<int32_t>();
+  }
+  Rooted<WasmComponentResourceObject*> resource(
+      cx, &value.toObject().as<WasmComponentResourceObject>());
+  if (!resource->hasRep()) {
+    JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
+                             JSMSG_WASM_COMPONENT_RESOURCE_DROPPED);
+    return instance->failBuiltin<int32_t>();
+  }
+
+  // A borrow of a resource type defined by the component is its rep, and the
+  // instance is lent to the current call.
+  if (borrow) {
+    MOZ_ASSERT(componentInstance.callScopeDepth() > 0);
+    ComponentCallScope& scope =
+        componentInstance.callScope(componentInstance.callScopeDepth() - 1);
+    if (!scope.lentObjects.append(resource)) {
+      ReportOutOfMemory(cx);
+      return instance->failBuiltin<int32_t>();
+    }
+    resource->setLendCount(resource->lendCount() + 1);
+    return resource->rep();
+  }
+
+  // An own takes the rep.
+  if (resource->lendCount() != 0) {
+    JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
+                             JSMSG_WASM_COMPONENT_RESOURCE_LENT);
+    return instance->failBuiltin<int32_t>();
+  }
+  handle.rep = resource->rep();
+  resource->clearRep();
+  componentInstance.unregisterGuestResource(cx, resourceType, resource);
+  return AddResourceHandle(instance, componentInstance, std::move(handle));
 }
 
 void* wasm::ComponentLiftResource(Instance* instance, void* ctxRef,
@@ -1309,16 +1378,18 @@ void* wasm::ComponentLiftResource(Instance* instance, void* ctxRef,
   JSContext* cx = instance->cx();
   RootedObject ctx(cx, &AnyRef::fromCompiledCode(ctxRef).toJSObject());
   ComponentInstance& componentInstance = InstanceFromCtx(ctx);
-  if (!componentInstance.hostResourceCtor(resourceType)) {
-    JS_ReportErrorASCII(cx, "guest resources are not supported yet");
-    return AnyRef::invalid().forCompiledCode();
-  }
 
   ComponentResourceHandle* h =
       GetResourceHandle(cx, componentInstance, handle, resourceType);
   if (!h) {
     return AnyRef::invalid().forCompiledCode();
   }
+
+  // An imported function can't take a borrow of a resource type defined by the
+  // component, and an exported function can't return one.
+  bool isHost = componentInstance.hostResourceCtor(resourceType);
+  MOZ_RELEASE_ASSERT(isHost || !borrow);
+
   RootedValue value(cx, h->hostValue);
   if (borrow) {
     MOZ_ASSERT(componentInstance.callScopeDepth() > 0);
@@ -1329,17 +1400,42 @@ void* wasm::ComponentLiftResource(Instance* instance, void* ctxRef,
       return AnyRef::invalid().forCompiledCode();
     }
     h->numLends++;
-  } else {
-    if (h->numLends != 0) {
-      ReportTrapError(cx, JSMSG_WASM_COMPONENT_HANDLE_LENT);
+    return ExternRefForCompiledCode(cx, value);
+  }
+
+  if (h->numLends != 0) {
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_HANDLE_LENT);
+    return AnyRef::invalid().forCompiledCode();
+  }
+  if (!h->own) {
+    ReportTrapError(cx, JSMSG_WASM_COMPONENT_NOT_OWNED);
+    return AnyRef::invalid().forCompiledCode();
+  }
+  ComponentResourceHandle removed;
+  componentInstance.handles().remove(uint32_t(handle), &removed);
+
+  // An own of a resource type defined by the component is a new guest resource
+  // instance of its class.
+  if (!isHost) {
+    RootedObject resourceClass(
+        cx, componentInstance.guestResourceClass(resourceType));
+    if (!resourceClass) {
+      JS_ReportErrorASCII(
+          cx,
+          "resources of resource types that are not exported are not "
+          "supported yet");
       return AnyRef::invalid().forCompiledCode();
     }
-    if (!h->own) {
-      ReportTrapError(cx, JSMSG_WASM_COMPONENT_NOT_OWNED);
+    RootedObject proto(cx,
+                       componentInstance.guestResourcePrototype(resourceType));
+    Rooted<WasmComponentResourceObject*> resource(
+        cx, WasmComponentResourceObject::create(cx, resourceClass, proto,
+                                                removed.rep));
+    if (!resource ||
+        !componentInstance.registerGuestResource(cx, resourceType, resource)) {
       return AnyRef::invalid().forCompiledCode();
     }
-    ComponentResourceHandle removed;
-    componentInstance.handles().remove(uint32_t(handle), &removed);
+    value.setObject(*resource);
   }
   return ExternRefForCompiledCode(cx, value);
 }

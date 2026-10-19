@@ -78,11 +78,12 @@ struct MOZ_STACK_CLASS CanonOptValues {
       : memory(cx), realloc(cx), postReturn(cx) {}
 };
 
-// Creates the JS function for a component function lifted from `callee`.
+// Creates the JS function for a component function lifted from `callee`. If
+// `takesSelf`, the function's receiver is its first parameter.
 [[nodiscard]] bool CreateLiftedFunction(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     const ComponentFuncType& funcType, HandleFunction callee,
-    const CanonOptValues& opts, Handle<JSAtom*> name,
+    const CanonOptValues& opts, Handle<JSAtom*> name, bool takesSelf,
     MutableHandleFunction result);
 
 // Creates the core function for a component function lowered from `host`, a

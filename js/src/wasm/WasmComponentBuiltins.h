@@ -198,8 +198,9 @@ int64_t ComponentResourceDrop(Instance* instance, void* ctxRef, int32_t handle,
                               int32_t resourceType);
 
 // ToComponentValue for an own or borrow of the resource type at index
-// `resourceType` of Component::resourceTypes(), returning its handle in the
-// instance's table.
+// `resourceType` of Component::resourceTypes(). Returns its handle in the
+// instance's table, or for a borrow of a resource type defined by the
+// component, its rep.
 int32_t ComponentLowerResource(Instance* instance, void* ctxRef, void* valueRef,
                                int32_t resourceType, int32_t borrow);
 // ToJSValue for an own or borrow of the resource type at index `resourceType`,

@@ -2631,6 +2631,25 @@ const JSClass WasmComponentInstanceObject::class_ = {
 
 const JSClass& WasmComponentInstanceObject::protoClass_ = PlainObject::class_;
 
+const JSClass WasmComponentResourceObject::class_ = {
+    "ComponentResource",
+    JSCLASS_HAS_RESERVED_SLOTS(WasmComponentResourceObject::RESERVED_SLOTS),
+};
+
+/* static */
+WasmComponentResourceObject* WasmComponentResourceObject::create(
+    JSContext* cx, HandleObject resourceClass, HandleObject proto,
+    int32_t rep) {
+  auto* obj = NewObjectWithGivenProto<WasmComponentResourceObject>(cx, proto);
+  if (!obj) {
+    return nullptr;
+  }
+  obj->initReservedSlot(CLASS_SLOT, ObjectValue(*resourceClass));
+  obj->initReservedSlot(REP_SLOT, Int32Value(rep));
+  obj->initReservedSlot(LEND_COUNT_SLOT, Int32Value(0));
+  return obj;
+}
+
 static constexpr char WasmComponentInstanceName[] = "ComponentInstance";
 
 const ClassSpec WasmComponentInstanceObject::classSpec_ = {

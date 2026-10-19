@@ -811,47 +811,9 @@ static bool IsIntegerKind(ComponentTypeKind kind) {
 }
 #  endif
 
-// Whether a value of `type` can contain a borrow.
-static bool ContainsBorrow(const ComponentType& type) {
-  auto containsBorrow = [](const mozilla::Maybe<ComponentType>& t) {
-    return t && ContainsBorrow(*t);
-  };
-  switch (type.kind()) {
-    case ComponentTypeKind::Borrow:
-      return true;
-    case ComponentTypeKind::List:
-      return ContainsBorrow(type.asList());
-    case ComponentTypeKind::FixedList:
-      return ContainsBorrow(type.asFixedList().elemType);
-    case ComponentTypeKind::Map:
-      return ContainsBorrow(type.asMap().keyType) ||
-             ContainsBorrow(type.asMap().valueType);
-    case ComponentTypeKind::Tuple:
-      return std::any_of(
-          type.asTuple().begin(), type.asTuple().end(),
-          [](const ComponentType& t) { return ContainsBorrow(t); });
-    case ComponentTypeKind::Record:
-      return std::any_of(
-          type.asRecord().begin(), type.asRecord().end(),
-          [](const ComponentRecordField& f) { return ContainsBorrow(f.type); });
-    case ComponentTypeKind::Variant:
-      return std::any_of(type.asVariant().begin(), type.asVariant().end(),
-                         [&](const ComponentVariantCase& c) {
-                           return containsBorrow(c.type);
-                         });
-    case ComponentTypeKind::Option:
-      return ContainsBorrow(type.asOption());
-    case ComponentTypeKind::Result:
-      return containsBorrow(type.asResult().type) ||
-             containsBorrow(type.asResult().errorType);
-    default:
-      return false;
-  }
-}
-
 static bool ParamsContainBorrow(const ComponentFuncType& funcType) {
   return std::any_of(funcType.paramTypes.begin(), funcType.paramTypes.end(),
-                     [](const ComponentType& t) { return ContainsBorrow(t); });
+                     [](const ComponentType& t) { return t.containsBorrow(); });
 }
 
 // The index of the resource type of an own or borrow.
@@ -2710,7 +2672,9 @@ bool LiftLowerBuilder::emitLowerAdapter(const ComponentFuncType& funcType,
 enum LiftedFunctionSlots {
   LiftedFunctionSlot_Adapter,
   LiftedFunctionSlot_Instance,
-  LiftedFunctionSlot_NumParams,
+  // The number of parameters, shifted left by one, and whether the function
+  // takes its first parameter as its receiver, in the low bit.
+  LiftedFunctionSlot_Params,
 };
 
 static bool IsPendingTrap(JSContext* cx) {
@@ -2750,8 +2714,10 @@ static bool CallLiftedFunction(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
   JSFunction& callee = args.callee().as<JSFunction>();
 
-  uint32_t numParams =
-      callee.getExtendedSlot(LiftedFunctionSlot_NumParams).toInt32();
+  uint32_t params = callee.getExtendedSlot(LiftedFunctionSlot_Params).toInt32();
+  uint32_t numParams = params >> 1;
+  bool takesSelf = params & 1;
+  uint32_t numArgs = numParams - takesSelf;
 
   ComponentInstance& instance =
       callee.getExtendedSlot(LiftedFunctionSlot_Instance)
@@ -2768,8 +2734,11 @@ static bool CallLiftedFunction(JSContext* cx, unsigned argc, Value* vp) {
   if (!adapterArgs.init(cx, numParams)) {
     return false;
   }
-  for (uint32_t i = 0; i < numParams; i++) {
-    adapterArgs[i].set(args.get(i));
+  if (takesSelf) {
+    adapterArgs[0].set(args.thisv());
+  }
+  for (uint32_t i = 0; i < numArgs; i++) {
+    adapterArgs[takesSelf + i].set(args.get(i));
   }
 
   // A call that fails after entering the guest locks down the instance, even
@@ -2807,7 +2776,7 @@ static bool CallLiftedFunction(JSContext* cx, unsigned argc, Value* vp) {
 bool wasm::CreateLiftedFunction(
     JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
     const ComponentFuncType& funcType, HandleFunction callee,
-    const CanonOptValues& opts, Handle<JSAtom*> name,
+    const CanonOptValues& opts, Handle<JSAtom*> name, bool takesSelf,
     MutableHandleFunction result) {
   RootedFunction adapter(cx);
   if (!GenerateLiftAdapter(cx, instanceObj, funcType, callee, opts, &adapter)) {
@@ -2815,16 +2784,17 @@ bool wasm::CreateLiftedFunction(
   }
 
   uint32_t numParams = funcType.paramTypes.length();
-  result.set(NewNativeFunction(cx, CallLiftedFunction, numParams, name,
-                               gc::AllocKind::FUNCTION_EXTENDED));
+  MOZ_ASSERT_IF(takesSelf, numParams > 0);
+  result.set(NewNativeFunction(cx, CallLiftedFunction, numParams - takesSelf,
+                               name, gc::AllocKind::FUNCTION_EXTENDED));
   if (!result) {
     return false;
   }
   result->initExtendedSlot(LiftedFunctionSlot_Adapter, ObjectValue(*adapter));
   result->initExtendedSlot(LiftedFunctionSlot_Instance,
                            ObjectValue(*instanceObj));
-  result->initExtendedSlot(LiftedFunctionSlot_NumParams,
-                           Int32Value(int32_t(numParams)));
+  result->initExtendedSlot(LiftedFunctionSlot_Params,
+                           Int32Value(int32_t(numParams << 1 | takesSelf)));
   return true;
 }
 

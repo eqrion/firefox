@@ -1224,7 +1224,7 @@
     - 'i32'
     - 'i32'
   result: 'i32'
-  fail_mode: FailOnNegI32
+  fail_mode: FailOnInstanceFlag
   uses_memory: false
 
 - op: ComponentLiftResource

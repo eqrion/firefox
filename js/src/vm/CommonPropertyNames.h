@@ -60,6 +60,7 @@
   MACRO_(call, "call")                                                         \
   MACRO_(callContentFunction, "callContentFunction")                           \
   MACRO_(callee, "callee")                                                     \
+  MACRO_(caller, "caller")                                                     \
   MACRO_(callFunction, "callFunction")                                         \
   MACRO_(captureStackTrace, "captureStackTrace")                               \
   MACRO_(case_, "case")                                                        \
