@@ -5106,64 +5106,63 @@ static bool IsSemverChar(uint8_t c, bool digitsOnly) {
   if (!d.readLiteral("/")) {
     return d.failf("expected projection in %s name", thing);
   }
-  if (!DecodeComponentLabel(d, thing, /*allowUppercase=*/true)) {
-    return false;
-  }
-  if (d.peekLiteral("/")) {
-    // TODO(wasm-cm): Support nested namespaces and packages.
-    return d.failf("nested projections in %s names are not supported", thing);
-  }
+  do {
+    if (!DecodeComponentLabel(d, thing, /*allowUppercase=*/true)) {
+      return false;
+    }
+  } while (d.readLiteral("/"));
   if (d.readLiteral("@") && !DecodeSemver(d, thing)) {
     return false;
   }
   return true;
 }
 
-// Decodes a `plainname`, and its attributes. `attributesLength` is the length
-// of the attributes prefix, and `resourceNameLength` is the length of the
-// resource name for [constructor], [method], and [static] names.
+// Decodes a `plainname`, and its annotations. `annotationsLength` is the
+// length of the annotations prefix, and `resourceNameLength` is the length of
+// the resource name for [constructor], [method], and [static] names.
 [[nodiscard]] static bool DecodeComponentPlainName(
-    Decoder& d, const char* thing, ComponentNameAttributes* attrs,
-    uint8_t* attributesLength, uint32_t* resourceNameLength) {
-  using Attr = ComponentNameAttribute;
+    Decoder& d, const char* thing, ComponentNameAnnotations* annots,
+    uint8_t* annotationsLength, uint32_t* resourceNameLength) {
+  using Annot = ComponentNameAnnotation;
 
-  const uint8_t* beforeAttributes = d.currentPosition();
+  const uint8_t* beforeAnnotations = d.currentPosition();
 
   // [constructor]/[method]/[static] must come first and are mutually
   // exclusive
   if (d.readLiteral("[constructor]")) {
-    *attrs += Attr::Constructor;
+    *annots += Annot::Constructor;
   } else if (d.readLiteral("[method]")) {
-    *attrs += Attr::Method;
+    *annots += Annot::Method;
   } else if (d.readLiteral("[static]")) {
-    *attrs += Attr::Static;
+    *annots += Annot::Static;
   }
 
   // Then we can see [get] or [set]
   if (d.readLiteral("[get]")) {
-    *attrs += Attr::Get;
+    *annots += Annot::Get;
   } else if (d.readLiteral("[set]")) {
-    *attrs += Attr::Set;
+    *annots += Annot::Set;
   }
 
-  const uint8_t* afterAttributes = d.currentPosition();
-  MOZ_ASSERT(afterAttributes - beforeAttributes <=
+  const uint8_t* afterAnnotations = d.currentPosition();
+  MOZ_ASSERT(afterAnnotations - beforeAnnotations <=
              std::numeric_limits<uint8_t>::max());
-  *attributesLength = afterAttributes - beforeAttributes;
+  *annotationsLength = afterAnnotations - beforeAnnotations;
 
-  if (attrs->contains(Attr::Constructor)) {
-    if (attrs->contains(Attr::Get) || attrs->contains(Attr::Set)) {
+  if (annots->contains(Annot::Constructor)) {
+    if (annots->contains(Annot::Get) || annots->contains(Annot::Set)) {
       return d.fail("cannot use [get] or [set] with [constructor]");
     }
     if (!DecodeComponentLabel(d, thing, /*allowUppercase=*/true)) {
       return false;
     }
-    *resourceNameLength = d.currentPosition() - afterAttributes;
-  } else if (attrs->contains(Attr::Method) || attrs->contains(Attr::Static)) {
+    *resourceNameLength = d.currentPosition() - afterAnnotations;
+  } else if (annots->contains(Annot::Method) ||
+             annots->contains(Annot::Static)) {
     if (!DecodeComponentLabel(d, thing, /*allowUppercase=*/true)) {
       return false;
     }
-    *resourceNameLength = d.currentPosition() - afterAttributes;
+    *resourceNameLength = d.currentPosition() - afterAnnotations;
     if (d.done()) {
       return d.failf("%s name ended unexpectedly", thing);
     } else if (!d.readLiteral(".")) {
@@ -5197,8 +5196,8 @@ static bool IsSemverChar(uint8_t c, bool digitsOnly) {
     return d.fail("over-long name");
   }
 
-  ComponentNameAttributes attrs;
-  uint8_t attributesLength = 0;
+  ComponentNameAnnotations annots;
+  uint8_t annotationsLength = 0;
   uint32_t resourceNameLength = 0;
   Decoder nameDecoder(d.currentPosition(), d.currentPosition() + len,
                       d.currentOffset(), d.error(), d.warnings());
@@ -5238,7 +5237,7 @@ static bool IsSemverChar(uint8_t c, bool digitsOnly) {
     }
     if (isInterfaceName
             ? !DecodeComponentInterfaceName(d, thing)
-            : !DecodeComponentPlainName(d, thing, &attrs, &attributesLength,
+            : !DecodeComponentPlainName(d, thing, &annots, &annotationsLength,
                                         &resourceNameLength)) {
       return false;
     }
@@ -5252,21 +5251,20 @@ static bool IsSemverChar(uint8_t c, bool digitsOnly) {
   if (!d.readUTF8Bytes(len, &utf8Bytes)) {
     MOZ_CRASH("full name should have been decoded earlier");
   }
-  *name = ComponentName(std::move(utf8Bytes), attrs, attributesLength,
+  *name = ComponentName(std::move(utf8Bytes), annots, annotationsLength,
                         resourceNameLength);
 
   return true;
 }
 
-[[nodiscard]] static bool DecodeComponentNameNoAttributes(Decoder& d,
-                                                          const char* thing,
-                                                          CacheableName* name) {
+[[nodiscard]] static bool DecodeComponentNameNoAnnotations(
+    Decoder& d, const char* thing, CacheableName* name) {
   ComponentName nameEx;
   if (!DecodeComponentName(d, thing, &nameEx, /*allowInterfaceName=*/false)) {
     return false;
   }
-  if (!nameEx.attributes.isEmpty()) {
-    return d.failf("attributes are not allowed in %s names", thing);
+  if (!nameEx.annotations.isEmpty()) {
+    return d.failf("annotations are not allowed in %s names", thing);
   }
 
   *name = std::move(nameEx.name);
@@ -5279,31 +5277,69 @@ enum class ComponentExternNameFlagsRaw : uint8_t {
   // eventually.
   Plain1 = 0x00,
   Plain2 = 0x01,
-  VersionSuffix = 0x02,
+  HasAttributes = 0x02,
 };
 
-// Decodes the name of an import or export (`importname'` or `exportname'`),
-// where `thing` is "import" or "export".
-[[nodiscard]] static bool DecodeComponentExternName(Decoder& d,
-                                                    const char* thing,
-                                                    ComponentName* name) {
+enum class ComponentNameAttributeRaw : uint8_t {
+  InterfaceName = 0x00,
+  VersionSuffix = 0x01,
+  ExternalID = 0x02,
+};
+
+// Decodes the name of an import or export, with optional attributes.
+// Corresponds to `nameattributes` in the component grammar.
+[[nodiscard]] static bool DecodeComponentImportOrExportName(
+    Decoder& d, const char* thing, ComponentName* name) {
   uint8_t flags;
   if (!d.readFixedU8(&flags)) {
     return d.failf("expected %s flags", thing);
   }
 
+  bool hasAttributes = false;
   switch (flags) {
     case uint8_t(ComponentExternNameFlagsRaw::Plain1):
     case uint8_t(ComponentExternNameFlagsRaw::Plain2):
       break;
-    case uint8_t(ComponentExternNameFlagsRaw::VersionSuffix):
-      // TODO(wasm-cm): Support semver?
-      return d.failf("version suffixes on %ss are not allowed", thing);
+    case uint8_t(ComponentExternNameFlagsRaw::HasAttributes): {
+      hasAttributes = true;
+    } break;
     default:
       return d.failf("invalid %s flags %#x", thing, flags);
   }
 
-  return DecodeComponentName(d, thing, name, /*allowInterfaceName=*/true);
+  if (!DecodeComponentName(d, thing, name, /*allowInterfaceName=*/true)) {
+    return false;
+  }
+
+  if (hasAttributes) {
+    uint32_t numAttributes;
+    if (!d.readVarU32(&numAttributes)) {
+      return d.failf("expected attribute count for %s name", thing);
+    }
+    for (uint32_t i = 0; i < numAttributes; i++) {
+      uint8_t attributeTypeRaw;
+      if (!d.readFixedU8(&attributeTypeRaw)) {
+        return d.failf("expected attribute for %s name", thing);
+      }
+      switch (attributeTypeRaw) {
+        case uint8_t(ComponentNameAttributeRaw::ExternalID): {
+          if (name->externalID.isSome()) {
+            return d.failf("duplicate external-id for %s name", thing);
+          }
+          CacheableName externalID;
+          if (!DecodeName(d, &externalID)) {
+            return d.failf("expected external-id for %s", thing);
+          }
+          name->externalID.emplace(std::move(externalID));
+        } break;
+        default:
+          return d.failf("unknown %s name attribute 0x%02x", thing,
+                         attributeTypeRaw);
+      }
+    }
+  }
+
+  return true;
 }
 
 // The type index space that types are decoded in. This is a component's, or
@@ -5475,7 +5511,7 @@ enum class ComponentTypeKindRaw : uint8_t {
 
       for (uint32_t i = 0; i < numFields; i++) {
         CacheableName name;
-        if (!DecodeComponentNameNoAttributes(d, "record field", &name)) {
+        if (!DecodeComponentNameNoAnnotations(d, "record field", &name)) {
           return false;
         }
         ComponentType type;
@@ -5524,7 +5560,7 @@ enum class ComponentTypeKindRaw : uint8_t {
       for (uint32_t i = 0; i < numCases; i++) {
         CacheableName name;
         bool duplicate;
-        if (!DecodeComponentNameNoAttributes(d, "variant case", &name)) {
+        if (!DecodeComponentNameNoAnnotations(d, "variant case", &name)) {
           return false;
         }
         if (!caseNameDedup.add(name.utf8Bytes(), &duplicate)) {
@@ -5663,7 +5699,7 @@ enum class ComponentTypeKindRaw : uint8_t {
       }
       for (uint32_t i = 0; i < numLabels; i++) {
         CacheableName name;
-        if (!DecodeComponentNameNoAttributes(d, "flag label", &name)) {
+        if (!DecodeComponentNameNoAnnotations(d, "flag label", &name)) {
           return false;
         }
         bool duplicate;
@@ -5702,7 +5738,7 @@ enum class ComponentTypeKindRaw : uint8_t {
       }
       for (uint32_t i = 0; i < numCases; i++) {
         CacheableName name;
-        if (!DecodeComponentNameNoAttributes(d, "enum case", &name)) {
+        if (!DecodeComponentNameNoAnnotations(d, "enum case", &name)) {
           return false;
         }
         bool duplicate;
@@ -5811,7 +5847,7 @@ enum class ComponentTypeKindRaw : uint8_t {
 
       for (uint32_t i = 0; i < numParams; i++) {
         CacheableName name;
-        if (!DecodeComponentNameNoAttributes(d, "param", &name)) {
+        if (!DecodeComponentNameNoAnnotations(d, "param", &name)) {
           return false;
         }
         ComponentType type;
@@ -6128,9 +6164,9 @@ static bool ValidateResourceFuncs(Decoder& d, const ComponentName& name,
                                   const ComponentFuncType& funcType,
                                   const HasFunc& hasItemWithName,
                                   const GetFunc& getItemByName) {
-  if (!name.attributes.contains(ComponentNameAttribute::Constructor) &&
-      !name.attributes.contains(ComponentNameAttribute::Method) &&
-      !name.attributes.contains(ComponentNameAttribute::Static)) {
+  if (!name.annotations.contains(ComponentNameAnnotation::Constructor) &&
+      !name.annotations.contains(ComponentNameAnnotation::Method) &&
+      !name.annotations.contains(ComponentNameAnnotation::Static)) {
     return true;
   }
 
@@ -6154,7 +6190,7 @@ static bool ValidateResourceFuncs(Decoder& d, const ComponentName& name,
   }
   MOZ_ASSERT(resourceType.isValid());
 
-  if (name.attributes.contains(ComponentNameAttribute::Constructor)) {
+  if (name.annotations.contains(ComponentNameAnnotation::Constructor)) {
     bool resultOk = false;
     if (funcType.resultType.isSome()) {
       bool isOwn = funcType.resultType->kind() == ComponentTypeKind::Own &&
@@ -6174,7 +6210,7 @@ static bool ValidateResourceFuncs(Decoder& d, const ComponentName& name,
                      ComponentName_Printf(name.name),
                      ComponentNameSpan_Printf(resourceName));
     }
-  } else if (name.attributes.contains(ComponentNameAttribute::Method)) {
+  } else if (name.annotations.contains(ComponentNameAnnotation::Method)) {
     if (funcType.paramTypes.length() == 0 ||
         funcType.paramNames[0].utf8Bytes() !=
             mozilla::Span<const char>("self", strlen("self")) ||
@@ -6198,8 +6234,8 @@ static bool ValidateAccessors(Decoder& d, const ComponentName& name,
                               const ComponentFuncType& funcType,
                               const HasFunc& hasItemWithName,
                               const GetFunc& getItemByName) {
-  bool isMethod = name.attributes.contains(ComponentNameAttribute::Method);
-  if (name.attributes.contains(ComponentNameAttribute::Get)) {
+  bool isMethod = name.annotations.contains(ComponentNameAnnotation::Method);
+  if (name.annotations.contains(ComponentNameAnnotation::Get)) {
     // [get] must have no parameters (except "self" for [method])
     if (funcType.paramTypes.length() != (isMethod ? 1 : 0)) {
       return d.failf("getter \"%.*s\" must have no parameters%s",
@@ -6214,7 +6250,7 @@ static bool ValidateAccessors(Decoder& d, const ComponentName& name,
       return d.failf("getter \"%.*s\" must return a value",
                      ComponentName_Printf(name.name));
     }
-  } else if (name.attributes.contains(ComponentNameAttribute::Set)) {
+  } else if (name.annotations.contains(ComponentNameAnnotation::Set)) {
     // [set] must be preceded by a matching getter
     CacheableName getterName;
     if (!name.getterForSetter(&getterName)) {
@@ -6265,7 +6301,7 @@ static bool ValidateComponentNameAnnotations(
     Decoder& d, const ComponentName& name,
     const ComponentExternDesc& externDesc, const HasFunc& hasItemWithName,
     const GetFunc& getItemByName) {
-  if (name.attributes.isEmpty()) {
+  if (name.annotations.isEmpty()) {
     return true;
   }
 
@@ -6377,7 +6413,7 @@ enum class AliasKindRaw : uint8_t {
           return d.failf("too many exports (max %d)", MaxComponentExports);
         }
         ComponentName name;
-        if (!DecodeComponentExternName(d, "export", &name)) {
+        if (!DecodeComponentImportOrExportName(d, "export", &name)) {
           return false;
         }
         ComponentExternDesc desc;
@@ -7311,7 +7347,7 @@ enum class CanonDefKindRaw : uint8_t {
 static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
                                   StronglyUniqueNameSet& nameDedup) {
   ComponentName importName;
-  if (!DecodeComponentExternName(d, "import", &importName)) {
+  if (!DecodeComponentImportOrExportName(d, "import", &importName)) {
     return false;
   }
 
@@ -7359,7 +7395,7 @@ static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
 [[nodiscard]] static bool DecodeComponentExport(
     Decoder& d, MutableComponent& c, StronglyUniqueNameSet& nameDedup) {
   ComponentName exportName;
-  if (!DecodeComponentExternName(d, "export", &exportName)) {
+  if (!DecodeComponentImportOrExportName(d, "export", &exportName)) {
     return false;
   }
 

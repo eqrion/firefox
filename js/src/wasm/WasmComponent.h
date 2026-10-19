@@ -374,14 +374,14 @@ class ComponentResourceType {
   mozilla::Maybe<uint32_t> dtorIndex() const { return dtorIndex_; }
 };
 
-enum class ComponentNameAttribute : uint8_t {
+enum class ComponentNameAnnotation : uint8_t {
   Constructor,
   Method,
   Static,
   Get,
   Set,
 };
-using ComponentNameAttributes = mozilla::EnumSet<ComponentNameAttribute>;
+using ComponentNameAnnotations = mozilla::EnumSet<ComponentNameAnnotation>;
 
 // Takes a valid component-model name and creates a "canonical" version of it
 // that can be used to check strong uniqueness.
@@ -393,27 +393,28 @@ using ComponentNameAttributes = mozilla::EnumSet<ComponentNameAttribute>;
 // CacheableName for that purpose.
 struct ComponentName {
   CacheableName name;
-  ComponentNameAttributes attributes;
+  mozilla::Maybe<CacheableName> externalID;
+  ComponentNameAnnotations annotations;
 
-  uint8_t attributesLength;
+  uint8_t annotationsLength;
   uint32_t resourceNameLength;
 
   explicit ComponentName() = default;
   explicit ComponentName(CacheableName&& name,
-                         ComponentNameAttributes attributes,
-                         uint8_t attributesLength, uint32_t resourceNameLength)
+                         ComponentNameAnnotations annotations,
+                         uint8_t annotationsLength, uint32_t resourceNameLength)
       : name(std::move(name)),
-        attributes(attributes),
-        attributesLength(attributesLength),
+        annotations(annotations),
+        annotationsLength(annotationsLength),
         resourceNameLength(resourceNameLength) {}
 
   mozilla::Span<const char> resourceName() const {
-    MOZ_ASSERT(attributes.contains(ComponentNameAttribute::Constructor) ||
-               attributes.contains(ComponentNameAttribute::Method) ||
-               attributes.contains(ComponentNameAttribute::Static));
+    MOZ_ASSERT(annotations.contains(ComponentNameAnnotation::Constructor) ||
+               annotations.contains(ComponentNameAnnotation::Method) ||
+               annotations.contains(ComponentNameAnnotation::Static));
     MOZ_ASSERT(resourceNameLength > 0);
-    return mozilla::Span<const char>(name.utf8Bytes().data() + attributesLength,
-                                     resourceNameLength);
+    return mozilla::Span<const char>(
+        name.utf8Bytes().data() + annotationsLength, resourceNameLength);
   };
   bool getterForSetter(CacheableName* out) const;
 

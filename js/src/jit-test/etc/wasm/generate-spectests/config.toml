@@ -353,6 +353,9 @@ excluded_tests = [
   # Failing: missing validation
   "^binary.wast.js",
   "^external-visibility.wast.js",
+
+  # Failing: allows nested projections (🪺), which wasm:js/global/* needs
+  "^extern-names.wast.js",
 ]
 directive = "; skip-if: !wasmComponentsEnabled(); test-also=-P wasm_components; test-also=--wasm-compiler=baseline -P wasm_components; test-also=--wasm-compiler=optimizing -P wasm_components"
 
