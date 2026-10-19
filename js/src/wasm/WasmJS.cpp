@@ -5375,7 +5375,7 @@ static bool WebAssembly_instantiate(JSContext* cx, unsigned argc, Value* vp) {
 
     FeatureOptions options;
     if (!options.init(cx, featureOptions)) {
-      return false;
+      return RejectWithPendingException(cx, promise, callArgs);
     }
 
     auto task = cx->make_unique<CompileBufferTask>(cx, promise, importObj);
