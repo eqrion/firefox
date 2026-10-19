@@ -26,6 +26,7 @@ class Instance;
 enum class AdapterTrap : int32_t {
   UncaughtException,
   ImportException,
+  BadDiscriminant,
 };
 
 // The tag on the length of a latin1+utf16 string that is stored as UTF-16.
@@ -55,6 +56,14 @@ void* ComponentCharToJS(Instance* instance, int32_t value);
 
 // Records that the current call has entered the guest.
 void ComponentEnterGuest(Instance* instance, void* ctxRef);
+
+// Records that the lifted function being called returned a `result` error,
+// with its payload as the data of the ComponentError to throw, if `hasData`.
+void ComponentSetError(Instance* instance, void* ctxRef, void* dataRef,
+                       int32_t hasData);
+
+// Gets the JS value of a caught exception, unwrapping a JS exception.
+void* ComponentExceptionValue(Instance* instance, void* exnRef);
 
 // Traps unless `count` elements of `elemSize` bytes at `ptr` are in memory,
 // and ptr is aligned.
@@ -86,6 +95,21 @@ void* ComponentGetField(Instance* instance, void* objectRef, void* nameRef);
 void* ComponentNewRecord(Instance* instance);
 int32_t ComponentDefineField(Instance* instance, void* objectRef, void* nameRef,
                              void* valueRef);
+
+// ToJSValueVariant: creates a null-prototype object with the `kind` and, if
+// `hasValue`, the `value`.
+void* ComponentNewVariant(Instance* instance, void* kindRef, void* valueRef,
+                          int32_t hasValue);
+
+// Gets the index of the case of a variant or enum, from the `kind` property or
+// the value itself. `namesRef` is an array of the cases' JS names.
+int32_t ComponentFindVariantCase(Instance* instance, void* valueRef,
+                                 void* namesRef);
+int32_t ComponentFindEnumCase(Instance* instance, void* valueRef,
+                              void* namesRef);
+
+// Whether a value is null or undefined, which is an option's `none`.
+int32_t ComponentIsNullish(Instance* instance, void* valueRef);
 
 // ToJSValue for a list of scalars of type `kind`, a ComponentTypeKind, as a
 // typed array.

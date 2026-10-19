@@ -168,6 +168,11 @@ JSAtom* wasm::ComponentLabelToJS(JSContext* cx, mozilla::Span<const char> label,
                                  ComponentJSCase jsCase) {
   MOZ_ASSERT(NameIsProbablyValid(label));
 
+  if (jsCase == ComponentJSCase::Verbatim) {
+    return AtomizeChars(cx, reinterpret_cast<const Latin1Char*>(label.data()),
+                        label.size());
+  }
+
   Vector<Latin1Char, 32> result(cx);
   if (!result.reserve(label.size())) {
     return nullptr;
@@ -890,6 +895,12 @@ static uint32_t CanonMaxCaseAlignment(const ComponentType& type) {
   return alignment;
 }
 
+uint32_t wasm::CanonVariantPayloadOffset(const ComponentType& type) {
+  size_t numCases = ForEachCaseType(type, [](const auto&) {});
+  return CanonAlignTo(CanonDiscriminantSize(numCases),
+                      CanonMaxCaseAlignment(type));
+}
+
 uint32_t wasm::CanonAlignment(const ComponentType& type) {
   switch (type.kind()) {
     case ComponentTypeKind::Bool:
@@ -954,15 +965,12 @@ uint32_t wasm::CanonElemSize(const ComponentType& type) {
     case ComponentTypeKind::Option:
     case ComponentTypeKind::Result: {
       uint32_t maxCaseSize = 0;
-      size_t numCases =
-          ForEachCaseType(type, [&](const mozilla::Maybe<ComponentType>& t) {
-            if (t) {
-              maxCaseSize = std::max(maxCaseSize, CanonElemSize(*t));
-            }
-          });
-      uint32_t size = CanonAlignTo(CanonDiscriminantSize(numCases),
-                                   CanonMaxCaseAlignment(type)) +
-                      maxCaseSize;
+      ForEachCaseType(type, [&](const mozilla::Maybe<ComponentType>& t) {
+        if (t) {
+          maxCaseSize = std::max(maxCaseSize, CanonElemSize(*t));
+        }
+      });
+      uint32_t size = CanonVariantPayloadOffset(type) + maxCaseSize;
       return CanonAlignTo(size, CanonAlignment(type));
     }
     case ComponentTypeKind::Flags:
@@ -1589,6 +1597,7 @@ void ComponentInstance::tracePrivate(JSTracer* trc) {
   coreInstanceExports_.trace(trc);
   importValues_.trace(trc);
   loweredFuncs_.trace(trc);
+  TraceEdge(trc, &pendingErrorData_, "component pending error data");
 }
 
 // The JS-API's "find an accessor".

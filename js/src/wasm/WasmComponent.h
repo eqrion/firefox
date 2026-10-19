@@ -400,6 +400,10 @@ inline uint32_t CanonAlignTo(uint32_t offset, uint32_t alignment) {
 // The size in bytes of the discriminant of a variant with `numCases` cases.
 uint32_t CanonDiscriminantSize(size_t numCases);
 
+// The offset of the payload in a variant-like type (variant, enum, option, or
+// result) in memory.
+uint32_t CanonVariantPayloadOffset(const ComponentType& type);
+
 enum class ComponentNameAttribute : uint8_t {
   Constructor,
   Method,
@@ -452,8 +456,8 @@ struct ComponentName {
 };
 
 // Converts a label to a JS identifier with the JS-API's PascalCase (for types)
-// or CamelCase (for everything else).
-enum class ComponentJSCase : uint8_t { Pascal, Camel };
+// or CamelCase (for everything else), or leaves it as is (for enum labels).
+enum class ComponentJSCase : uint8_t { Pascal, Camel, Verbatim };
 JSAtom* ComponentLabelToJS(JSContext* cx, mozilla::Span<const char> label,
                            ComponentJSCase jsCase);
 
@@ -1148,6 +1152,11 @@ class ComponentInstance {
   // calling any of its functions, after which any failure locks it down.
   bool enteredGuest_ = false;
 
+  // The data of the ComponentError that a lifted function returning a
+  // `result` error is about to throw.
+  bool hasPendingError_ = false;
+  HeapPtr<JS::Value> pendingErrorData_;
+
   // Only WasmComponentInstanceObject can call the private trace function.
   friend class js::WasmComponentInstanceObject;
   void tracePrivate(JSTracer* trc);
@@ -1202,6 +1211,21 @@ class ComponentInstance {
 
   bool enteredGuest() const { return enteredGuest_; }
   void setEnteredGuest(bool entered) { enteredGuest_ = entered; }
+
+  void setPendingError(const JS::Value& data) {
+    hasPendingError_ = true;
+    pendingErrorData_ = data;
+  }
+  // Takes the pending error's data, if there is one.
+  bool takePendingError(JS::MutableHandleValue data) {
+    if (!hasPendingError_) {
+      return false;
+    }
+    data.set(pendingErrorData_);
+    hasPendingError_ = false;
+    pendingErrorData_ = JS::UndefinedValue();
+    return true;
+  }
 
   // Gets the exports object of a core instance, or null if the index is out of
   // range.

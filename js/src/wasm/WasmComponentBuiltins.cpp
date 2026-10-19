@@ -256,6 +256,27 @@ void* wasm::ComponentCharToJS(Instance* instance, int32_t value) {
   return ExternRefForCompiledCode(cx, jsValue);
 }
 
+void wasm::ComponentSetError(Instance* instance, void* ctxRef, void* dataRef,
+                             int32_t hasData) {
+  MOZ_ASSERT(SASigComponentSetError.failureMode == FailureMode::Infallible);
+  JSContext* cx = instance->cx();
+  RootedObject ctx(cx, &AnyRef::fromCompiledCode(ctxRef).toJSObject());
+  InstanceFromCtx(ctx).setPendingError(
+      hasData ? AnyRef::fromCompiledCode(dataRef).toJSValue()
+              : UndefinedValue());
+}
+
+void* wasm::ComponentExceptionValue(Instance* instance, void* exnRef) {
+  MOZ_ASSERT(SASigComponentExceptionValue.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedValue value(cx, AnyRef::fromCompiledCode(exnRef)
+                            .toJSObject()
+                            .as<WasmExceptionObject>()
+                            .toJSValue());
+  return ExternRefForCompiledCode(cx, value);
+}
+
 void wasm::ComponentEnterGuest(Instance* instance, void* ctxRef) {
   MOZ_ASSERT(SASigComponentEnterGuest.failureMode == FailureMode::Infallible);
   JSContext* cx = instance->cx();
@@ -431,6 +452,85 @@ int32_t wasm::ComponentDefineField(Instance* instance, void* objectRef,
     return -1;
   }
   return 0;
+}
+
+void* wasm::ComponentNewVariant(Instance* instance, void* kindRef,
+                                void* valueRef, int32_t hasValue) {
+  MOZ_ASSERT(SASigComponentNewVariant.failureMode ==
+             FailureMode::FailOnInvalidRef);
+  JSContext* cx = instance->cx();
+  RootedValue kind(cx, AnyRef::fromCompiledCode(kindRef).toJSValue());
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  RootedObject obj(cx, NewPlainObjectWithProto(cx, nullptr));
+  if (!obj ||
+      !DefineDataProperty(cx, obj, cx->names().kind, kind, JSPROP_ENUMERATE) ||
+      (hasValue && !DefineDataProperty(cx, obj, cx->names().value, value,
+                                       JSPROP_ENUMERATE))) {
+    return AnyRef::invalid().forCompiledCode();
+  }
+  RootedValue objValue(cx, ObjectValue(*obj));
+  return ExternRefForCompiledCode(cx, objValue);
+}
+
+// Returns the index of the string in `names`, an array of atoms, or throws.
+static int32_t FindCase(JSContext* cx, HandleString str, void* namesRef) {
+  JSAtom* atom = AtomizeString(cx, str);
+  if (!atom) {
+    return -1;
+  }
+  ArrayObject& names = ArrayFromRef(namesRef);
+  for (uint32_t i = 0; i < names.length(); i++) {
+    if (names.getDenseElement(i).toString() == atom) {
+      return int32_t(i);
+    }
+  }
+  UniqueChars chars = JS_EncodeStringToUTF8(cx, str);
+  if (chars) {
+    JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
+                             JSMSG_WASM_COMPONENT_BAD_CASE, chars.get());
+  }
+  return -1;
+}
+
+int32_t wasm::ComponentFindVariantCase(Instance* instance, void* valueRef,
+                                       void* namesRef) {
+  MOZ_ASSERT(SASigComponentFindVariantCase.failureMode ==
+             FailureMode::FailOnNegI32);
+  JSContext* cx = instance->cx();
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  if (!value.isObject()) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_OBJECT_REQUIRED, "value");
+    return -1;
+  }
+  RootedObject obj(cx, &value.toObject());
+  RootedValue kind(cx);
+  if (!GetProperty(cx, obj, obj, cx->names().kind, &kind)) {
+    return -1;
+  }
+  RootedString kindString(cx, ToString(cx, kind));
+  if (!kindString) {
+    return -1;
+  }
+  return FindCase(cx, kindString, namesRef);
+}
+
+int32_t wasm::ComponentFindEnumCase(Instance* instance, void* valueRef,
+                                    void* namesRef) {
+  MOZ_ASSERT(SASigComponentFindEnumCase.failureMode ==
+             FailureMode::FailOnNegI32);
+  JSContext* cx = instance->cx();
+  RootedValue value(cx, AnyRef::fromCompiledCode(valueRef).toJSValue());
+  RootedString str(cx, ToString(cx, value));
+  if (!str) {
+    return -1;
+  }
+  return FindCase(cx, str, namesRef);
+}
+
+int32_t wasm::ComponentIsNullish(Instance* instance, void* valueRef) {
+  MOZ_ASSERT(SASigComponentIsNullish.failureMode == FailureMode::Infallible);
+  return AnyRef::fromCompiledCode(valueRef).toJSValue().isNullOrUndefined();
 }
 
 static JSObject* NewScalarArray(JSContext* cx, Scalar::Type type,
@@ -826,6 +926,9 @@ int32_t wasm::ComponentTrap(Instance* instance, int32_t reason) {
       break;
     case AdapterTrap::ImportException:
       ReportTrapError(instance->cx(), JSMSG_WASM_COMPONENT_IMPORT_EXCEPTION);
+      break;
+    case AdapterTrap::BadDiscriminant:
+      ReportTrapError(instance->cx(), JSMSG_WASM_COMPONENT_BAD_DISCRIMINANT);
       break;
   }
   return -1;

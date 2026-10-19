@@ -633,6 +633,33 @@
   fail_mode: Infallible
   uses_memory: false
 
+- op: ComponentSetError
+  symbolic_address:
+    name: ComponentSetError
+    type: Args_Void_GeneralGeneralGeneralInt32
+    needs_thunk: true
+  entry: ComponentSetError
+  export: componentSetError
+  params:
+    - 'externref'
+    - 'externref'
+    - 'i32'
+  fail_mode: Infallible
+  uses_memory: false
+
+- op: ComponentExceptionValue
+  symbolic_address:
+    name: ComponentExceptionValue
+    type: Args_General2
+    needs_thunk: true
+  entry: ComponentExceptionValue
+  export: componentExceptionValue
+  params:
+    - 'exnref'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
 - op: ComponentCheckRange
   symbolic_address:
     name: ComponentCheckRange
@@ -778,6 +805,62 @@
     - 'externref'
     - 'externref'
   fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentNewVariant
+  symbolic_address:
+    name: ComponentNewVariant
+    type: Args_General_GeneralGeneralGeneralInt32
+    needs_thunk: true
+  entry: ComponentNewVariant
+  export: componentNewVariant
+  params:
+    - 'externref'
+    - 'externref'
+    - 'i32'
+  result: 'externref'
+  fail_mode: FailOnInvalidRef
+  uses_memory: false
+
+- op: ComponentFindVariantCase
+  symbolic_address:
+    name: ComponentFindVariantCase
+    type: Args_Int32_GeneralGeneralGeneral
+    needs_thunk: true
+  entry: ComponentFindVariantCase
+  export: componentFindVariantCase
+  params:
+    - 'externref'
+    - 'externref'
+  result: 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentFindEnumCase
+  symbolic_address:
+    name: ComponentFindEnumCase
+    type: Args_Int32_GeneralGeneralGeneral
+    needs_thunk: true
+  entry: ComponentFindEnumCase
+  export: componentFindEnumCase
+  params:
+    - 'externref'
+    - 'externref'
+  result: 'i32'
+  fail_mode: FailOnNegI32
+  uses_memory: false
+
+- op: ComponentIsNullish
+  symbolic_address:
+    name: ComponentIsNullish
+    type: Args_Int32_GeneralGeneral
+    needs_thunk: true
+  entry: ComponentIsNullish
+  export: componentIsNullish
+  params:
+    - 'externref'
+  result: 'i32'
+  fail_mode: Infallible
   uses_memory: false
 
 - op: ComponentScalarListToJS

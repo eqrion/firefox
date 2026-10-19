@@ -34,7 +34,8 @@ namespace wasm {
 //   4. Calls post-return, if any.
 //
 // The native function locks down the component instance if the call traps or
-// otherwise fails after entering the guest.
+// otherwise fails after entering the guest, and throws a ComponentError if the
+// function returned the `error` case of a `result`.
 //
 // A lowered function is its adapter, which has the flattened core function
 // type, and:
@@ -44,7 +45,9 @@ namespace wasm {
 //   3. Converts the result with ToComponentValue, into its flat value or into
 //      the memory that the last flat parameter points to.
 //
-// An exception from the host function or from converting its result traps.
+// An exception from the host function or from converting its result traps,
+// unless the function returns a `result`, in which case an exception is its
+// `error` case.
 //
 // Adapters are generated in WasmComponentAdapter.cpp. AdapterBuilder builds
 // the adapter module along with its imports, and emits wasm instructions.
