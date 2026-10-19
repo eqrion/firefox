@@ -273,7 +273,7 @@
   MACRO_(jsStringModule, "js-string")                                          \
   MACRO_(json, "json")                                                         \
   MACRO_(keys, "keys")                                                         \
-  IF_DECORATORS(MACRO_(kind, "kind"))                                          \
+  MACRO_(kind, "kind")                                                         \
   MACRO_(label, "label")                                                       \
   MACRO_(language, "language")                                                 \
   MACRO_(languageDisplay, "languageDisplay")                                   \
