@@ -187,6 +187,7 @@ bool FeatureOptions::init(JSContext* cx, HandleValue val) {
     }
 
     RootedValue jsStringModule(cx, StringValue(cx->names().jsStringModule));
+    RootedValue jsGlobalBuiltin(cx, StringValue(cx->names().jsGlobalBuiltin));
     RootedValue nextBuiltin(cx);
     while (true) {
       bool done;
@@ -198,9 +199,18 @@ bool FeatureOptions::init(JSContext* cx, HandleValue val) {
       }
 
       bool jsStringBuiltins;
+      bool isJSGlobalBuiltin;
       if (!JS::LooselyEqual(cx, nextBuiltin, jsStringModule,
-                            &jsStringBuiltins)) {
+                            &jsStringBuiltins) ||
+          !JS::LooselyEqual(cx, nextBuiltin, jsGlobalBuiltin,
+                            &isJSGlobalBuiltin)) {
         return false;
+      }
+
+      // Components may request the same builtin twice.
+      if (isJSGlobalBuiltin) {
+        this->jsGlobalBuiltin = true;
+        continue;
       }
 
       // We ignore unknown builtins
@@ -1114,9 +1124,9 @@ SharedModule wasm::CompileModule(const CompileArgs& args,
 
 #ifdef ENABLE_WASM_COMPONENTS
 SharedComponent wasm::CompileComponent(
-    const CompileArgs& args, const BytecodeBufferOrSource& bytecode,
-    UniqueChars* error, UniqueCharsVector* warnings,
-    JS::OptimizedEncodingListener* listener) {
+    const CompileArgs& args, bool jsGlobalBuiltin,
+    const BytecodeBufferOrSource& bytecode, UniqueChars* error,
+    UniqueCharsVector* warnings, JS::OptimizedEncodingListener* listener) {
   MutableComponent c = js_new<Component>();
   if (!c) {
     return nullptr;
@@ -1130,6 +1140,7 @@ SharedComponent wasm::CompileComponent(
     return nullptr;
   }
 
+  c->setJSGlobalBuiltin(jsGlobalBuiltin);
   return c;
 }
 #endif  // ENABLE_WASM_COMPONENTS

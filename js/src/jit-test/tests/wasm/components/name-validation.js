@@ -662,3 +662,27 @@ wasmFailValidateText(`(component
   (export "[static][get]EXPORTED.foo-bar" (func $rS32))
   (export "[static][set]EXPORTED.foobar" (func $pS32))
 )`, /must be preceded by getter/);
+
+// Instance type exports are validated like component exports.
+wasmValidateText(`(component
+  (import "i" (instance
+    (export "r" (type $r (sub resource)))
+    (export "[constructor]r" (func (result (own $r))))
+    (export "[method]r.m" (func (param "self" (borrow $r))))
+    (export "[static]r.s" (func))
+    (export "[get]p" (func (result u32)))
+    (export "[set]p" (func (param "v" u32)))))
+)`);
+wasmFailValidateText(`(component
+  (import "i" (instance
+    (export "[static]r.f" (func))))
+)`, /no preceding resource type named "r"/);
+wasmFailValidateText(`(component
+  (import "i" (instance
+    (export "r" (type $r (sub resource)))
+    (export "[method]r.m" (func))))
+)`, /must have a first parameter/);
+wasmFailValidateText(`(component
+  (import "i" (instance
+    (export "[set]p" (func (param "v" u32)))))
+)`, /must be preceded by getter/);

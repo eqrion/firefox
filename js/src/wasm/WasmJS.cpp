@@ -2206,8 +2206,8 @@ bool WasmComponentObject::construct(JSContext* cx, unsigned argc, Value* vp) {
     }
     AutoPinBufferSourceLength pin(cx, sourceObj.get());
 
-    component =
-        CompileComponent(*compileArgs, bytecode, &error, &warnings, nullptr);
+    component = CompileComponent(*compileArgs, options.jsGlobalBuiltin,
+                                 bytecode, &error, &warnings, nullptr);
   }
 
   if (!ReportCompileWarnings(cx, warnings)) {
@@ -5315,6 +5315,7 @@ struct CompileBufferTask : PromiseHelperTask {
   SharedModule module;
 #ifdef ENABLE_WASM_COMPONENTS
   bool isComponent = false;
+  bool jsGlobalBuiltin = false;
   SharedComponent component;
 #endif
   bool instantiate;
@@ -5335,6 +5336,7 @@ struct CompileBufferTask : PromiseHelperTask {
 #ifdef ENABLE_WASM_COMPONENTS
     isComponent = IsComponentBytecode(cx, bytecode.source());
     options.isComponent = isComponent;
+    jsGlobalBuiltin = options.jsGlobalBuiltin;
 #endif
     compileArgs = InitCompileArgs(cx, options, introducer);
     if (!compileArgs) {
@@ -5346,7 +5348,7 @@ struct CompileBufferTask : PromiseHelperTask {
   void execute() override {
 #ifdef ENABLE_WASM_COMPONENTS
     if (isComponent) {
-      component = CompileComponent(*compileArgs,
+      component = CompileComponent(*compileArgs, jsGlobalBuiltin,
                                    BytecodeBufferOrSource(std::move(bytecode)),
                                    &error, &warnings, nullptr);
       return;

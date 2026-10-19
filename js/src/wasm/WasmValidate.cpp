@@ -5273,12 +5273,83 @@ static bool IsSemverChar(uint8_t c, bool digitsOnly) {
   return true;
 }
 
+enum class ComponentExternNameFlagsRaw : uint8_t {
+  // Strangely, the binary encoding currently allows either 0x00 or 0x01 for the
+  // flags. Both do exactly the same thing. This is supposed to be cleaned up
+  // eventually.
+  Plain1 = 0x00,
+  Plain2 = 0x01,
+  VersionSuffix = 0x02,
+};
+
+// Decodes the name of an import or export (`importname'` or `exportname'`),
+// where `thing` is "import" or "export".
+[[nodiscard]] static bool DecodeComponentExternName(Decoder& d,
+                                                    const char* thing,
+                                                    ComponentName* name) {
+  uint8_t flags;
+  if (!d.readFixedU8(&flags)) {
+    return d.failf("expected %s flags", thing);
+  }
+
+  switch (flags) {
+    case uint8_t(ComponentExternNameFlagsRaw::Plain1):
+    case uint8_t(ComponentExternNameFlagsRaw::Plain2):
+      break;
+    case uint8_t(ComponentExternNameFlagsRaw::VersionSuffix):
+      // TODO(wasm-cm): Support semver?
+      return d.failf("version suffixes on %ss are not allowed", thing);
+    default:
+      return d.failf("invalid %s flags %#x", thing, flags);
+  }
+
+  return DecodeComponentName(d, thing, name, /*allowInterfaceName=*/true);
+}
+
+// The type index space that types are decoded in. This is a component's, or
+// that of an instance type being declared.
+class ComponentTypeScope {
+  Component* component_;
+  const ComponentTypeScope* outer_;
+  ComponentTypeVector localTypes_;
+
+ public:
+  explicit ComponentTypeScope(Component* component)
+      : component_(component), outer_(nullptr) {}
+  // The scope of an instance type declared in `outer`.
+  explicit ComponentTypeScope(const ComponentTypeScope& outer)
+      : component_(nullptr), outer_(&outer) {}
+
+  // The component whose index space this is, or null for an instance type.
+  Component* component() const { return component_; }
+
+  // The scope `count` levels out from this one, or null if there is none.
+  const ComponentTypeScope* outer(uint32_t count) const {
+    const ComponentTypeScope* scope = this;
+    for (uint32_t i = 0; i < count && scope; i++) {
+      scope = scope->outer_;
+    }
+    return scope;
+  }
+
+  uint32_t numTypes() const {
+    return component_ ? component_->types().length() : localTypes_.length();
+  }
+  ComponentType getType(uint32_t index) const {
+    return component_ ? component_->getType(index) : localTypes_[index];
+  }
+  [[nodiscard]] bool addType(ComponentType&& type) {
+    return component_ ? component_->addType(std::move(type))
+                      : localTypes_.append(std::move(type));
+  }
+};
+
 // TODO(wasm-cm): Documentation
 //
 // Note that this function need not concern itself with canonicalization,
 // because primitives don't need to be canonicalized and types already in the
 // type section will have been canonicalized on their way in.
-static bool DecodeComponentValType(Decoder& d, MutableComponent& c,
+static bool DecodeComponentValType(Decoder& d, ComponentTypeScope& scope,
                                    ComponentType* t) {
   // Types in the binary are organized so that negative numbers are
   // primitives, while positive numbers are type indices.
@@ -5304,10 +5375,10 @@ static bool DecodeComponentValType(Decoder& d, MutableComponent& c,
 
   int32_t typeIndex;
   if (!d.readVarS32(&typeIndex) || typeIndex < 0 ||
-      c->types().length() <= size_t(typeIndex)) {
+      scope.numTypes() <= size_t(typeIndex)) {
     return d.failf("invalid type index %d", typeIndex);
   }
-  ComponentType referencedType = c->getType(typeIndex);
+  ComponentType referencedType = scope.getType(typeIndex);
   if (!ComponentTypeKindIsValueType(referencedType.kind())) {
     return d.failf("type %d is not a value type", typeIndex);
   }
@@ -5352,7 +5423,11 @@ enum class ComponentTypeKindRaw : uint8_t {
   Resource = 0x3f,
 };
 
-[[nodiscard]] static bool DecodeComponentType(Decoder& d, MutableComponent& c) {
+[[nodiscard]] static bool DecodeComponentInstanceType(
+    Decoder& d, const ComponentTypeScope& outer, ComponentType* t);
+
+[[nodiscard]] static bool DecodeComponentType(Decoder& d,
+                                              ComponentTypeScope& scope) {
   uint8_t kind;
   if (!d.readFixedU8(&kind)) {
     return d.fail("expected type kind");
@@ -5404,7 +5479,7 @@ enum class ComponentTypeKindRaw : uint8_t {
           return false;
         }
         ComponentType type;
-        if (!DecodeComponentValType(d, c, &type)) {
+        if (!DecodeComponentValType(d, scope, &type)) {
           return false;
         }
 
@@ -5467,7 +5542,7 @@ enum class ComponentTypeKindRaw : uint8_t {
         }
         if (hasType) {
           ComponentType t;
-          if (!DecodeComponentValType(d, c, &t)) {
+          if (!DecodeComponentValType(d, scope, &t)) {
             return false;
           }
           type = mozilla::Some(t);
@@ -5488,7 +5563,7 @@ enum class ComponentTypeKindRaw : uint8_t {
 
     case uint8_t(ComponentTypeKindRaw::List): {
       ComponentType type;
-      if (!DecodeComponentValType(d, c, &type)) {
+      if (!DecodeComponentValType(d, scope, &type)) {
         return false;
       }
       if (!ComponentType::list(std::move(type), &t)) {
@@ -5498,7 +5573,7 @@ enum class ComponentTypeKindRaw : uint8_t {
 
     case uint8_t(ComponentTypeKindRaw::FixedList): {
       ComponentFixedListType fixedList;
-      if (!DecodeComponentValType(d, c, &fixedList.elemType)) {
+      if (!DecodeComponentValType(d, scope, &fixedList.elemType)) {
         return false;
       }
       if (!d.readVarU32(&fixedList.length)) {
@@ -5514,8 +5589,8 @@ enum class ComponentTypeKindRaw : uint8_t {
 
     case uint8_t(ComponentTypeKindRaw::Map): {
       ComponentMapType map;
-      if (!DecodeComponentValType(d, c, &map.keyType) ||
-          !DecodeComponentValType(d, c, &map.valueType)) {
+      if (!DecodeComponentValType(d, scope, &map.keyType) ||
+          !DecodeComponentValType(d, scope, &map.valueType)) {
         return false;
       }
       switch (map.keyType.kind()) {
@@ -5558,7 +5633,7 @@ enum class ComponentTypeKindRaw : uint8_t {
       }
       for (uint32_t i = 0; i < numTypes; i++) {
         ComponentType type;
-        if (!DecodeComponentValType(d, c, &type)) {
+        if (!DecodeComponentValType(d, scope, &type)) {
           return false;
         }
         types.infallibleAppend(type);
@@ -5649,7 +5724,7 @@ enum class ComponentTypeKindRaw : uint8_t {
 
     case uint8_t(ComponentTypeKindRaw::Option): {
       ComponentType type;
-      if (!DecodeComponentValType(d, c, &type)) {
+      if (!DecodeComponentValType(d, scope, &type)) {
         return false;
       }
       if (!ComponentType::option(std::move(type), &t)) {
@@ -5667,7 +5742,7 @@ enum class ComponentTypeKindRaw : uint8_t {
       }
       if (hasType) {
         ComponentType theType;
-        if (!DecodeComponentValType(d, c, &theType)) {
+        if (!DecodeComponentValType(d, scope, &theType)) {
           return false;
         }
         type = mozilla::Some(theType);
@@ -5679,7 +5754,7 @@ enum class ComponentTypeKindRaw : uint8_t {
       }
       if (hasErrorType) {
         ComponentType theErrorType;
-        if (!DecodeComponentValType(d, c, &theErrorType)) {
+        if (!DecodeComponentValType(d, scope, &theErrorType)) {
           return false;
         }
         errorType = mozilla::Some(theErrorType);
@@ -5698,10 +5773,10 @@ enum class ComponentTypeKindRaw : uint8_t {
         return d.fail("expected resource type index");
       }
 
-      if (c->types().length() <= typeIndex) {
+      if (scope.numTypes() <= typeIndex) {
         return d.failf("invalid type index %d", typeIndex);
       }
-      ComponentType rt = c->getType(typeIndex);
+      ComponentType rt = scope.getType(typeIndex);
       if (rt.kind() != ComponentTypeKind::Resource &&
           rt.kind() != ComponentTypeKind::SubResource) {
         return d.failf("type %d is not a resource type", typeIndex);
@@ -5740,7 +5815,7 @@ enum class ComponentTypeKindRaw : uint8_t {
           return false;
         }
         ComponentType type;
-        if (!DecodeComponentValType(d, c, &type)) {
+        if (!DecodeComponentValType(d, scope, &type)) {
           return false;
         }
 
@@ -5771,7 +5846,7 @@ enum class ComponentTypeKindRaw : uint8_t {
         }
       } else {
         ComponentType resultType;
-        if (!DecodeComponentValType(d, c, &resultType)) {
+        if (!DecodeComponentValType(d, scope, &resultType)) {
           return false;
         }
         ft.resultType = mozilla::Some(resultType);
@@ -5784,7 +5859,17 @@ enum class ComponentTypeKindRaw : uint8_t {
     case uint8_t(ComponentTypeKindRaw::AsyncFunc):
       return d.fail("async functions are not supported");
 
+    case uint8_t(ComponentTypeKindRaw::Instance): {
+      if (!DecodeComponentInstanceType(d, scope, &t)) {
+        return false;
+      }
+    } break;
+
     case uint8_t(ComponentTypeKindRaw::Resource): {
+      const Component* c = scope.component();
+      if (!c) {
+        return d.fail("resource types cannot be defined in instance types");
+      }
       uint8_t repType;
       if (!d.readFixedU8(&repType)) {
         return d.fail("expected rep type for resource type");
@@ -5833,7 +5918,7 @@ enum class ComponentTypeKindRaw : uint8_t {
   if (!CanonicalizeComponentType(t, &canonical)) {
     return false;
   }
-  if (!c->addType(std::move(canonical))) {
+  if (!scope.addType(std::move(canonical))) {
     return false;
   }
 
@@ -5940,7 +6025,7 @@ enum class ComponentTypeBoundKindRaw : uint8_t {
 };
 
 [[nodiscard]] static bool DecodeComponentExternDesc(Decoder& d,
-                                                    MutableComponent c,
+                                                    ComponentTypeScope& scope,
                                                     ComponentExternDesc* desc,
                                                     bool* isNewSubResource) {
   *isNewSubResource = false;
@@ -5957,10 +6042,10 @@ enum class ComponentTypeBoundKindRaw : uint8_t {
         return d.fail("expected func type index");
       }
 
-      if (c->types().length() <= funcTypeIndex) {
+      if (scope.numTypes() <= funcTypeIndex) {
         return d.failf("invalid type index %d", funcTypeIndex);
       }
-      ComponentType funcType = c->getType(funcTypeIndex);
+      ComponentType funcType = scope.getType(funcTypeIndex);
       if (funcType.kind() != ComponentTypeKind::Func) {
         return d.failf("type %d is not a func type", funcTypeIndex);
       }
@@ -5980,11 +6065,11 @@ enum class ComponentTypeBoundKindRaw : uint8_t {
             return d.fail("expected type index");
           }
 
-          if (c->types().length() <= typeIndex) {
+          if (scope.numTypes() <= typeIndex) {
             return d.failf("invalid type index %d", typeIndex);
           }
 
-          *desc = ComponentExternDesc::type(c->getType(typeIndex));
+          *desc = ComponentExternDesc::type(scope.getType(typeIndex));
         } break;
         case uint8_t(ComponentTypeBoundKindRaw::SubResource): {
           // We do not need to canonicalize this new type, as all resource types
@@ -6005,8 +6090,20 @@ enum class ComponentTypeBoundKindRaw : uint8_t {
       return d.fail("extern components are not supported yet");
     } break;
     case ComponentSort::Instance: {
-      // TODO(wasm-cm): Add support for these
-      return d.fail("extern instances are not supported yet");
+      uint32_t typeIndex;
+      if (!d.readVarU32(&typeIndex)) {
+        return d.fail("expected instance type index");
+      }
+
+      if (scope.numTypes() <= typeIndex) {
+        return d.failf("invalid type index %d", typeIndex);
+      }
+      ComponentType instanceType = scope.getType(typeIndex);
+      if (instanceType.kind() != ComponentTypeKind::Instance) {
+        return d.failf("type %d is not an instance type", typeIndex);
+      }
+
+      *desc = ComponentExternDesc::instance(std::move(instanceType));
     } break;
     case ComponentSort::CoreModule: {
       // TODO(wasm-cm): Add support for these
@@ -6018,6 +6115,314 @@ enum class ComponentTypeBoundKindRaw : uint8_t {
   }
 
   return true;
+}
+
+// [constructor], [method], and [static] must reference a preceding resource
+// type in their name, and [constructor] and [method] have additional
+// restrictions on results/params.
+template <typename HasFunc, typename GetFunc>
+static bool ValidateResourceFuncs(Decoder& d, const ComponentName& name,
+                                  const ComponentFuncType& funcType,
+                                  const HasFunc& hasItemWithName,
+                                  const GetFunc& getItemByName) {
+  if (!name.attributes.contains(ComponentNameAttribute::Constructor) &&
+      !name.attributes.contains(ComponentNameAttribute::Method) &&
+      !name.attributes.contains(ComponentNameAttribute::Static)) {
+    return true;
+  }
+
+  mozilla::Span<const char> resourceName = name.resourceName();
+
+  bool resourceOk = false;
+  ComponentType resourceType;
+  if (hasItemWithName(resourceName)) {
+    const ComponentExternDesc& resourceTypeDesc = getItemByName(resourceName);
+    if (resourceTypeDesc.sort() == ComponentSort::Type &&
+        resourceTypeDesc.asType().isAnyResource()) {
+      resourceOk = true;
+      resourceType = resourceTypeDesc.asType();
+    }
+  }
+  if (!resourceOk) {
+    return d.failf(
+        "no preceding resource type named \"%.*s\" for func \"%.*s\"",
+        ComponentNameSpan_Printf(resourceName),
+        ComponentName_Printf(name.name));
+  }
+  MOZ_ASSERT(resourceType.isValid());
+
+  if (name.attributes.contains(ComponentNameAttribute::Constructor)) {
+    bool resultOk = false;
+    if (funcType.resultType.isSome()) {
+      bool isOwn = funcType.resultType->kind() == ComponentTypeKind::Own &&
+                   funcType.resultType->asOwn() == resourceType;
+      bool isResultOwn =
+          funcType.resultType->kind() == ComponentTypeKind::Result &&
+          funcType.resultType->asResult().type.isSome() &&
+          funcType.resultType->asResult().type->kind() ==
+              ComponentTypeKind::Own &&
+          funcType.resultType->asResult().type->asOwn() == resourceType;
+      if (isOwn || isResultOwn) {
+        resultOk = true;
+      }
+    }
+    if (!resultOk) {
+      return d.failf("constructor \"%.*s\" must return (own %.*s)",
+                     ComponentName_Printf(name.name),
+                     ComponentNameSpan_Printf(resourceName));
+    }
+  } else if (name.attributes.contains(ComponentNameAttribute::Method)) {
+    if (funcType.paramTypes.length() == 0 ||
+        funcType.paramNames[0].utf8Bytes() !=
+            mozilla::Span<const char>("self", strlen("self")) ||
+        funcType.paramTypes[0].kind() != ComponentTypeKind::Borrow ||
+        funcType.paramTypes[0].asBorrow() != resourceType) {
+      return d.failf(
+          "method \"%.*s\" must have a first parameter (param \"self\" "
+          "(borrow %.*s))",
+          ComponentName_Printf(name.name),
+          ComponentNameSpan_Printf(resourceName));
+    }
+  }
+
+  return true;
+}
+
+// [get] and [set] have restrictions on the number and type of their
+// params/results.
+template <typename HasFunc, typename GetFunc>
+static bool ValidateAccessors(Decoder& d, const ComponentName& name,
+                              const ComponentFuncType& funcType,
+                              const HasFunc& hasItemWithName,
+                              const GetFunc& getItemByName) {
+  bool isMethod = name.attributes.contains(ComponentNameAttribute::Method);
+  if (name.attributes.contains(ComponentNameAttribute::Get)) {
+    // [get] must have no parameters (except "self" for [method])
+    if (funcType.paramTypes.length() != (isMethod ? 1 : 0)) {
+      return d.failf("getter \"%.*s\" must have no parameters%s",
+                     ComponentName_Printf(name.name),
+                     isMethod ? " besides self" : "");
+    }
+    // [get] must return something, and if it returns result<T> then it must
+    // have an inner type
+    if (funcType.resultType.isNothing() ||
+        (funcType.resultType->kind() == ComponentTypeKind::Result &&
+         funcType.resultType->asResult().type.isNothing())) {
+      return d.failf("getter \"%.*s\" must return a value",
+                     ComponentName_Printf(name.name));
+    }
+  } else if (name.attributes.contains(ComponentNameAttribute::Set)) {
+    // [set] must be preceded by a matching getter
+    CacheableName getterName;
+    if (!name.getterForSetter(&getterName)) {
+      return false;
+    }
+    if (!hasItemWithName(getterName.utf8Bytes())) {
+      return d.failf("setter \"%.*s\" must be preceded by getter \"%.*s\"",
+                     ComponentName_Printf(name.name),
+                     ComponentName_Printf(getterName));
+    }
+
+    // We know the getter previously validated.
+    const ComponentFuncType& getterType =
+        getItemByName(getterName.utf8Bytes()).asFunc().asFunc();
+    ComponentType getterPropertyType =
+        getterType.resultType->kind() == ComponentTypeKind::Result
+            ? getterType.resultType->asResult().type.value()
+            : getterType.resultType.value();
+
+    // [set] must have exactly one parameter (besides "self" for [method]),
+    // and this parameter must match the getter's property type
+    if (funcType.paramTypes.length() != (isMethod ? 2 : 1)) {
+      return d.failf("setter \"%.*s\" must have only one parameter%s",
+                     ComponentName_Printf(name.name),
+                     isMethod ? " besides self" : "");
+    }
+    if (funcType.paramTypes[isMethod ? 1 : 0] != getterPropertyType) {
+      return d.failf("setter \"%.*s\"'s parameter must match its getter",
+                     ComponentName_Printf(name.name));
+    }
+
+    // [set] must return nothing or result<E?> (no value type)
+    if (funcType.resultType.isSome() &&
+        (funcType.resultType->kind() != ComponentTypeKind::Result ||
+         funcType.resultType->asResult().type.isSome())) {
+      return d.failf("setter \"%.*s\" must return nothing",
+                     ComponentName_Printf(name.name));
+    }
+  }
+
+  return true;
+}
+
+// Validate extra conditions from name annotations like [constructor], [method],
+// [static], [get], and [set].
+template <typename HasFunc, typename GetFunc>
+static bool ValidateComponentNameAnnotations(
+    Decoder& d, const ComponentName& name,
+    const ComponentExternDesc& externDesc, const HasFunc& hasItemWithName,
+    const GetFunc& getItemByName) {
+  if (name.attributes.isEmpty()) {
+    return true;
+  }
+
+  if (externDesc.sort() != ComponentSort::Func) {
+    return d.fail("name annotations can only be used with functions");
+  }
+  const ComponentFuncType& funcType = externDesc.asFunc().asFunc();
+
+  if (!ValidateResourceFuncs(d, name, funcType, hasItemWithName,
+                             getItemByName)) {
+    return false;
+  }
+
+  if (!ValidateAccessors(d, name, funcType, hasItemWithName, getItemByName)) {
+    return false;
+  }
+
+  return true;
+}
+
+enum class ComponentInstanceDeclKindRaw : uint8_t {
+  CoreType = 0x00,
+  Type = 0x01,
+  Alias = 0x02,
+  Export = 0x04,
+};
+
+enum class AliasKindRaw : uint8_t {
+  ComponentExport = 0x00,
+  CoreExport = 0x01,
+  Outer = 0x02,
+};
+
+// Decodes an alias in an instance type, which must be an outer alias of a
+// type.
+[[nodiscard]] static bool DecodeComponentInstanceTypeAlias(
+    Decoder& d, ComponentTypeScope& scope) {
+  ComponentSort sort;
+  if (!DecodeComponentSort(d, &sort, /*forExterndesc=*/false)) {
+    return false;
+  }
+  uint8_t targetType;
+  if (!d.readFixedU8(&targetType)) {
+    return d.fail("expected alias target");
+  }
+  if (targetType != uint8_t(AliasKindRaw::Outer)) {
+    return d.fail("instance types can only contain outer aliases");
+  }
+  if (sort != ComponentSort::Type) {
+    // TODO(wasm-cm): Support core type aliases.
+    return d.fail("instance types can only alias types");
+  }
+
+  uint32_t count;
+  uint32_t typeIndex;
+  if (!d.readVarU32(&count) || !d.readVarU32(&typeIndex)) {
+    return d.fail("expected outer alias count and index");
+  }
+  const ComponentTypeScope* target = scope.outer(count);
+  if (!target) {
+    return d.failf("invalid outer alias count %d", count);
+  }
+  if (target->numTypes() <= typeIndex) {
+    return d.failf("invalid type index %d", typeIndex);
+  }
+  if (scope.numTypes() >= MaxComponentTypes) {
+    return d.failf("too many types (max %d)", MaxComponentTypes);
+  }
+  return scope.addType(target->getType(typeIndex));
+}
+
+// Decodes the declarations of an instance type (`instancetype`) declared in
+// the scope `outer`.
+[[nodiscard]] static bool DecodeComponentInstanceType(
+    Decoder& d, const ComponentTypeScope& outer, ComponentType* t) {
+  uint32_t numDecls;
+  if (!d.readVarU32(&numDecls)) {
+    return d.fail("expected number of instance type declarations");
+  }
+
+  ComponentTypeScope scope(outer);
+  ComponentInstanceType instanceType;
+  StronglyUniqueNameSet exportNameDedup;
+  for (uint32_t i = 0; i < numDecls; i++) {
+    uint8_t kind;
+    if (!d.readFixedU8(&kind)) {
+      return d.fail("expected instance type declaration");
+    }
+
+    switch (kind) {
+      case uint8_t(ComponentInstanceDeclKindRaw::CoreType):
+        // TODO(wasm-cm): Support core types.
+        return d.fail("core types in instance types are not supported yet");
+      case uint8_t(ComponentInstanceDeclKindRaw::Type): {
+        if (scope.numTypes() >= MaxComponentTypes) {
+          return d.failf("too many types (max %d)", MaxComponentTypes);
+        }
+        if (!DecodeComponentType(d, scope)) {
+          return false;
+        }
+      } break;
+      case uint8_t(ComponentInstanceDeclKindRaw::Alias): {
+        if (!DecodeComponentInstanceTypeAlias(d, scope)) {
+          return false;
+        }
+      } break;
+      case uint8_t(ComponentInstanceDeclKindRaw::Export): {
+        if (instanceType.exports().length() >= MaxComponentExports) {
+          return d.failf("too many exports (max %d)", MaxComponentExports);
+        }
+        ComponentName name;
+        if (!DecodeComponentExternName(d, "export", &name)) {
+          return false;
+        }
+        ComponentExternDesc desc;
+        bool unused;
+        if (!DecodeComponentExternDesc(d, scope, &desc, &unused)) {
+          return false;
+        }
+
+        bool duplicate;
+        if (!exportNameDedup.add(name.name.utf8Bytes(), &duplicate)) {
+          return false;
+        }
+        if (duplicate) {
+          return d.failf("export name \"%.*s\" is not strongly-unique",
+                         ComponentName_Printf(name.name));
+        }
+
+        if (!ValidateComponentNameAnnotations(
+                d, name, desc,
+                [&](mozilla::Span<const char> name) -> bool {
+                  return instanceType.findExport(name).isSome();
+                },
+                [&](mozilla::Span<const char> name)
+                    -> const ComponentExternDesc& {
+                  return instanceType.exports()[*instanceType.findExport(name)]
+                      .desc;
+                })) {
+          return false;
+        }
+
+        if (desc.sort() == ComponentSort::Type) {
+          if (scope.numTypes() >= MaxComponentTypes) {
+            return d.failf("too many types (max %d)", MaxComponentTypes);
+          }
+          if (!scope.addType(desc.asType())) {
+            return false;
+          }
+        }
+        if (!instanceType.addExport(std::move(name), std::move(desc))) {
+          return false;
+        }
+      } break;
+      default:
+        return d.failf("unexpected instance type declaration 0x%02x", kind);
+    }
+  }
+
+  return ComponentType::instance(std::move(instanceType), t);
 }
 
 static const char* DefinitionKindName(DefinitionKind kind) {
@@ -6062,9 +6467,11 @@ static const char* CoreItemName(DefinitionKind kind) {
     case ComponentSort::Component:
       // TODO(wasm-cm): Support nested components
       return d.fail("nested components are not supported yet");
-    case ComponentSort::Instance:
-      // TODO(wasm-cm): Support nested components
-      return d.fail("nested components are not supported yet");
+    case ComponentSort::Instance: {
+      if (c.instances().length() <= sortIndex.index) {
+        return d.failf("invalid instance index %d", sortIndex.index);
+      }
+    } break;
 
     case ComponentSort::CoreFunction:
     case ComponentSort::CoreTable:
@@ -6159,6 +6566,31 @@ enum class CoreInstanceExprKind : uint8_t {
     return d.failf("too many core %s (max %u)", items, max);
   }
   return true;
+}
+
+// Checks that there is room for one more func, type, or instance in the
+// component's index space for `sort`.
+[[nodiscard]] static bool CheckCanAddItem(Decoder& d, const Component& c,
+                                          ComponentSort sort) {
+  switch (sort) {
+    case ComponentSort::Func:
+      if (c.funcs().length() >= MaxComponentFuncs) {
+        return d.failf("too many funcs (max %u)", MaxComponentFuncs);
+      }
+      return true;
+    case ComponentSort::Type:
+      if (c.types().length() >= MaxComponentTypes) {
+        return d.failf("too many types (max %u)", MaxComponentTypes);
+      }
+      return true;
+    case ComponentSort::Instance:
+      if (c.instances().length() >= MaxComponentInstances) {
+        return d.failf("too many instances (max %u)", MaxComponentInstances);
+      }
+      return true;
+    default:
+      MOZ_CRASH();
+  }
 }
 
 [[nodiscard]] static bool DecodeCoreInstance(Decoder& d, MutableComponent& c) {
@@ -6305,12 +6737,6 @@ enum class CoreInstanceExprKind : uint8_t {
   return true;
 }
 
-enum class AliasKindRaw : uint8_t {
-  ComponentExport = 0x00,
-  CoreExport = 0x01,
-  Outer = 0x02,
-};
-
 [[nodiscard]] static bool DecodeComponentAlias(Decoder& d,
                                                MutableComponent& c) {
   ComponentSort sort;
@@ -6325,8 +6751,38 @@ enum class AliasKindRaw : uint8_t {
 
   switch (targetType) {
     case uint8_t(AliasKindRaw::ComponentExport): {
-      // TODO(wasm-cm)
-      return d.fail("component export aliases are not yet supported");
+      uint32_t instanceIndex;
+      if (!d.readVarU32(&instanceIndex)) {
+        return d.fail("expected instance index");
+      }
+
+      CacheableName exportName;
+      if (!DecodeName(d, &exportName)) {
+        return d.fail("expected instance export name");
+      }
+
+      if (c->instances().length() <= instanceIndex) {
+        return d.failf("invalid instance index %d", instanceIndex);
+      }
+      ComponentType instanceType = c->getTypeForInstance(instanceIndex);
+      mozilla::Maybe<uint32_t> exportIndex =
+          instanceType.asInstance().findExport(exportName.utf8Bytes());
+      if (exportIndex.isNothing()) {
+        return d.failf("instance %d has no export \"%.*s\"", instanceIndex,
+                       ComponentName_Printf(exportName));
+      }
+      if (instanceType.asInstance().exports()[*exportIndex].desc.sort() !=
+          sort) {
+        return d.failf("export \"%.*s\" of instance %d has a different sort",
+                       ComponentName_Printf(exportName), instanceIndex);
+      }
+      if (!CheckCanAddItem(d, *c, sort)) {
+        return false;
+      }
+
+      if (!c->addExportAlias(instanceIndex, *exportIndex)) {
+        return false;
+      }
     } break;
     case uint8_t(AliasKindRaw::CoreExport): {
       uint32_t instanceIndex;
@@ -6744,205 +7200,6 @@ enum class CanonDefKindRaw : uint8_t {
   return true;
 }
 
-// [constructor], [method], and [static] must reference a preceding resource
-// type in their name, and [constructor] and [method] have additional
-// restrictions on results/params.
-template <typename HasFunc, typename GetFunc>
-static bool ValidateResourceFuncs(Decoder& d, const ComponentName& name,
-                                  const ComponentFuncType& funcType,
-                                  const HasFunc& hasItemWithName,
-                                  const GetFunc& getItemByName) {
-  if (!name.attributes.contains(ComponentNameAttribute::Constructor) &&
-      !name.attributes.contains(ComponentNameAttribute::Method) &&
-      !name.attributes.contains(ComponentNameAttribute::Static)) {
-    return true;
-  }
-
-  mozilla::Span<const char> resourceName = name.resourceName();
-
-  bool resourceOk = false;
-  ComponentType resourceType;
-  if (hasItemWithName(resourceName)) {
-    const ComponentExternDesc& resourceTypeDesc = getItemByName(resourceName);
-    if (resourceTypeDesc.sort() == ComponentSort::Type &&
-        resourceTypeDesc.asType().isAnyResource()) {
-      resourceOk = true;
-      resourceType = resourceTypeDesc.asType();
-    }
-  }
-  if (!resourceOk) {
-    return d.failf(
-        "no preceding resource type named \"%.*s\" for func \"%.*s\"",
-        ComponentNameSpan_Printf(resourceName),
-        ComponentName_Printf(name.name));
-  }
-  MOZ_ASSERT(resourceType.isValid());
-
-  if (name.attributes.contains(ComponentNameAttribute::Constructor)) {
-    bool resultOk = false;
-    if (funcType.resultType.isSome()) {
-      bool isOwn = funcType.resultType->kind() == ComponentTypeKind::Own &&
-                   funcType.resultType->asOwn() == resourceType;
-      bool isResultOwn =
-          funcType.resultType->kind() == ComponentTypeKind::Result &&
-          funcType.resultType->asResult().type.isSome() &&
-          funcType.resultType->asResult().type->kind() ==
-              ComponentTypeKind::Own &&
-          funcType.resultType->asResult().type->asOwn() == resourceType;
-      if (isOwn || isResultOwn) {
-        resultOk = true;
-      }
-    }
-    if (!resultOk) {
-      return d.failf("constructor \"%.*s\" must return (own %.*s)",
-                     ComponentName_Printf(name.name),
-                     ComponentNameSpan_Printf(resourceName));
-    }
-  } else if (name.attributes.contains(ComponentNameAttribute::Method)) {
-    if (funcType.paramTypes.length() == 0 ||
-        funcType.paramNames[0].utf8Bytes() !=
-            mozilla::Span<const char>("self", strlen("self")) ||
-        funcType.paramTypes[0].kind() != ComponentTypeKind::Borrow ||
-        funcType.paramTypes[0].asBorrow() != resourceType) {
-      return d.failf(
-          "method \"%.*s\" must have a first parameter (param \"self\" "
-          "(borrow %.*s))",
-          ComponentName_Printf(name.name),
-          ComponentNameSpan_Printf(resourceName));
-    }
-  }
-
-  return true;
-}
-
-// [get] and [set] have restrictions on the number and type of their
-// params/results.
-template <typename HasFunc, typename GetFunc>
-static bool ValidateAccessors(Decoder& d, const ComponentName& name,
-                              const ComponentFuncType& funcType,
-                              const HasFunc& hasItemWithName,
-                              const GetFunc& getItemByName) {
-  bool isMethod = name.attributes.contains(ComponentNameAttribute::Method);
-  if (name.attributes.contains(ComponentNameAttribute::Get)) {
-    // [get] must have no parameters (except "self" for [method])
-    if (funcType.paramTypes.length() != (isMethod ? 1 : 0)) {
-      return d.failf("getter \"%.*s\" must have no parameters%s",
-                     ComponentName_Printf(name.name),
-                     isMethod ? " besides self" : "");
-    }
-    // [get] must return something, and if it returns result<T> then it must
-    // have an inner type
-    if (funcType.resultType.isNothing() ||
-        (funcType.resultType->kind() == ComponentTypeKind::Result &&
-         funcType.resultType->asResult().type.isNothing())) {
-      return d.failf("getter \"%.*s\" must return a value",
-                     ComponentName_Printf(name.name));
-    }
-  } else if (name.attributes.contains(ComponentNameAttribute::Set)) {
-    // [set] must be preceded by a matching getter
-    CacheableName getterName;
-    if (!name.getterForSetter(&getterName)) {
-      return false;
-    }
-    if (!hasItemWithName(getterName.utf8Bytes())) {
-      return d.failf("setter \"%.*s\" must be preceded by getter \"%.*s\"",
-                     ComponentName_Printf(name.name),
-                     ComponentName_Printf(getterName));
-    }
-
-    // We know the getter previously validated.
-    const ComponentFuncType& getterType =
-        getItemByName(getterName.utf8Bytes()).asFunc().asFunc();
-    ComponentType getterPropertyType =
-        getterType.resultType->kind() == ComponentTypeKind::Result
-            ? getterType.resultType->asResult().type.value()
-            : getterType.resultType.value();
-
-    // [set] must have exactly one parameter (besides "self" for [method]),
-    // and this parameter must match the getter's property type
-    if (funcType.paramTypes.length() != (isMethod ? 2 : 1)) {
-      return d.failf("setter \"%.*s\" must have only one parameter%s",
-                     ComponentName_Printf(name.name),
-                     isMethod ? " besides self" : "");
-    }
-    if (funcType.paramTypes[isMethod ? 1 : 0] != getterPropertyType) {
-      return d.failf("setter \"%.*s\"'s parameter must match its getter",
-                     ComponentName_Printf(name.name));
-    }
-
-    // [set] must return nothing or result<E?> (no value type)
-    if (funcType.resultType.isSome() &&
-        (funcType.resultType->kind() != ComponentTypeKind::Result ||
-         funcType.resultType->asResult().type.isSome())) {
-      return d.failf("setter \"%.*s\" must return nothing",
-                     ComponentName_Printf(name.name));
-    }
-  }
-
-  return true;
-}
-
-// Validate extra conditions from name annotations like [constructor], [method],
-// [static], [get], and [set].
-template <typename HasFunc, typename GetFunc>
-static bool ValidateComponentNameAnnotations(
-    Decoder& d, const ComponentName& name,
-    const ComponentExternDesc& externDesc, const HasFunc& hasItemWithName,
-    const GetFunc& getItemByName) {
-  if (name.attributes.isEmpty()) {
-    return true;
-  }
-
-  if (externDesc.sort() != ComponentSort::Func) {
-    return d.fail("name annotations can only be used with functions");
-  }
-  const ComponentFuncType& funcType = externDesc.asFunc().asFunc();
-
-  if (!ValidateResourceFuncs(d, name, funcType, hasItemWithName,
-                             getItemByName)) {
-    return false;
-  }
-
-  if (!ValidateAccessors(d, name, funcType, hasItemWithName, getItemByName)) {
-    return false;
-  }
-
-  return true;
-}
-
-enum class ComponentExternNameFlagsRaw : uint8_t {
-  // Strangely, the binary encoding currently allows either 0x00 or 0x01 for the
-  // flags. Both do exactly the same thing. This is supposed to be cleaned up
-  // eventually.
-  Plain1 = 0x00,
-  Plain2 = 0x01,
-  VersionSuffix = 0x02,
-};
-
-// Decodes the name of an import or export (`importname'` or `exportname'`),
-// where `thing` is "import" or "export".
-[[nodiscard]] static bool DecodeComponentExternName(Decoder& d,
-                                                    const char* thing,
-                                                    ComponentName* name) {
-  uint8_t flags;
-  if (!d.readFixedU8(&flags)) {
-    return d.failf("expected %s flags", thing);
-  }
-
-  switch (flags) {
-    case uint8_t(ComponentExternNameFlagsRaw::Plain1):
-    case uint8_t(ComponentExternNameFlagsRaw::Plain2):
-      break;
-    case uint8_t(ComponentExternNameFlagsRaw::VersionSuffix):
-      // TODO(wasm-cm): Support semver?
-      return d.failf("version suffixes on %ss are not allowed", thing);
-    default:
-      return d.failf("invalid %s flags %#x", thing, flags);
-  }
-
-  return DecodeComponentName(d, thing, name, /*allowInterfaceName=*/true);
-}
-
 static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
                                   StronglyUniqueNameSet& nameDedup) {
   ComponentName importName;
@@ -6950,9 +7207,11 @@ static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
     return false;
   }
 
+  ComponentTypeScope scope(c.get());
   ComponentExternDesc externDesc;
   bool unused;
-  if (!DecodeComponentExternDesc(d, c, &externDesc, &unused)) {
+  if (!DecodeComponentExternDesc(d, scope, &externDesc, &unused) ||
+      !CheckCanAddItem(d, *c, externDesc.sort())) {
     return false;
   }
   if (externDesc.sort() == ComponentSort::Type) {
@@ -7037,9 +7296,10 @@ static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
     return d.fail("expected possible explicit external type");
   }
   if (hasExplicitExternDesc) {
+    ComponentTypeScope scope(c.get());
     ComponentExternDesc explicitExternDesc;
     bool isNewSubResource;
-    if (!DecodeComponentExternDesc(d, c, &explicitExternDesc,
+    if (!DecodeComponentExternDesc(d, scope, &explicitExternDesc,
                                    &isNewSubResource)) {
       return false;
     }
@@ -7155,8 +7415,9 @@ static bool DecodeComponentImport(Decoder& d, MutableComponent& c,
     return d.failf("too many types (max %d)", MaxComponentTypes);
   }
 
+  ComponentTypeScope scope(c.get());
   for (uint32_t i = 0; i < numTypes; i++) {
-    if (!DecodeComponentType(d, c)) {
+    if (!DecodeComponentType(d, scope)) {
       return false;
     }
   }

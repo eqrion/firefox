@@ -269,6 +269,7 @@
   MACRO_(IteratorNext, "IteratorNext")                                         \
   MACRO_(join, "join")                                                         \
   MACRO2(js, "js")                                                             \
+  MACRO_(jsGlobalBuiltin, "js/global")                                         \
   MACRO_(jsTag, "JSTag")                                                       \
   MACRO_(jsStringModule, "js-string")                                          \
   MACRO_(json, "json")                                                         \

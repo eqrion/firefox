@@ -280,13 +280,6 @@ excluded_tests = [
   "^forward.wast.js",
   "^post-return.wast.js",
 
-  # Failing: needs component exports
-  "^strings.wast.js",
-  "^tags.wast.js",
-
-  # Failing: needs interface names
-  "^extern-names.wast.js",
-
   # Failing: needs nested components
   "^abi.wast.js",
   "^alignment.wast.js",

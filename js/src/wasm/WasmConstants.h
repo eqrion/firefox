@@ -1249,6 +1249,7 @@ static_assert(uint64_t(MaxArrayPayloadBytes) <
 // TODO(wasm-cm): These implementation limits are arbitrarily chosen.
 static const uint32_t MaxComponentCoreModules = 100;
 static const uint32_t MaxComponentCoreInstances = 1000;
+static const uint32_t MaxComponentInstances = 1000;
 static const uint32_t MaxComponentCoreInstantiateArgs = MaxImports;
 static const uint32_t MaxComponentCoreFuncs = MaxFuncs;
 static const uint32_t MaxComponentCoreTables = MaxTables;

@@ -108,7 +108,8 @@ struct FeatureOptions {
         isBuiltinModule(false),
         isComponent(false),
         jsStringBuiltins(false),
-        jsStringConstants(false) {}
+        jsStringConstants(false),
+        jsGlobalBuiltin(false) {}
 
   // Whether we should try to disable our optimizing compiler. Only available
   // with `IsSimdPrivilegedContext`.
@@ -130,6 +131,9 @@ struct FeatureOptions {
   // feature is also enabled.
   bool jsStringConstants;
   SharedChars jsStringConstantsNamespace;
+
+  // Enable the `wasm:js/global` builtin for components.
+  bool jsGlobalBuiltin;
 
   // Parse the compile options bag.
   [[nodiscard]] bool init(JSContext* cx, HandleValue val);

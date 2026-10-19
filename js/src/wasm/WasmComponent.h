@@ -150,6 +150,7 @@ struct ComponentFixedListType;
 struct ComponentMapType;
 struct ComponentFuncType;
 class ComponentResourceType;
+class ComponentInstanceType;
 using ComponentTypeVector =
     mozilla::Vector<ComponentType, 0, SystemAllocPolicy>;
 using ComponentRecordFieldVector =
@@ -200,6 +201,7 @@ class ComponentType {
   static bool func(ComponentFuncType&& inner, ComponentType* type);
   static bool resource(ComponentResourceType&& inner, ComponentType* type);
   static bool subResource(ComponentType* type);
+  static bool instance(ComponentInstanceType&& inner, ComponentType* type);
 
   ComponentTypeKind kind() const { return kind_; }
   RefPtr<ComponentTypeDef> typeDef() const { return typeDef_; }
@@ -218,6 +220,7 @@ class ComponentType {
   ComponentType asBorrow() const;
   const ComponentFuncType& asFunc() const;
   const ComponentResourceType& asResource() const;
+  const ComponentInstanceType& asInstance() const;
 
   // Whether the type is any kind of resource type (defined or `(sub resource)`)
   bool isAnyResource() const {
@@ -368,11 +371,161 @@ class ComponentResourceType {
   mozilla::Maybe<uint32_t> dtorIndex() const { return dtorIndex_; }
 };
 
+enum class ComponentNameAttribute : uint8_t {
+  Constructor,
+  Method,
+  Static,
+  Get,
+  Set,
+};
+using ComponentNameAttributes = mozilla::EnumSet<ComponentNameAttribute>;
+
+// Takes a valid component-model name and creates a "canonical" version of it
+// that can be used to check strong uniqueness.
+[[nodiscard]] bool CanonicalizeName(mozilla::Span<const char> name,
+                                    CacheableName* result);
+
+// Augments a component-model name with any attributes present on the name. Note
+// that this is generally not necessary for e.g. field names; you can just use
+// CacheableName for that purpose.
+struct ComponentName {
+  CacheableName name;
+  ComponentNameAttributes attributes;
+
+  uint8_t attributesLength;
+  uint32_t resourceNameLength;
+
+  explicit ComponentName() = default;
+  explicit ComponentName(CacheableName&& name,
+                         ComponentNameAttributes attributes,
+                         uint8_t attributesLength, uint32_t resourceNameLength)
+      : name(std::move(name)),
+        attributes(attributes),
+        attributesLength(attributesLength),
+        resourceNameLength(resourceNameLength) {}
+
+  mozilla::Span<const char> resourceName() const {
+    MOZ_ASSERT(attributes.contains(ComponentNameAttribute::Constructor) ||
+               attributes.contains(ComponentNameAttribute::Method) ||
+               attributes.contains(ComponentNameAttribute::Static));
+    MOZ_ASSERT(resourceNameLength > 0);
+    return mozilla::Span<const char>(name.utf8Bytes().data() + attributesLength,
+                                     resourceNameLength);
+  };
+  bool getterForSetter(CacheableName* out) const;
+
+  bool operator==(const ComponentName& other) const {
+    return name == other.name;
+  }
+  bool operator==(mozilla::Span<const char> other) const {
+    return name.utf8Bytes() == other;
+  }
+};
+
+// Describes an import or export from a wasm component.
+class ComponentExternDesc {
+  ComponentSort sort_;
+  ComponentType type_;
+
+  // TODO(wasm-cm): This is a total hack, but since we currently don't have a
+  // notion of core module types, we actually just store the index of the
+  // relevant core module within the component. This obviously will not work as
+  // soon as we do anything with multiple components.
+  uint32_t coreModuleIndex_;
+
+  explicit ComponentExternDesc(ComponentSort sort, ComponentType&& type)
+      : sort_(sort), type_(std::move(type)) {
+    MOZ_ASSERT(ComponentSortValidForExternDesc(sort));
+  }
+  explicit ComponentExternDesc(uint32_t coreModuleIndex)
+      : sort_(ComponentSort::CoreModule), coreModuleIndex_(coreModuleIndex) {}
+
+ public:
+  ComponentExternDesc() = default;
+
+  static ComponentExternDesc func(ComponentType&& funcType) {
+    MOZ_ASSERT(funcType.kind() == ComponentTypeKind::Func);
+    return ComponentExternDesc(ComponentSort::Func, std::move(funcType));
+  }
+  static ComponentExternDesc type(ComponentType&& type) {
+    return ComponentExternDesc(ComponentSort::Type, std::move(type));
+  }
+  static ComponentExternDesc instance(ComponentType&& instanceType) {
+    MOZ_ASSERT(instanceType.kind() == ComponentTypeKind::Instance);
+    return ComponentExternDesc(ComponentSort::Instance,
+                               std::move(instanceType));
+  }
+  static ComponentExternDesc coreModule(uint32_t coreModuleIndex) {
+    return ComponentExternDesc(coreModuleIndex);
+  }
+
+  bool isValid() const { return sort_ != ComponentSort::Invalid; }
+  ComponentSort sort() const { return sort_; }
+  ComponentType asFunc() const {
+    MOZ_RELEASE_ASSERT(sort() == ComponentSort::Func);
+    return type_;
+  }
+  ComponentType asType() const {
+    MOZ_RELEASE_ASSERT(sort() == ComponentSort::Type);
+    return type_;
+  }
+  ComponentType asInstance() const {
+    MOZ_RELEASE_ASSERT(sort() == ComponentSort::Instance);
+    return type_;
+  }
+  uint32_t asCoreModule() const {
+    MOZ_RELEASE_ASSERT(sort() == ComponentSort::CoreModule);
+    // TODO(wasm-cm): This should obviously return a proper core module type,
+    // when we actually support that.
+    return coreModuleIndex_;
+  }
+
+  // Checks whether an item can be ascribed the given new externdesc, e.g. a
+  // defined resource type being ascribed the (sub resource) type bound.
+  // `isNewSubResource` should be true if attempting to ascribe `(sub resource)`
+  // _and_ the `(sub resource)` was part of the current definition (as opposed
+  // to an eq of a previously-defined `(sub resource)`); i.e. are we
+  // "generating" the resource type now or did we already generate it?
+  static bool compatible(const ComponentExternDesc& defined,
+                         const ComponentExternDesc& ascribed,
+                         bool isNewSubResource);
+};
+
+static_assert(std::is_default_constructible_v<ComponentExternDesc>);
+
+struct ComponentInstanceTypeExport {
+  ComponentName name;
+  ComponentExternDesc desc;
+  // The index of the export's first item among the imported items of an
+  // instance of this type. See ComponentInstanceType::numImportedItems.
+  uint32_t firstImportedItem;
+};
+
+using ComponentInstanceTypeExportVector =
+    mozilla::Vector<ComponentInstanceTypeExport, 0, SystemAllocPolicy>;
+
+class ComponentInstanceType {
+  ComponentInstanceTypeExportVector exports_;
+  uint32_t numImportedItems_ = 0;
+
+ public:
+  // Adds an export, whose name must be strongly-unique among the exports.
+  [[nodiscard]] bool addExport(ComponentName&& name, ComponentExternDesc desc);
+
+  // The exports, in declaration order.
+  const ComponentInstanceTypeExportVector& exports() const { return exports_; }
+  mozilla::Maybe<uint32_t> findExport(mozilla::Span<const char> name) const;
+
+  // The number of items that are read for an import of this type: each func
+  // or type export, and the items of each instance export.
+  uint32_t numImportedItems() const { return numImportedItems_; }
+};
+
 using ComponentTypeSchema = mozilla::Variant<
     mozilla::Nothing, ComponentType, ComponentRecordFieldVector,
     ComponentVariantCaseVector, ComponentTypeVector, CacheableNameVector,
     ComponentResultType, ComponentFixedListType, ComponentMapType,
-    ComponentFuncType, ComponentResourceType>;
+    ComponentFuncType, ComponentResourceType, ComponentInstanceType>;
 
 class ComponentTypeDef : public AtomicRefCounted<ComponentTypeDef> {
   ComponentTypeSchema schema_;
@@ -432,57 +585,6 @@ uint32_t CanonDiscriminantSize(size_t numCases);
 // The offset of the payload in a variant-like type (variant, enum, option, or
 // result) in memory.
 uint32_t CanonVariantPayloadOffset(const ComponentType& type);
-
-enum class ComponentNameAttribute : uint8_t {
-  Constructor,
-  Method,
-  Static,
-  Get,
-  Set,
-};
-using ComponentNameAttributes = mozilla::EnumSet<ComponentNameAttribute>;
-
-// Takes a valid component-model name and creates a "canonical" version of it
-// that can be used to check strong uniqueness.
-[[nodiscard]] bool CanonicalizeName(mozilla::Span<const char> name,
-                                    CacheableName* result);
-
-// Augments a component-model name with any attributes present on the name. Note
-// that this is generally not necessary for e.g. field names; you can just use
-// CacheableName for that purpose.
-struct ComponentName {
-  CacheableName name;
-  ComponentNameAttributes attributes;
-
-  uint8_t attributesLength;
-  uint32_t resourceNameLength;
-
-  explicit ComponentName() = default;
-  explicit ComponentName(CacheableName&& name,
-                         ComponentNameAttributes attributes,
-                         uint8_t attributesLength, uint32_t resourceNameLength)
-      : name(std::move(name)),
-        attributes(attributes),
-        attributesLength(attributesLength),
-        resourceNameLength(resourceNameLength) {}
-
-  mozilla::Span<const char> resourceName() const {
-    MOZ_ASSERT(attributes.contains(ComponentNameAttribute::Constructor) ||
-               attributes.contains(ComponentNameAttribute::Method) ||
-               attributes.contains(ComponentNameAttribute::Static));
-    MOZ_ASSERT(resourceNameLength > 0);
-    return mozilla::Span<const char>(name.utf8Bytes().data() + attributesLength,
-                                     resourceNameLength);
-  };
-  bool getterForSetter(CacheableName* out) const;
-
-  bool operator==(const ComponentName& other) const {
-    return name == other.name;
-  }
-  bool operator==(mozilla::Span<const char> other) const {
-    return name.utf8Bytes() == other;
-  }
-};
 
 // Converts a label to a JS identifier with the JS-API's PascalCase (for types)
 // or CamelCase (for everything else), or leaves it as is (for enum labels).
@@ -757,6 +859,7 @@ class ComponentItem {
 // TODO(wasm-cm): Add static asserts for MaxComponents and
 // MaxComponentNestingDepth or whatever, eventually
 static_assert(MaxComponentCoreInstances <= ComponentItem::AliasInstanceMask);
+static_assert(MaxComponentInstances <= ComponentItem::AliasInstanceMask);
 
 struct ComponentItemHasher {
   using Lookup = ComponentItem;
@@ -819,68 +922,6 @@ class CoreInstanceDesc {
   const CoreInstanceVariant& desc() const { return desc_; }
   const CoreInstanceType& type() const { return *type_; }
 };
-
-// Describes an import or export from a wasm component.
-class ComponentExternDesc {
-  ComponentSort sort_;
-  ComponentType type_;
-
-  // TODO(wasm-cm): This is a total hack, but since we currently don't have a
-  // notion of core module types, we actually just store the index of the
-  // relevant core module within the component. This obviously will not work as
-  // soon as we do anything with multiple components.
-  uint32_t coreModuleIndex_;
-
-  explicit ComponentExternDesc(ComponentSort sort, ComponentType&& type)
-      : sort_(sort), type_(std::move(type)) {
-    MOZ_ASSERT(ComponentSortValidForExternDesc(sort));
-  }
-  explicit ComponentExternDesc(uint32_t coreModuleIndex)
-      : sort_(ComponentSort::CoreModule), coreModuleIndex_(coreModuleIndex) {}
-
- public:
-  ComponentExternDesc() = default;
-
-  static ComponentExternDesc func(ComponentType&& funcType) {
-    MOZ_ASSERT(funcType.kind() == ComponentTypeKind::Func);
-    return ComponentExternDesc(ComponentSort::Func, std::move(funcType));
-  }
-  static ComponentExternDesc type(ComponentType&& type) {
-    return ComponentExternDesc(ComponentSort::Type, std::move(type));
-  }
-  static ComponentExternDesc coreModule(uint32_t coreModuleIndex) {
-    return ComponentExternDesc(coreModuleIndex);
-  }
-
-  bool isValid() const { return sort_ != ComponentSort::Invalid; }
-  ComponentSort sort() const { return sort_; }
-  ComponentType asFunc() const {
-    MOZ_RELEASE_ASSERT(sort() == ComponentSort::Func);
-    return type_;
-  }
-  ComponentType asType() const {
-    MOZ_RELEASE_ASSERT(sort() == ComponentSort::Type);
-    return type_;
-  }
-  uint32_t asCoreModule() const {
-    MOZ_RELEASE_ASSERT(sort() == ComponentSort::CoreModule);
-    // TODO(wasm-cm): This should obviously return a proper core module type,
-    // when we actually support that.
-    return coreModuleIndex_;
-  }
-
-  // Checks whether an item can be ascribed the given new externdesc, e.g. a
-  // defined resource type being ascribed the (sub resource) type bound.
-  // `isNewSubResource` should be true if attempting to ascribe `(sub resource)`
-  // _and_ the `(sub resource)` was part of the current definition (as opposed
-  // to an eq of a previously-defined `(sub resource)`); i.e. are we
-  // "generating" the resource type now or did we already generate it?
-  static bool compatible(const ComponentExternDesc& defined,
-                         const ComponentExternDesc& ascribed,
-                         bool isNewSubResource);
-};
-
-static_assert(std::is_default_constructible_v<ComponentExternDesc>);
 
 class ComponentImport {
   // Be aware that the Component::importsByName_ stores a view into this name.
@@ -973,6 +1014,13 @@ class Component : public JS::WasmComponent {
   // ComponentItem::itemIndex().
   CacheableNameVector coreExportAliasNames_;
 
+  // Parallel to imports_, the index of each import's first imported item.
+  mozilla::Vector<uint32_t, 0, SystemAllocPolicy> importFirstItems_;
+  uint32_t numImportedItems_ = 0;
+
+  // Whether the JS-API's `wasm:js/global` builtin is enabled for imports.
+  bool jsGlobalBuiltin_ = false;
+
   template <typename T>
   bool addDefinedItem(
       ComponentSort sort, T&& item,
@@ -997,8 +1045,14 @@ class Component : public JS::WasmComponent {
   const CoreExternType& getCoreExportAliasType(
       ComponentSortIndex sortIndex) const;
 
+  // Gets the instance type export that a component export alias refers to.
+  const ComponentInstanceTypeExport& aliasedExport(ComponentItem alias) const;
+
  public:
   Component() = default;
+
+  bool jsGlobalBuiltin() const { return jsGlobalBuiltin_; }
+  void setJSGlobalBuiltin(bool enabled) { jsGlobalBuiltin_ = enabled; }
 
   // --------------------------------------------------------------------------
   // Accessors and adders for each index space
@@ -1028,7 +1082,23 @@ class Component : public JS::WasmComponent {
   }
 
   // TODO(wasm-cm): Functions for components
-  // TODO(wasm-cm): Functions for component instances
+
+  const ItemVector& instances() const { return instances_; }
+  // Gets the type of a component instance. It is always safe to call
+  // `.asInstance()` on the result.
+  ComponentType getTypeForInstance(uint32_t instanceIndex) const;
+
+  // Adds an alias of an export of a component instance, given the index of the
+  // export in the instance's type, to the index space for its sort.
+  [[nodiscard]] bool addExportAlias(uint32_t instanceIndex,
+                                    uint32_t exportIndex);
+
+  // The items that are read from the imports object: each imported func or
+  // type, and the items of each imported instance, in declaration order. This
+  // gets the number of them, and the index among them of the first item of an
+  // imported or aliased func, type, or instance.
+  uint32_t numImportedItems() const { return numImportedItems_; }
+  uint32_t firstImportedItem(ComponentItem item) const;
 
   const ItemVector& coreFuncs() const { return coreFuncs_; }
   const ComponentCoreFuncDesc& definedCoreFunc(uint32_t definedIndex) const {
@@ -1165,8 +1235,9 @@ class ComponentInstance {
   CoreInstanceExportsVector coreInstanceExports_;
 
   using ObjectVector = GCVector<HeapPtr<JSObject*>, 0, SystemAllocPolicy>;
-  // The callable read from the imports object for each function import, or
-  // null for other imports. Indices correspond 1:1 with Component::imports().
+  // The callable read from the imports object for each imported func, or null
+  // for other imported items. Indices correspond 1:1 with the component's
+  // imported items (see Component::numImportedItems).
   ObjectVector importValues_;
 
   // The function for each core func defined by (canon lower), created when it
@@ -1212,6 +1283,18 @@ class ComponentInstance {
       JSContext* cx, Handle<WasmComponentInstanceObject*> instanceObj,
       const ComponentInlineExports& inlineExports,
       MutableHandleObject exportsObj);
+  // Reads the import (or instance export) `name` from `importObj`, if it is
+  // not null, into the imported items starting at `firstItem`. Builtins are
+  // only resolved for the component's own imports, when `resolveBuiltins`.
+  [[nodiscard]] bool readImport(JSContext* cx, HandleObject importObj,
+                                const ComponentName& name,
+                                const ComponentExternDesc& desc,
+                                uint32_t firstItem, bool resolveBuiltins);
+  // The JS-API's "resolve a builtin specifier", which sets `isBuiltin` and
+  // `value` if `name` is an enabled builtin.
+  [[nodiscard]] bool resolveBuiltin(JSContext* cx, const ComponentName& name,
+                                    bool* isBuiltin,
+                                    MutableHandleValue value) const;
 
  public:
   ComponentInstance(JSContext* cx, Handle<WasmComponentInstanceObject*> object,
