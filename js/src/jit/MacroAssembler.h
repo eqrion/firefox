@@ -4225,10 +4225,12 @@ class MacroAssembler : public MacroAssemblerSpecific {
   // Performs the appropriate check based on the instance call's FailureMode,
   // and traps if the check fails. The resultRegister should likely be
   // ReturnReg, but this depends on whatever you do with registers immediately
-  // after the call. In the case where a trap is generated, the returned
-  // CodeOffset points at the first byte of the instruction following the trap,
-  // and that is where a stackmap, if needed, should be keyed.  If a trap is not
-  // generated, a CodeOffset satisfying !CodeOffset::bound() is returned.
+  // after the call. FailOnInstanceFlag ignores the resultRegister, and instead
+  // checks the flag of the instance in InstanceReg. In the case where a trap is
+  // generated, the returned CodeOffset points at the first byte of the
+  // instruction following the trap, and that is where a stackmap, if needed,
+  // should be keyed.  If a trap is not generated, a CodeOffset satisfying
+  // !CodeOffset::bound() is returned.
   CodeOffset wasmTrapOnFailedInstanceCall(
       Register resultRegister, wasm::FailureMode failureMode,
       wasm::Trap failureTrap, const wasm::TrapSiteDesc& trapSiteDesc);

@@ -161,6 +161,8 @@ enum class SymbolicAddress {
 // returns, the return value should be checked against an error condition
 // (and if so, which one) which signals that the C++ calle has already
 // reported an error and thus wasm needs to wasmTrap(Trap::ThrowReported).
+// FailOnInstanceFlag instead checks Instance::builtinFailed_, which the builtin
+// sets with Instance::failBuiltin, so that it can return any value.
 
 enum class FailureMode : uint8_t {
   Infallible,
@@ -168,6 +170,7 @@ enum class FailureMode : uint8_t {
   FailOnMaxI32,
   FailOnNullPtr,
   FailOnInvalidRef,
+  FailOnInstanceFlag,
 };
 
 // SymbolicAddressSignature carries type information for a function referred

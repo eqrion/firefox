@@ -484,7 +484,8 @@ ABIType ToABIType(MIRType type) {
 }
 
 ABIFunctionType ToABIType(const SymbolicAddressSignature& sig) {
-  MOZ_ASSERT_IF(sig.failureMode != FailureMode::Infallible,
+  MOZ_ASSERT_IF(sig.failureMode != FailureMode::Infallible &&
+                    sig.failureMode != FailureMode::FailOnInstanceFlag,
                 ToABIType(sig.failureMode) == ToABIType(sig.retType));
   int abiType = 0;
   for (int i = 0; i < sig.numArgs; i++) {

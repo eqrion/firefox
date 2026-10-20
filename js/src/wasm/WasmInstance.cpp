@@ -2469,6 +2469,7 @@ Instance::Instance(JSContext* cx, Handle<WasmInstanceObject*> object,
           cx->runtime()->jitRuntime()->getExceptionTail().value),
       preBarrierCode_(
           cx->runtime()->jitRuntime()->preBarrier(MIRType::WasmAnyRef).value),
+      builtinFailed_(false),
       storeBuffer_(&cx->runtime()->gc.storeBuffer()),
       object_(object),
       code_(std::move(code)),

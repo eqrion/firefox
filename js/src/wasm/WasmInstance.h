@@ -177,6 +177,10 @@ class alignas(16) Instance {
   // Address of the JitRuntime's object prebarrier trampoline
   void* preBarrierCode_;
 
+  // Set by a builtin with FailureMode::FailOnInstanceFlag when it fails, and
+  // cleared by the caller when it traps.
+  bool builtinFailed_;
+
   // Address of the store buffer for this instance
   gc::StoreBuffer* storeBuffer_;
 
@@ -368,6 +372,9 @@ class alignas(16) Instance {
   static constexpr size_t offsetOfPreBarrierCode() {
     return offsetof(Instance, preBarrierCode_);
   }
+  static constexpr size_t offsetOfBuiltinFailed() {
+    return offsetof(Instance, builtinFailed_);
+  }
   static constexpr size_t offsetOfDebugFilter() {
     return offsetof(Instance, debugFilter_);
   }
@@ -396,6 +403,14 @@ class alignas(16) Instance {
 #endif
 
   JSContext* cx() const { return cx_; }
+
+  // Fails a builtin with FailureMode::FailOnInstanceFlag.
+  template <typename T>
+  T failBuiltin() {
+    builtinFailed_ = true;
+    return T();
+  }
+
   void* debugStub() const { return debugStub_; }
   void setDebugStub(void* newStub) { debugStub_ = newStub; }
   void setRequestTierUpStub(void* newStub) { requestTierUpStub_ = newStub; }

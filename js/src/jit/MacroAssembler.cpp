@@ -6944,6 +6944,13 @@ CodeOffset MacroAssembler::wasmTrapOnFailedInstanceCall(
                 ImmWord(uintptr_t(wasm::AnyRef::invalid().forCompiledCode())),
                 &noTrap);
       break;
+    case wasm::FailureMode::FailOnInstanceFlag: {
+      Address builtinFailed(InstanceReg,
+                            wasm::Instance::offsetOfBuiltinFailed());
+      branch8(Assembler::Equal, builtinFailed, Imm32(0), &noTrap);
+      store8(Imm32(0), builtinFailed);
+      break;
+    }
   }
   FaultingCodeRange fcr = wasmTrap(failureTrap, trapSiteDesc);
   bind(&noTrap);
